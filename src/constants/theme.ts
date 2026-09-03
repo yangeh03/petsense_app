@@ -14,6 +14,12 @@ export const Colors = {
     backgroundElement: '#F0F0F3',
     backgroundSelected: '#E0E1E6',
     textSecondary: '#60646C',
+    /** 品牌主色：健康绿 */
+    tint: '#1FA35C',
+    /** 品牌主色的浅色背景，用于标签、卡片点缀 */
+    tintBackground: '#E5F6EC',
+    /** 提醒 / 未完成 */
+    warning: '#E8A13A',
   },
   dark: {
     text: '#ffffff',
@@ -21,6 +27,9 @@ export const Colors = {
     backgroundElement: '#212225',
     backgroundSelected: '#2E3135',
     textSecondary: '#B0B4BA',
+    tint: '#3DD68C',
+    tintBackground: '#123B26',
+    warning: '#F0BC6B',
   },
 } as const;
 
