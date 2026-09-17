@@ -3,17 +3,24 @@ import { useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { ActivityBar } from '@/components/activity-bar';
+import { LiveMonitorCard } from '@/components/live/live-monitor-card';
 import { PetAvatar } from '@/components/pet-avatar';
 import { TaskRow } from '@/components/task-row';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
 import { useCurrentPet } from '@/context/current-pet';
-import { activityMetrics, careTasks, speciesLabel } from '@/data/pets';
+import { careTasks, speciesLabel } from '@/data/pets';
 import { useTheme } from '@/hooks/use-theme';
 
-/** 首页：当前宠物的今日健康概览。 */
+const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
+
+function formatToday() {
+  const now = new Date();
+  return `${now.getMonth() + 1} 月 ${now.getDate()} 日 · 星期${WEEKDAYS[now.getDay()]}`;
+}
+
+/** 首页：实时监测 + 当前宠物档案 + 今日护理待办。 */
 export default function HomeScreen() {
   const theme = useTheme();
   const { currentPet } = useCurrentPet();
@@ -31,7 +38,7 @@ export default function HomeScreen() {
         <View style={styles.header}>
           <View style={styles.headerText}>
             <ThemedText type="small" themeColor="textSecondary">
-              9 月 3 日 · 星期四
+              {formatToday()}
             </ThemedText>
             <ThemedText type="subtitle">今日</ThemedText>
           </View>
@@ -41,6 +48,9 @@ export default function HomeScreen() {
             tintColor={theme.text}
           />
         </View>
+
+        {/* 实时监测（云端 WebSocket 推送） */}
+        <LiveMonitorCard />
 
         {/* 当前宠物卡片 */}
         <ThemedView type="backgroundElement" style={styles.card}>
@@ -92,18 +102,6 @@ export default function HomeScreen() {
           </View>
         </ThemedView>
 
-        {/* 今日活动 */}
-        <View style={styles.sectionHeader}>
-          <ThemedText type="smallBold">今日活动</ThemedText>
-        </View>
-        <ThemedView type="backgroundElement" style={styles.card}>
-          <View style={styles.activityList}>
-            {activityMetrics.map((metric) => (
-              <ActivityBar key={metric.id} metric={metric} />
-            ))}
-          </View>
-        </ThemedView>
-
         {/* 今日护理待办 */}
         <View style={styles.sectionHeader}>
           <ThemedText type="smallBold">今日护理</ThemedText>
@@ -128,7 +126,7 @@ export default function HomeScreen() {
         </ThemedView>
 
         <ThemedText type="small" themeColor="textSecondary" style={styles.footer}>
-          数据为演示用 Mock 数据 · 可在「宠物」页切换当前宠物
+          实时数据来自云端设备推送 · 宠物档案与待办为演示数据
         </ThemedText>
       </ThemedView>
     </ScrollView>
@@ -206,9 +204,6 @@ const styles = StyleSheet.create({
     alignItems: 'baseline',
     justifyContent: 'space-between',
     marginTop: Spacing.two,
-  },
-  activityList: {
-    gap: Spacing.three,
   },
   footer: {
     textAlign: 'center',
