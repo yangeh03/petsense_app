@@ -22,20 +22,6 @@ export type Pet = {
   bio: string;
 };
 
-export type ActivityMetric = {
-  id: string;
-  /** 指标名称，如“今日步数” */
-  label: string;
-  /** 当前值 */
-  value: number;
-  /** 目标值，用于计算进度 */
-  goal: number;
-  /** 数值单位 */
-  unit: string;
-  /** 数值展示图标（SF Symbols / Material 名称由组件映射） */
-  icon: 'footsteps' | 'clock' | 'drop';
-};
-
 export type CareTask = {
   id: string;
   title: string;
@@ -77,12 +63,6 @@ export const pets: Pet[] = [
     emoji: '🐰',
     bio: '安静的小可爱，喜欢吃提摩西草。',
   },
-];
-
-export const activityMetrics: ActivityMetric[] = [
-  { id: 'steps', label: '今日运动', value: 6200, goal: 8000, unit: '步', icon: 'footsteps' },
-  { id: 'active', label: '活跃时长', value: 96, goal: 120, unit: '分钟', icon: 'clock' },
-  { id: 'water', label: '饮水量', value: 320, goal: 400, unit: '毫升', icon: 'drop' },
 ];
 
 export const careTasks: CareTask[] = [

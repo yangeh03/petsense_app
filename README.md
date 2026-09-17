@@ -4,13 +4,39 @@
 
 ## 功能演示
 
-| 模块    | 说明                                                                 |
-| ------- | -------------------------------------------------------------------- |
-| 🏠 今日 | 当前宠物的健康概览：运动 / 活跃时长 / 饮水量进度，护理待办可勾选完成 |
-| 🐶 宠物 | 宠物档案列表，点击卡片切换「当前宠物」，首页数据联动更新             |
-| 👤 我的 | 用户信息与设置入口（健康报告、疫苗提醒、家人共享等）                 |
+| 模块        | 说明                                                                 |
+| ----------- | -------------------------------------------------------------------- |
+| 💚 实时监测 | 硬件设备数据经云端实时推送：心率 / 血氧 / 体温 / 电量 + 实时趋势曲线 |
+| 🏠 今日     | 实时监测卡片 + 当前宠物档案 + 可勾选的护理待办                       |
+| 🐶 宠物     | 宠物档案列表，点击卡片切换「当前宠物」，首页数据联动更新             |
+| 👤 我的     | 用户信息与设置入口（健康报告、疫苗提醒、家人共享等）                 |
 
-> 当前所有数据均为 `src/data/pets.ts` 中的 Mock 数据，用于演示 UI 与交互，后续接入真实后端。
+> 实时数据来自云端真实链路；宠物档案与待办为 `src/data/pets.ts` 演示数据。
+
+## 实时监测架构（跨网）
+
+APP 与硬件设备**不要求同一局域网**，数据全程经云端中转：
+
+```
+ESP32 硬件 ──MQTT──▶ 阿里云 Mosquitto ──▶ petsense-server(Flask) ──WebSocket──▶ APP
+ (任意网络)            8.148.188.68:1883     :8080                /ws            (任意网络)
+```
+
+- 服务端（`server.py`）部署在阿里云 `/root/petsense-server`，订阅 `petsense/sensor/#` 并向 `/ws` 广播
+- APP 端实时层在 `src/services/telemetry-service.ts`（自动重连），页面通过 `useTelemetry()` 订阅
+- 连接地址在 `src/config.ts` 配置，默认线上地址，可用环境变量 `EXPO_PUBLIC_TELEMETRY_URL` 覆盖
+- 设备离线时云端有 `tools/device-simulator.py` 模拟器补数据流（部署在阿里云常驻运行）
+- 服务端 HTTP 接口：`/api/latest-full`（最近 200 帧）、`/api/stats`（统计）、`/ws`（实时推送）
+
+### 本地联调（不依赖云端）
+
+```bash
+# 终端 1：启动本地模拟服务（每秒一帧模拟数据）
+npm run mock:server
+
+# 终端 2：APP 指向本地 mock 启动（手机调试请把 localhost 换成电脑局域网 IP）
+EXPO_PUBLIC_TELEMETRY_URL=ws://localhost:8090/ws npm run web
+```
 
 ## 技术栈
 
@@ -122,6 +148,7 @@ npm start
 | `npm run typecheck`               | TypeScript 类型检查                          |
 | `npm run format`                  | Prettier 格式化全部文件                      |
 | `npm run format:check`            | Prettier 格式检查（CI 使用）                 |
+| `npm run mock:server`             | 启动本地遥测模拟服务（:8090，1s/帧）         |
 | `npm run generate-icons`          | 从 `scripts/icons/` 的 SVG 重新生成 App 图标 |
 | `npm run reset-project`           | 清空模板重置（危险，会移动代码到 example/）  |
 
@@ -137,17 +164,22 @@ petsense_app/
 ├── scripts/
 │   ├── icons/                    # 品牌图标 SVG 源文件
 │   └── generate-icons.sh         # 图标生成脚本（macOS 自带工具，无需装依赖）
+├── tools/
+│   ├── mock-server.js            # 本地遥测模拟服务（零依赖 WebSocket）
+│   └── device-simulator.py       # 设备模拟器（部署在阿里云，MQTT 上报）
 └── src/
     ├── app/                      # 页面（expo-router 文件式路由）
-    │   ├── _layout.tsx           # 根布局：主题 + 全局状态 + Tab 导航
-    │   ├── index.tsx             # 今日
-    │   ├── pets.tsx              # 宠物
-    │   └── profile.tsx           # 我的
-    ├── components/               # 通用组件
+    │   ├── _layout.tsx           # 根布局：Stack + 主题
+    │   ├── (tabs)/               # Tab 页面组（今日 / 宠物 / 我的）
+    │   └── monitor.tsx           # 实时监测详情页
+    ├── components/               # 通用组件（live/ 为实时监测组件）
+    ├── config.ts                 # 运行时配置（遥测地址）
     ├── constants/theme.ts        # 颜色 / 字体 / 间距（明暗双主题）
     ├── context/                  # 全局状态（当前宠物）
     ├── data/                     # Mock 数据与类型定义
-    └── hooks/                    # 自定义 Hooks
+    ├── hooks/                    # 自定义 Hooks（use-telemetry 实时数据流）
+    ├── services/                 # WebSocket 遥测客户端（自动重连）
+    └── types/                    # 遥测数据帧类型定义
 ```
 
 ## 团队协作
@@ -174,6 +206,18 @@ A：`npx expo start -c` 清缓存启动；偶发问题可 `watchman watch-del-al
 
 **Q：Android 模拟器检测不到（adb devices 为空）？**
 A：确认 `ANDROID_HOME` 配置正确（见上文），先手动打开 Android Studio 再启动模拟器。
+
+**Q：真机 Expo Go 扫码后卡在 opening project？**
+A：三个高频原因，按序排查：① Metro 广播的局域网 IP 过期（Mac 换网后未重启）→ 重启 `npm start` 再扫新码；② 手机开了 VPN / 代理 → 关掉再试；③ 路由器开了 AP 隔离 → 改用 `npx expo start --tunnel` 隧道模式。
+
+**Q：真机提示需要登录 Expo Go？**
+A：2025 年起 Expo Go 强制登录。手机 Expo Go 与电脑 CLI 需登录**同一免费账号**：电脑执行 `npx expo login -b`（浏览器授权），手机 App 内 Sign in。
+
+**Q：真机提示 Expo Go 版本不兼容？**
+A：项目使用 SDK 57，手机端 Expo Go 太旧会报 "requires a newer version" → App Store 更新 Expo Go 后重连。
+
+**Q：实时监测显示「未连接」？**
+A：① 确认手机能访问 `http://8.148.188.68:8080/api/stats`；② 本地联调时检查 `EXPO_PUBLIC_TELEMETRY_URL` 是否指向电脑局域网 IP（手机上 `localhost` 不是电脑）；③ 服务重启后 APP 会自动指数退避重连，稍等即可。
 
 ## License
 
