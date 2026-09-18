@@ -28,11 +28,29 @@ class TelemetryService {
   subscribeFrame(listener: FrameListener) {
     this.frameListeners.add(listener);
     this.ensureConnected();
-    return () => this.frameListeners.delete(listener);
+    return () => {
+      this.frameListeners.delete(listener);
+      if (this.frameListeners.size === 0) {
+        if (this.retryTimer) clearTimeout(this.retryTimer);
+        this.retryTimer = null;
+        const ws = this.ws;
+        this.ws = null;
+        if (ws) {
+          ws.onclose = null;
+          ws.onmessage = null;
+          ws.onopen = null;
+          ws.onerror = null;
+          ws.close();
+        }
+        this.retryCount = 0;
+        this.setStatus('closed');
+      }
+    };
   }
 
   subscribeStatus(listener: StatusListener) {
     this.statusListeners.add(listener);
+    listener(this.status);
     return () => this.statusListeners.delete(listener);
   }
 
@@ -43,7 +61,7 @@ class TelemetryService {
   }
 
   private ensureConnected() {
-    if (this.ws && (this.status === 'open' || this.status === 'connecting')) return;
+    if (this.ws || this.retryTimer) return;
     this.connect();
   }
 
@@ -88,36 +106,116 @@ class TelemetryService {
   }
 
   private handleMessage(raw: unknown) {
-    if (typeof raw !== 'string') return;
-    let packet: TelemetryPacket;
-    try {
-      packet = JSON.parse(raw) as TelemetryPacket;
-    } catch {
-      return;
-    }
-    if (!packet?.topic?.startsWith(SENSOR_TOPIC_PREFIX)) return;
-
-    let payload: Record<string, unknown> | null = null;
-    if (typeof packet.payload === 'string') {
-      const parsed = safeParse(packet.payload);
-      payload = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null;
-    } else if (packet.payload && typeof packet.payload === 'object') {
-      payload = packet.payload as Record<string, unknown>;
-    }
-    if (!payload) return;
-
-    // 音频分片 / 重组进度帧没有 health 结构，APP 端不消费
-    if (!payload.health && !payload.battery) return;
-
-    const frame: TelemetryFrame = {
-      deviceId: typeof payload.deviceId === 'string' ? payload.deviceId : 'unknown',
-      tsMs: typeof payload.ts_ms === 'number' ? payload.ts_ms : 0,
-      receivedAt: packet.received_at,
-      health: payload.health as TelemetryFrame['health'],
-      battery: payload.battery as TelemetryFrame['battery'],
-    };
-    this.frameListeners.forEach((listener) => listener(frame));
+    const frame = parseTelemetryMessage(raw);
+    if (frame) this.frameListeners.forEach((listener) => listener(frame));
   }
+}
+
+export function parseTelemetryMessage(raw: unknown): TelemetryFrame | null {
+  if (typeof raw !== 'string') return null;
+  let packet: TelemetryPacket;
+  try {
+    packet = JSON.parse(raw) as TelemetryPacket;
+  } catch {
+    return null;
+  }
+  if (typeof packet?.topic !== 'string' || !packet.topic.startsWith(SENSOR_TOPIC_PREFIX))
+    return null;
+  if (typeof packet.received_at !== 'string' || !Number.isFinite(Date.parse(packet.received_at)))
+    return null;
+
+  let payload: Record<string, unknown> | null = null;
+  if (typeof packet.payload === 'string') {
+    const parsed = safeParse(packet.payload);
+    payload = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null;
+  } else if (packet.payload && typeof packet.payload === 'object') {
+    payload = packet.payload as Record<string, unknown>;
+  }
+  if (!payload || Array.isArray(payload)) return null;
+
+  // 音频分片 / 重组进度帧没有 health 结构，APP 端不消费
+  if (!payload.health && !payload.battery && !payload.imu && !payload.audio) return null;
+  if (typeof payload.deviceId !== 'string' || !Number.isFinite(payload.ts_ms)) return null;
+
+  const frame: TelemetryFrame = {
+    deviceId: typeof payload.deviceId === 'string' ? payload.deviceId : 'unknown',
+    tsMs: typeof payload.ts_ms === 'number' ? payload.ts_ms : 0,
+    receivedAt: packet.received_at,
+    health:
+      numericObject(payload.health, [
+        'heartRate',
+        'spo2',
+        'bodyTemp',
+        'envTemp',
+        'respiration',
+        'microCir',
+        'fatigue',
+        'hrvSdnn',
+        'hrvRmssd',
+        'rrInterval',
+        'systolic',
+        'diastolic',
+      ]) && typeof (payload.health as Record<string, unknown>).valid === 'boolean'
+        ? (payload.health as TelemetryFrame['health'])
+        : undefined,
+    battery:
+      numericObject(payload.battery, ['percent', 'voltage']) &&
+      typeof (payload.battery as Record<string, unknown>).found === 'boolean'
+        ? (payload.battery as TelemetryFrame['battery'])
+        : undefined,
+    imu: vectorObject(payload.imu, { accel: 3, gyro: 3, mag: 3, euler: 3, quat: 4, baro: 4 })
+      ? (payload.imu as TelemetryFrame['imu'])
+      : undefined,
+    audio:
+      numericObject(payload.audio, ['sampleRate', 'bits', 'frame', 'rms', 'zcr']) &&
+      vectorObject(payload.audio, { mel: 40 })
+        ? (payload.audio as TelemetryFrame['audio'])
+        : undefined,
+    experiment: validExperiment(payload.experiment)
+      ? (payload.experiment as TelemetryFrame['experiment'])
+      : undefined,
+  };
+  return frame.health || frame.battery || frame.imu || frame.audio ? frame : null;
+}
+
+function numericObject(value: unknown, keys: string[]): boolean {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    keys.every(
+      (key) =>
+        typeof (value as Record<string, unknown>)[key] === 'number' &&
+        Number.isFinite((value as Record<string, unknown>)[key]),
+    )
+  );
+}
+
+function vectorObject(value: unknown, lengths: Record<string, number>): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const object = value as Record<string, unknown>;
+  return (
+    typeof object.ok === 'boolean' &&
+    Object.entries(lengths).every(([key, length]) => {
+      const vector = object[key];
+      return (
+        Array.isArray(vector) &&
+        vector.length === length &&
+        vector.every((item) => typeof item === 'number' && Number.isFinite(item))
+      );
+    })
+  );
+}
+
+function validExperiment(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const object = value as Record<string, unknown>;
+  return (
+    ['active', 'eventActive', 'sdLogging'].every((key) => typeof object[key] === 'boolean') &&
+    ['id', 'eventId', 'eventLabel', 'eventSegment', 'sdStatus', 'sdAudioMode'].every(
+      (key) => typeof object[key] === 'string',
+    ) &&
+    numericObject(value, ['sdRows'])
+  );
 }
 
 function safeParse(text: string): unknown {
