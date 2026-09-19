@@ -23,6 +23,41 @@ export type TelemetryBattery = {
   voltage: number;
 };
 
+export type TelemetryImu = {
+  ok: boolean;
+  accel: number[];
+  gyro: number[];
+  mag: number[];
+  euler: number[];
+  quat: number[];
+  baro: number[];
+};
+
+export type TelemetryAudio = {
+  ok: boolean;
+  sampleRate: number;
+  bits: number;
+  frame: number;
+  rms: number;
+  zcr: number;
+  mel: number[];
+  recording: boolean;
+  uploading: boolean;
+};
+
+export type TelemetryExperiment = {
+  active: boolean;
+  id: string;
+  eventActive: boolean;
+  eventId: string;
+  eventLabel: string;
+  eventSegment: string;
+  sdLogging: boolean;
+  sdRows: number;
+  sdStatus: string;
+  sdAudioMode: string;
+};
+
 /** 服务端通过 /ws 广播的原始包 */
 export type TelemetryPacket = {
   topic: string;
@@ -39,6 +74,9 @@ export type TelemetryFrame = {
   receivedAt: string;
   health?: TelemetryHealth;
   battery?: TelemetryBattery;
+  imu?: TelemetryImu;
+  audio?: TelemetryAudio;
+  experiment?: TelemetryExperiment;
 };
 
 export type TelemetryStatus = 'connecting' | 'open' | 'reconnecting' | 'closed';

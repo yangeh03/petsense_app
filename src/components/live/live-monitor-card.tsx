@@ -22,7 +22,7 @@ const STATUS_LABEL: Record<TelemetryStatus, string> = {
 export function LiveMonitorCard() {
   const router = useRouter();
   const theme = useTheme();
-  const { status, latest, series } = useTelemetry();
+  const { status, latest, series, isFresh } = useTelemetry();
   const health = latest?.health?.valid ? latest.health : null;
   const battery = latest?.battery?.found ? latest.battery : null;
 
@@ -33,12 +33,12 @@ export function LiveMonitorCard() {
     >
       <ThemedView type="backgroundElement" style={styles.card}>
         <View style={styles.header}>
-          <ConnectionDot status={status} />
+          <ConnectionDot status={status === 'open' && !isFresh ? 'closed' : status} />
           <ThemedText type="smallBold" style={styles.title}>
             实时监测
           </ThemedText>
           <ThemedText type="small" themeColor="textSecondary">
-            {STATUS_LABEL[status]}
+            {status === 'open' && !isFresh ? '等待设备数据' : STATUS_LABEL[status]}
           </ThemedText>
           <SymbolView
             name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }}
@@ -55,7 +55,9 @@ export function LiveMonitorCard() {
                   心率
                 </ThemedText>
                 <View style={styles.heartValueRow}>
-                  <ThemedText style={styles.heartValue}>{Math.round(health.heartRate)}</ThemedText>
+                  <ThemedText style={styles.heartValue}>
+                    {health.heartRate > 0 ? Math.round(health.heartRate) : '--'}
+                  </ThemedText>
                   <ThemedText type="small" themeColor="textSecondary">
                     bpm
                   </ThemedText>

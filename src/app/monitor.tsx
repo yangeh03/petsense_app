@@ -57,13 +57,16 @@ const METRICS: MetricConfig[] = [
 export default function MonitorScreen() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
-  const { status, latest, series } = useTelemetry();
+  const { status, latest, series, isFresh } = useTelemetry();
   const [activeKey, setActiveKey] = useState<SeriesKey>('heartRate');
   const active = METRICS.find((m) => m.key === activeKey) ?? METRICS[0];
   const points = series[active.key];
   const health = latest?.health?.valid ? latest.health : null;
   const battery = latest?.battery?.found ? latest.battery : null;
-  const latestValue = points.length > 0 ? points[points.length - 1].v : null;
+  const latestValue = health && health[active.key] > 0 ? health[active.key] : null;
+  const imu = latest?.imu?.ok ? latest.imu : null;
+  const audio = latest?.audio?.ok ? latest.audio : null;
+  const experiment = latest?.experiment;
 
   return (
     <ScrollView
@@ -76,9 +79,10 @@ export default function MonitorScreen() {
           <View style={styles.headerText}>
             <ThemedText type="subtitle">实时监测</ThemedText>
             <View style={styles.statusRow}>
-              <ConnectionDot status={status} />
+              <ConnectionDot status={status === 'open' && !isFresh ? 'closed' : status} />
               <ThemedText type="small" themeColor="textSecondary">
-                {STATUS_LABEL[status]} · {latest?.deviceId ?? 'petsense 设备'}
+                {status === 'open' && !isFresh ? '云端已连接 · 等待设备' : STATUS_LABEL[status]} ·{' '}
+                {latest?.deviceId ?? 'petsense 设备'}
               </ThemedText>
             </View>
           </View>
@@ -141,15 +145,88 @@ export default function MonitorScreen() {
         {/* 次要健康指标 */}
         {health && (
           <View style={styles.infoGrid}>
-            <InfoCell label="呼吸频率" value={`${health.respiration} 次/分`} />
-            <InfoCell label="HRV (SDNN)" value={`${health.hrvSdnn} ms`} />
-            <InfoCell label="微循环" value={`${health.microCir}`} />
-            <InfoCell label="疲劳度" value={`${health.fatigue}`} />
+            <InfoCell
+              label="呼吸频率"
+              value={health.respiration > 0 ? `${health.respiration} 次/分` : '--'}
+            />
+            <InfoCell
+              label="HRV (SDNN)"
+              value={health.hrvSdnn > 0 ? `${health.hrvSdnn} ms` : '--'}
+            />
+            <InfoCell label="微循环" value={health.microCir > 0 ? `${health.microCir}` : '--'} />
+            <InfoCell label="环境温度" value={`${health.envTemp.toFixed(1)} ℃`} />
           </View>
         )}
 
+        <ThemedText type="smallBold">运动传感器</ThemedText>
+        <View style={styles.infoGrid}>
+          <InfoCell
+            label="加速度 XYZ (g)"
+            value={imu ? imu.accel.map((v) => v.toFixed(3)).join(' / ') : '--'}
+          />
+          <InfoCell
+            label="角速度 XYZ (°/s)"
+            value={imu ? imu.gyro.map((v) => v.toFixed(2)).join(' / ') : '--'}
+          />
+          <InfoCell
+            label="姿态角 XYZ (°)"
+            value={imu ? imu.euler.map((v) => v.toFixed(1)).join(' / ') : '--'}
+          />
+        </View>
+        <ThemedText type="smallBold">音频特征</ThemedText>
+        <View style={styles.infoGrid}>
+          <InfoCell label="RMS" value={audio ? audio.rms.toFixed(4) : '--'} />
+          <InfoCell label="过零率" value={audio ? audio.zcr.toFixed(4) : '--'} />
+          <InfoCell label="采样率" value={audio ? `${audio.sampleRate} Hz` : '--'} />
+        </View>
+        {audio && (
+          <View style={styles.melGrid}>
+            {audio.mel.map((value, index) => (
+              <View
+                key={index}
+                accessibilityLabel={`Mel ${index + 1}: ${value.toFixed(1)}`}
+                style={[
+                  styles.melCell,
+                  {
+                    backgroundColor:
+                      value > -10
+                        ? theme.warning
+                        : value > -20
+                          ? theme.tint
+                          : theme.backgroundSelected,
+                  },
+                ]}
+              >
+                <ThemedText type="small" style={{ color: theme.text }}>
+                  {value.toFixed(0)}
+                </ThemedText>
+              </View>
+            ))}
+          </View>
+        )}
+        <ThemedText type="smallBold">采集状态</ThemedText>
+        <View style={styles.infoGrid}>
+          <InfoCell
+            label="实验"
+            value={experiment ? (experiment.active ? '采集中' : '未开始') : '--'}
+          />
+          <InfoCell
+            label="动作事件"
+            value={experiment?.eventActive ? experiment.eventLabel : '无'}
+          />
+          <InfoCell
+            label="SD 卡"
+            value={
+              experiment
+                ? `${experiment.sdLogging ? '写入中' : experiment.sdStatus} · ${experiment.sdRows} 条`
+                : '--'
+            }
+          />
+        </View>
         <ThemedText type="small" themeColor="textSecondary" style={styles.footer}>
-          数据经 MQTT → 云端 → WebSocket 实时推送{'\n'}支持跨网连接，设备与手机无需同一局域网
+          {latest
+            ? `云端接收：${new Date(latest.receivedAt).toLocaleString()}\n设备运行时间：${(latest.tsMs / 1000).toFixed(1)} 秒${isFresh ? '' : ' · 数据未更新'}`
+            : '等待设备数据'}
         </ThemedText>
       </ThemedView>
     </ScrollView>
@@ -169,8 +246,9 @@ function InfoCell({ label, value }: { label: string; value: string }) {
 
 const infoStyles = StyleSheet.create({
   cell: {
-    flex: 1,
-    borderRadius: 14,
+    flexGrow: 1,
+    flexBasis: 140,
+    borderRadius: 8,
     padding: Spacing.three,
     gap: Spacing.one,
   },
@@ -203,6 +281,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: Spacing.two,
+    flexWrap: 'wrap',
   },
   batteryBox: {
     flexDirection: 'row',
@@ -253,5 +332,13 @@ const styles = StyleSheet.create({
   footer: {
     textAlign: 'center',
     lineHeight: 18,
+  },
+  melGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 4 },
+  melCell: {
+    width: 42,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 4,
   },
 });
