@@ -1,59 +1,77 @@
-import { SymbolView } from 'expo-symbols';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { AppIcon } from '@/components/ui/icon';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
+import { BottomTabInset, MaxContentWidth, Shadows, Spacing } from '@/constants/theme';
+import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
+import { fetchUserProfile } from '@/services/api';
+import type { UserProfile } from '@/types/social';
 
-const menuSections = [
-  {
-    title: '宠物健康',
-    items: [
-      {
-        id: 'report',
-        label: '每周健康报告',
-        icon: { ios: 'doc.text.fill', android: 'description', web: 'description' },
-      },
-      {
-        id: 'vaccine',
-        label: '疫苗与驱虫提醒',
-        icon: { ios: 'syringe.fill', android: 'vaccines', web: 'thermometer' },
-      },
-      {
-        id: 'weight',
-        label: '体重趋势',
-        icon: { ios: 'chart.line.uptrend.xyaxis', android: 'show_chart', web: 'trending_up' },
-      },
-    ],
-  },
-  {
-    title: '通用设置',
-    items: [
-      {
-        id: 'notification',
-        label: '消息通知',
-        icon: { ios: 'bell.badge.fill', android: 'notifications', web: 'notifications' },
-      },
-      {
-        id: 'family',
-        label: '家人共享',
-        icon: { ios: 'person.2.fill', android: 'group', web: 'group' },
-      },
-      {
-        id: 'help',
-        label: '帮助与反馈',
-        icon: { ios: 'questionmark.circle.fill', android: 'help', web: 'help' },
-      },
-    ],
-  },
-] as const;
-
-/** 我的页面：用户信息与设置入口（当前为静态演示）。 */
+/** 我的页：用户卡 + 三格统计 + 宠物列表（含电量/在线）+ 设备诊断入口。 */
 export default function ProfileScreen() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
+  const router = useRouter();
+  const { user, loading, logout } = useAuth();
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+
+  const load = useCallback(async () => {
+    if (!user) return;
+    try {
+      const data = await fetchUserProfile(user.id);
+      setProfile(data.profile);
+    } catch {
+      // 保留旧数据
+    }
+  }, [user]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void load();
+    }, [load]),
+  );
+
+  if (loading) {
+    return (
+      <View style={[styles.centerWrap, { backgroundColor: theme.background }]}>
+        <ActivityIndicator color={theme.tint} />
+      </View>
+    );
+  }
+
+  if (!user) {
+    return (
+      <ScrollView style={[styles.scrollView, { backgroundColor: theme.background }]}>
+        <ThemedView style={[styles.centerWrap, { paddingTop: insets.top + Spacing.four }]}>
+          <ThemedText type="subtitle">我的</ThemedText>
+          <ThemedView type="backgroundElement" style={styles.guestCard}>
+            <ThemedText style={styles.guestEmoji}>🐾</ThemedText>
+            <ThemedText type="smallBold">登录 PetSense</ThemedText>
+            <ThemedText type="small" themeColor="textSecondary" style={styles.guestText}>
+              登录后可以添加宠物、发帖和别的宠物家长互动
+            </ThemedText>
+            <Pressable
+              onPress={() => router.push('/login')}
+              style={({ pressed }) => [
+                styles.primaryButton,
+                { backgroundColor: theme.tint },
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <ThemedText type="smallBold" style={{ color: '#ffffff' }}>
+                去登录 / 注册
+              </ThemedText>
+            </Pressable>
+          </ThemedView>
+        </ThemedView>
+      </ScrollView>
+    );
+  }
 
   return (
     <ScrollView
@@ -61,66 +79,112 @@ export default function ProfileScreen() {
       contentContainerStyle={styles.contentContainer}
     >
       <ThemedView style={[styles.container, { paddingTop: insets.top + Spacing.four }]}>
-        <ThemedText type="subtitle">我的</ThemedText>
-
-        {/* 用户卡片 */}
+        {/* 用户卡 */}
         <ThemedView type="backgroundElement" style={styles.userCard}>
           <View style={[styles.userAvatar, { backgroundColor: theme.tintBackground }]}>
-            <ThemedText style={{ fontSize: 28 }}>🧑‍🌾</ThemedText>
+            <ThemedText style={{ fontSize: 32 }}>{user.avatarEmoji}</ThemedText>
           </View>
-          <View style={styles.userInfo}>
+          <View style={styles.userTexts}>
             <ThemedText type="smallBold" style={styles.userName}>
-              宠物家长小杨
+              {user.displayName}
             </ThemedText>
             <ThemedText type="small" themeColor="textSecondary">
-              已陪伴 3 只宠物 · 426 天
+              @{user.username}
             </ThemedText>
           </View>
+          <Pressable onPress={() => void logout().then(() => setProfile(null))} hitSlop={8}>
+            <ThemedText type="small" style={{ color: theme.textSecondary }}>
+              退出
+            </ThemedText>
+          </Pressable>
         </ThemedView>
 
-        {/* 设置菜单 */}
-        {menuSections.map((section) => (
-          <View key={section.title} style={styles.section}>
-            <ThemedText type="small" themeColor="textSecondary" style={styles.sectionTitle}>
-              {section.title}
+        {/* 三格统计 */}
+        <ThemedView type="backgroundElement" style={styles.statsRow}>
+          <StatCell
+            value={profile?.posts_count ?? 0}
+            label="帖子"
+            onPress={() => router.push('/community')}
+          />
+          <StatCell value={profile?.followers ?? 0} label="粉丝" />
+          <StatCell value={profile?.following ?? 0} label="关注" />
+        </ThemedView>
+
+        {/* 我的宠物 */}
+        <View style={styles.sectionHeader}>
+          <ThemedText type="smallBold">我的宠物</ThemedText>
+          <Pressable onPress={() => router.push('/create')}>
+            <ThemedText type="small" style={{ color: theme.tint }}>
+              ＋ 添加
             </ThemedText>
-            <ThemedView type="backgroundElement" style={styles.menuCard}>
-              {section.items.map((item) => (
-                <Pressable
-                  key={item.id}
-                  style={({ pressed }) => [styles.menuRow, pressed && styles.pressed]}
-                >
-                  <SymbolView name={item.icon} size={18} tintColor={theme.tint} />
-                  <ThemedText type="default" style={styles.menuLabel}>
-                    {item.label}
-                  </ThemedText>
-                  <SymbolView
-                    name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }}
-                    size={14}
-                    tintColor={theme.textSecondary}
-                  />
-                </Pressable>
-              ))}
-            </ThemedView>
-          </View>
+          </Pressable>
+        </View>
+        {(profile?.pets ?? []).map((pet) => (
+          <ThemedView key={pet.id} type="backgroundElement" style={styles.petCard}>
+            <View style={[styles.petAvatar, { backgroundColor: theme.tintBackground }]}>
+              <ThemedText style={{ fontSize: 26 }}>{pet.avatar_emoji}</ThemedText>
+            </View>
+            <View style={styles.petTexts}>
+              <ThemedText type="smallBold" style={styles.petName}>
+                {pet.name}
+              </ThemedText>
+              <ThemedText type="small" themeColor="textSecondary">
+                {pet.breed || '宠物'} · {pet.device_id || '未绑定设备'}
+              </ThemedText>
+            </View>
+            {pet.batteryPercent != null ? (
+              <View style={styles.petBattery}>
+                <View
+                  style={[
+                    styles.batteryDot,
+                    { backgroundColor: pet.online ? theme.online : theme.textSecondary },
+                  ]}
+                />
+                <ThemedText type="small" themeColor="textSecondary">
+                  {pet.batteryPercent}%
+                </ThemedText>
+              </View>
+            ) : null}
+          </ThemedView>
         ))}
 
-        <ThemedText type="small" themeColor="textSecondary" style={styles.footer}>
-          PetSense Demo v1.0.0{'\n'}用爱感知每一天 🐾
-        </ThemedText>
+        {/* 设备诊断入口 */}
+        <Pressable onPress={() => router.push('/monitor')}>
+          <ThemedView type="backgroundElement" style={styles.menuRow}>
+            <AppIcon name="heart-pulse" size={20} color={theme.tint} />
+            <ThemedText type="default" style={styles.menuLabel}>
+              设备诊断（工程师视图）
+            </ThemedText>
+            <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
+          </ThemedView>
+        </Pressable>
       </ThemedView>
     </ScrollView>
   );
 }
 
+function StatCell({
+  value,
+  label,
+  onPress,
+}: {
+  value: number;
+  label: string;
+  onPress?: () => void;
+}) {
+  return (
+    <Pressable style={styles.statCell} onPress={onPress} disabled={!onPress}>
+      <ThemedText style={styles.statValue}>{value}</ThemedText>
+      <ThemedText type="small" themeColor="textSecondary">
+        {label}
+      </ThemedText>
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
-  scrollView: {
-    flex: 1,
-  },
-  contentContainer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-  },
+  scrollView: { flex: 1 },
+  contentContainer: { flexDirection: 'row', justifyContent: 'center' },
   container: {
     flexGrow: 1,
     maxWidth: MaxContentWidth,
@@ -128,53 +192,90 @@ const styles = StyleSheet.create({
     paddingBottom: BottomTabInset + Spacing.five,
     gap: Spacing.three,
   },
+  centerWrap: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: Spacing.five,
+    backgroundColor: 'transparent',
+  },
+  guestCard: {
+    width: '100%',
+    maxWidth: MaxContentWidth,
+    borderRadius: 22,
+    padding: Spacing.five,
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  guestEmoji: { fontSize: 42 },
+  guestText: { textAlign: 'center' },
+  primaryButton: {
+    marginTop: Spacing.two,
+    borderRadius: 16,
+    paddingHorizontal: Spacing.five,
+    paddingVertical: 10,
+  },
   userCard: {
+    width: '100%',
+    borderRadius: 22,
+    padding: Spacing.four,
     flexDirection: 'row',
     alignItems: 'center',
-    borderRadius: Spacing.three,
-    padding: Spacing.three,
     gap: Spacing.three,
-    marginTop: Spacing.two,
+    boxShadow: Shadows.card,
   },
   userAvatar: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  userInfo: {
-    gap: Spacing.one,
+  userTexts: { gap: 2, flexShrink: 1 },
+  userName: { fontSize: 18 },
+  statsRow: {
+    width: '100%',
+    flexDirection: 'row',
+    borderRadius: 22,
+    paddingVertical: Spacing.three,
+    boxShadow: Shadows.card,
   },
-  userName: {
-    fontSize: 18,
-  },
-  section: {
-    gap: Spacing.two,
-    marginTop: Spacing.one,
-  },
-  sectionTitle: {
-    paddingLeft: Spacing.one,
-  },
-  menuCard: {
-    borderRadius: Spacing.three,
-    paddingHorizontal: Spacing.three,
-  },
-  menuRow: {
+  statCell: { flex: 1, alignItems: 'center', gap: 2 },
+  statValue: { fontSize: 22, fontWeight: '700', lineHeight: 26 },
+  sectionHeader: {
+    width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: Spacing.three,
+    justifyContent: 'space-between',
+    marginTop: Spacing.one,
+  },
+  petCard: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: Spacing.three,
+    borderRadius: 18,
+    padding: Spacing.three,
+    boxShadow: Shadows.card,
   },
-  menuLabel: {
-    marginRight: 'auto',
+  petAvatar: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  pressed: {
-    opacity: 0.7,
+  petTexts: { gap: 2, flexShrink: 1 },
+  petName: { fontSize: 16 },
+  petBattery: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  batteryDot: { width: 8, height: 8, borderRadius: 4 },
+  menuRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
+    borderRadius: 18,
+    padding: Spacing.three,
   },
-  footer: {
-    textAlign: 'center',
-    marginTop: Spacing.four,
-    lineHeight: 20,
-  },
+  menuLabel: { marginRight: 'auto' },
 });

@@ -4,16 +4,13 @@
 
 ESP32 板端源码、接线、Arduino CLI 下载、编译和烧录说明见 [firmware/README.md](firmware/README.md)。仅使用固件不需要安装 App 依赖。
 
-## 功能演示
+## 功能
 
-| 模块        | 说明                                                                 |
-| ----------- | -------------------------------------------------------------------- |
-| 💚 实时监测 | 硬件设备数据经云端实时推送：心率 / 血氧 / 体温 / 电量 + 实时趋势曲线 |
-| 🏠 今日     | 实时监测卡片 + 当前宠物档案 + 可勾选的护理待办                       |
-| 🐶 宠物     | 宠物档案列表，点击卡片切换「当前宠物」，首页数据联动更新             |
-| 👤 我的     | 用户信息与设置入口（健康报告、疫苗提醒、家人共享等）                 |
+| 模块        | 说明                                                                                               |
+| ----------- | -------------------------------------------------------------------------------------------------- |
+| 💚 实时监测 | 唯一主屏：硬件数据经云端实时推送——心率 / 血氧 / 体温 / 电量 + 趋势曲线 + IMU / 音频特征 / 采集状态 |
 
-> 实时数据来自云端真实链路；宠物档案与待办为 `src/data/pets.ts` 演示数据。
+> 全部数据来自云端真实链路（或真实实验数据集回放），无任何前端假数据页面。
 
 ## 实时监测架构（跨网）
 
@@ -54,7 +51,7 @@ EXPO_PUBLIC_TELEMETRY_URL=ws://localhost:8090/ws npm run web
 
 ## 技术栈
 
-- [Expo SDK 57](https://docs.expo.dev/versions/v57.0.0/) + [expo-router](https://docs.expo.dev/router/introduction/)（文件式路由 + 原生底部 Tab）
+- [Expo SDK 57](https://docs.expo.dev/versions/v57.0.0/) + [expo-router](https://docs.expo.dev/router/introduction/)（文件式路由，单屏应用）
 - React Native 0.86 + React 19（React Compiler 已开启）
 - TypeScript（strict 模式）
 - ESLint（eslint-config-expo）+ Prettier + GitHub Actions CI
@@ -182,15 +179,13 @@ petsense_app/
 │   ├── mock-server.js            # 本地遥测模拟服务（零依赖 WebSocket）
 │   └── gen-replay-dataset.cjs    # 从云端实验数据集生成回放数据（一次性工具）
 └── src/
-    ├── app/                      # 页面（expo-router 文件式路由）
-    │   ├── _layout.tsx           # 根布局：Stack + 主题
-    │   ├── (tabs)/               # Tab 页面组（今日 / 宠物 / 我的）
-    │   └── monitor.tsx           # 实时监测详情页
+    ├── app/                      # 页面（expo-router 文件式路由，单屏应用）
+    │   ├── _layout.tsx           # 根布局：Stack + 主题 + 启动动画
+    │   └── index.tsx             # 实时监测主屏（唯一页面）
     ├── components/               # 通用组件（live/ 为实时监测组件）
-    ├── config.ts                 # 运行时配置（遥测地址）
+    ├── config.ts                 # 运行时配置（遥测模式与地址）
     ├── constants/theme.ts        # 颜色 / 字体 / 间距（明暗双主题）
-    ├── context/                  # 全局状态（当前宠物）
-    ├── data/                     # Mock 数据与类型定义
+    ├── data/                     # 回放数据集（真实实验数据）
     ├── hooks/                    # 自定义 Hooks（use-telemetry 实时数据流）
     ├── services/                 # WebSocket 遥测客户端（自动重连）
     └── types/                    # 遥测数据帧类型定义

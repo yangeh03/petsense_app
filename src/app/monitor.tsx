@@ -1,4 +1,5 @@
 import { SymbolView } from 'expo-symbols';
+import { useRouter } from 'expo-router';
 import { useState, type ComponentProps } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -54,10 +55,11 @@ const METRICS: MetricConfig[] = [
   },
 ];
 
-/** 实时监测详情页：大图表 + 指标切换 + 设备信息。 */
+/** 设备诊断页（工程师视图）：原始遥测帧的完整展示，从「我的」进入。 */
 export default function MonitorScreen() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const { status, latest, series, isFresh } = useTelemetry();
   const [activeKey, setActiveKey] = useState<SeriesKey>('heartRate');
   const active = METRICS.find((m) => m.key === activeKey) ?? METRICS[0];
@@ -68,30 +70,37 @@ export default function MonitorScreen() {
   const imu = latest?.imu?.ok ? latest.imu : null;
   const audio = latest?.audio?.ok ? latest.audio : null;
   const experiment = latest?.experiment;
+  const showWaitingDevice = status === 'open' && !isFresh;
 
   return (
     <ScrollView
       style={[styles.scrollView, { backgroundColor: theme.background }]}
       contentContainerStyle={styles.contentContainer}
     >
-      <ThemedView style={[styles.container, { paddingTop: insets.top + Spacing.four }]}>
-        {/* 顶部状态 */}
+      <ThemedView style={[styles.container, { paddingTop: insets.top + Spacing.three }]}>
         <View style={styles.header}>
-          <View style={styles.headerText}>
-            <ThemedText type="subtitle">实时监测</ThemedText>
-            <View style={styles.statusRow}>
-              <ConnectionDot status={status === 'open' && !isFresh ? 'closed' : status} />
-              <ThemedText type="small" themeColor="textSecondary">
-                {status === 'open' && !isFresh ? '云端已连接 · 等待设备' : STATUS_LABEL[status]} ·{' '}
-                {latest?.deviceId ?? 'petsense 设备'}
-              </ThemedText>
-            </View>
-          </View>
+          <Pressable onPress={() => router.back()} hitSlop={10} style={styles.back}>
+            <SymbolView
+              name={{ ios: 'chevron.left', android: 'chevron_left', web: 'chevron_left' }}
+              size={20}
+              tintColor={theme.text}
+            />
+          </Pressable>
+          <ThemedText type="smallBold">设备诊断</ThemedText>
+        </View>
+
+        {/* 连接状态 */}
+        <View style={styles.statusRow}>
+          <ConnectionDot status={showWaitingDevice ? 'closed' : status} />
+          <ThemedText type="small" themeColor="textSecondary">
+            {showWaitingDevice ? '云端已连接 · 等待设备' : STATUS_LABEL[status]} ·{' '}
+            {latest?.deviceId ?? 'petsense 设备'}
+          </ThemedText>
           {battery && (
             <View style={styles.batteryBox}>
               <SymbolView
                 name={{ ios: 'battery.75percent', android: 'battery_full', web: 'battery_full' }}
-                size={18}
+                size={16}
                 tintColor={theme.tint}
               />
               <ThemedText type="smallBold">{Math.round(battery.percent)}%</ThemedText>
@@ -158,7 +167,6 @@ export default function MonitorScreen() {
             <InfoCell label="环境温度" value={`${health.envTemp.toFixed(1)} ℃`} />
           </View>
         )}
-
         <ThemedText type="smallBold">运动传感器</ThemedText>
         <View style={styles.infoGrid}>
           <InfoCell
@@ -256,13 +264,8 @@ const infoStyles = StyleSheet.create({
 });
 
 const styles = StyleSheet.create({
-  scrollView: {
-    flex: 1,
-  },
-  contentContainer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-  },
+  scrollView: { flex: 1 },
+  contentContainer: { flexDirection: 'row', justifyContent: 'center' },
   container: {
     flex: 1,
     maxWidth: 640,
@@ -270,14 +273,8 @@ const styles = StyleSheet.create({
     paddingBottom: Spacing.six,
     gap: Spacing.four,
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-  },
-  headerText: {
-    gap: Spacing.one,
-    flex: 1,
-  },
+  header: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  back: { marginLeft: -Spacing.two },
   statusRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -293,10 +290,7 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.two,
     borderRadius: 12,
   },
-  segmentRow: {
-    flexDirection: 'row',
-    gap: Spacing.two,
-  },
+  segmentRow: { flexDirection: 'row', gap: Spacing.two },
   segment: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -306,34 +300,17 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     backgroundColor: 'rgba(128,128,128,0.12)',
   },
-  valueRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: Spacing.two,
-  },
+  valueRow: { flexDirection: 'row', alignItems: 'baseline', gap: Spacing.two },
   bigValue: {
     fontSize: 56,
     fontWeight: '700',
     lineHeight: 60,
     fontVariant: ['tabular-nums'],
   },
-  unit: {
-    fontSize: 16,
-  },
-  chartCard: {
-    borderRadius: 20,
-    padding: Spacing.three,
-    alignItems: 'center',
-  },
-  infoGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.two,
-  },
-  footer: {
-    textAlign: 'center',
-    lineHeight: 18,
-  },
+  unit: { fontSize: 16 },
+  chartCard: { borderRadius: 20, padding: Spacing.three, alignItems: 'center' },
+  infoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two },
+  footer: { textAlign: 'center', lineHeight: 18 },
   melGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 4 },
   melCell: {
     width: 42,

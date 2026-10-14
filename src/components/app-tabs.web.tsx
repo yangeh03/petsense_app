@@ -1,120 +1,109 @@
-import {
-  Tabs,
-  TabList,
-  TabTrigger,
-  TabSlot,
-  TabTriggerSlotProps,
-  TabListProps,
-} from 'expo-router/ui';
 import { SymbolView } from 'expo-symbols';
-import { Pressable, useColorScheme, View, StyleSheet } from 'react-native';
+import { Tabs, TabList, TabSlot, TabTrigger } from 'expo-router/ui';
+import { Pressable, StyleSheet, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { ExternalLink } from './external-link';
-import { ThemedText } from './themed-text';
-import { ThemedView } from './themed-view';
+import { ThemedText } from '@/components/themed-text';
+import { Spacing } from '@/constants/theme';
+import { useTheme } from '@/hooks/use-theme';
 
-import { Colors, MaxContentWidth, Spacing } from '@/constants/theme';
+const TABS = [
+  {
+    name: 'index',
+    href: '/',
+    label: '今日',
+    icon: { ios: 'house.fill', android: 'home', web: 'home' },
+  },
+  {
+    name: 'tracking',
+    href: '/tracking',
+    label: '位置',
+    icon: { ios: 'mappin.and.ellipse', android: 'place', web: 'place' },
+  },
+  {
+    name: 'community',
+    href: '/community',
+    label: '社区',
+    icon: { ios: 'person.2', android: 'people', web: 'people' },
+  },
+  {
+    name: 'profile',
+    href: '/profile',
+    label: '我的',
+    icon: { ios: 'person', android: 'person', web: 'person' },
+  },
+] as const;
 
-/** Web 端顶部导航（浏览器访问时的 Tab 栏实现）。 */
+/**
+ * Web 端底部 Tab 栏：内容出口 TabSlot + 四入口均分，宽裕不拥挤。
+ * 创建入口由 (tabs)/_layout 的右下角悬浮按钮承担，不占用底栏空间。
+ */
 export default function AppTabs() {
+  const theme = useTheme();
+  const insets = useSafeAreaInsets();
+  const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
+  const isActive = (href: string) =>
+    pathname === href || (href !== '/' && pathname.startsWith(href));
+  // TabList asChild 的子元素不能接收样式数组，需压平
+  const barStyle = StyleSheet.flatten([
+    styles.bar,
+    {
+      backgroundColor: theme.background,
+      paddingBottom: Math.max(insets.bottom, 6),
+      borderTopColor: 'rgba(128, 110, 90, 0.25)',
+    },
+  ]);
+
   return (
     <Tabs>
       <TabSlot style={{ height: '100%' }} />
       <TabList asChild>
-        <CustomTabList>
-          <TabTrigger name="home" href="/" asChild>
-            <TabButton>今日</TabButton>
-          </TabTrigger>
-          <TabTrigger name="pets" href="/pets" asChild>
-            <TabButton>宠物</TabButton>
-          </TabTrigger>
-          <TabTrigger name="profile" href="/profile" asChild>
-            <TabButton>我的</TabButton>
-          </TabTrigger>
-        </CustomTabList>
+        <View style={barStyle}>
+          {TABS.map((tab) => (
+            <TabTrigger key={tab.name} name={tab.name} href={tab.href} asChild>
+              <TabButton label={tab.label} icon={tab.icon} active={isActive(tab.href)} />
+            </TabTrigger>
+          ))}
+        </View>
       </TabList>
     </Tabs>
   );
 }
 
-export function TabButton({ children, isFocused, ...props }: TabTriggerSlotProps) {
+function TabButton({
+  label,
+  icon,
+  active,
+  onPress,
+}: {
+  label: string;
+  icon: (typeof TABS)[number]['icon'];
+  active: boolean;
+  onPress?: () => void;
+}) {
+  const theme = useTheme();
+  const color = active ? theme.tint : theme.textSecondary;
   return (
-    <Pressable {...props} style={({ pressed }) => pressed && styles.pressed}>
-      <ThemedView
-        type={isFocused ? 'backgroundSelected' : 'backgroundElement'}
-        style={styles.tabButtonView}
-      >
-        <ThemedText type="small" themeColor={isFocused ? 'text' : 'textSecondary'}>
-          {children}
-        </ThemedText>
-      </ThemedView>
+    <Pressable onPress={onPress} style={styles.tab}>
+      <SymbolView name={icon} size={22} tintColor={color} />
+      <ThemedText type="small" style={{ color, fontSize: 11, lineHeight: 14 }}>
+        {label}
+      </ThemedText>
     </Pressable>
   );
 }
 
-export function CustomTabList(props: TabListProps) {
-  const scheme = useColorScheme();
-  const colors = Colors[scheme === 'unspecified' ? 'light' : scheme];
-
-  return (
-    <View {...props} style={styles.tabListContainer}>
-      <ThemedView type="backgroundElement" style={styles.innerContainer}>
-        <ThemedText type="smallBold" style={styles.brandText}>
-          🐾 PetSense
-        </ThemedText>
-
-        {props.children}
-
-        <ExternalLink href="https://docs.expo.dev" asChild>
-          <Pressable style={styles.externalPressable}>
-            <ThemedText type="link">Expo 文档</ThemedText>
-            <SymbolView
-              tintColor={colors.text}
-              name={{ ios: 'arrow.up.right.square', web: 'link' }}
-              size={12}
-            />
-          </Pressable>
-        </ExternalLink>
-      </ThemedView>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
-  tabListContainer: {
-    position: 'absolute',
-    width: '100%',
-    padding: Spacing.three,
-    justifyContent: 'center',
-    alignItems: 'center',
-    flexDirection: 'row',
-  },
-  innerContainer: {
-    paddingVertical: Spacing.two,
-    paddingHorizontal: Spacing.five,
-    borderRadius: Spacing.five,
+  bar: {
     flexDirection: 'row',
     alignItems: 'center',
-    flexGrow: 1,
-    gap: Spacing.two,
-    maxWidth: MaxContentWidth,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: Spacing.one,
   },
-  brandText: {
-    marginRight: 'auto',
-  },
-  pressed: {
-    opacity: 0.7,
-  },
-  tabButtonView: {
+  tab: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 2,
     paddingVertical: Spacing.one,
-    paddingHorizontal: Spacing.three,
-    borderRadius: Spacing.three,
-  },
-  externalPressable: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: Spacing.one,
-    marginLeft: Spacing.three,
   },
 });

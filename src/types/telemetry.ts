@@ -58,6 +58,19 @@ export type TelemetryExperiment = {
   sdAudioMode: string;
 };
 
+/** UWB 定位帧：distanceMm 按锚点序号索引（anchorMask 标记哪些槽位有效） */
+export type TelemetryUwb = {
+  valid: boolean;
+  tagId: number;
+  anchorId: number;
+  sequence: number;
+  anchorMask: number;
+  kalmanEnabled: boolean;
+  distanceMm: number[];
+  rawMm: number[];
+  kalmanMm: number[];
+};
+
 /** 服务端通过 /ws 广播的原始包 */
 export type TelemetryPacket = {
   topic: string;
@@ -77,6 +90,7 @@ export type TelemetryFrame = {
   imu?: TelemetryImu;
   audio?: TelemetryAudio;
   experiment?: TelemetryExperiment;
+  uwb?: TelemetryUwb;
 };
 
 export type TelemetryStatus = 'connecting' | 'open' | 'reconnecting' | 'closed' | 'replaying';

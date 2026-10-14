@@ -1,0 +1,11 @@
+# 运行时产物：数据库、上传图片、实验数据、缓存
+*.db
+*.db-wal
+*.db-shm
+__pycache__/
+uploads/
+audio_files/
+cloud_data/
+dashboard.html
+static/
+anzuo-static/

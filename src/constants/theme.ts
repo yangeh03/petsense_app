@@ -1,6 +1,6 @@
 /**
- * Below are the colors that are used in the app. The colors are defined in the light and dark mode.
- * There are many other ways to style your app. For example, [Nativewind](https://www.nativewind.dev/), [Tamagui](https://tamagui.dev/), [unistyles](https://reactnativeunistyles.vercel.app), etc.
+ * 暖珊瑚主题（对齐设计稿）：奶油底色 + 珊瑚橙主色 + 深棕文字，
+ * 绿色只保留给 Online / 正常等语义状态。
  */
 
 import '@/global.css';
@@ -9,27 +9,36 @@ import { Platform } from 'react-native';
 
 export const Colors = {
   light: {
-    text: '#000000',
-    background: '#ffffff',
-    backgroundElement: '#F0F0F3',
-    backgroundSelected: '#E0E1E6',
-    textSecondary: '#60646C',
-    /** 品牌主色：健康绿 */
-    tint: '#1FA35C',
+    text: '#3A2E26',
+    background: '#FBF9F4',
+    backgroundElement: '#FFFFFF',
+    backgroundSelected: '#F3EAE0',
+    textSecondary: '#94836F',
+    /** 品牌主色：珊瑚橙 */
+    tint: '#E8835C',
     /** 品牌主色的浅色背景，用于标签、卡片点缀 */
-    tintBackground: '#E5F6EC',
+    tintBackground: '#FBEBE1',
     /** 提醒 / 未完成 */
     warning: '#E8A13A',
+    /** 告警严重级（critical） */
+    danger: '#E5484D',
+    /** 告警提示级（数据失联等） */
+    info: '#5B8DEF',
+    /** 在线 / 正常状态 */
+    online: '#31A66D',
   },
   dark: {
-    text: '#ffffff',
-    background: '#000000',
-    backgroundElement: '#212225',
-    backgroundSelected: '#2E3135',
-    textSecondary: '#B0B4BA',
-    tint: '#3DD68C',
-    tintBackground: '#123B26',
+    text: '#F3EAE0',
+    background: '#17120E',
+    backgroundElement: '#241D17',
+    backgroundSelected: '#33291F',
+    textSecondary: '#B5A390',
+    tint: '#F0987A',
+    tintBackground: '#4A2A1D',
     warning: '#F0BC6B',
+    danger: '#FF6369',
+    info: '#7FA8F2',
+    online: '#4CC38A',
   },
 } as const;
 
@@ -72,3 +81,9 @@ export const Spacing = {
 
 export const BottomTabInset = Platform.select({ ios: 50, android: 80 }) ?? 0;
 export const MaxContentWidth = 800;
+
+/** 设计稿同款柔和投影（boxShadow 三端通用，避免 shadow* 弃用告警） */
+export const Shadows = {
+  card: '0 10px 26px rgba(140, 96, 62, 0.10)',
+  chip: '0 6px 16px rgba(140, 96, 62, 0.12)',
+} as const;

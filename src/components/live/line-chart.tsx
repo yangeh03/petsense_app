@@ -12,6 +12,10 @@ type LineChartProps = {
   unit: string;
   /** 期望保留的小数位 */
   decimals?: number;
+  /** 显式宽度（默认按窗口宽度推导） */
+  width?: number;
+  /** 显式高度（默认 220） */
+  height?: number;
 };
 
 type Scale = { min: number; max: number; span: number };
@@ -30,10 +34,17 @@ function niceScale(values: number[]): Scale {
 }
 
 /** 详情页实时大图表：自适应 Y 轴、水平网格、最新值圆点与数值。 */
-export function LineChart({ points, color, unit, decimals = 0 }: LineChartProps) {
+export function LineChart({
+  points,
+  color,
+  unit,
+  decimals = 0,
+  width,
+  height: heightProp,
+}: LineChartProps) {
   const { width: windowWidth } = useWindowDimensions();
-  const chartWidth = Math.min(windowWidth - Spacing.four * 2, 640);
-  const chartHeight = 220;
+  const chartWidth = width ?? Math.min(windowWidth - Spacing.four * 2, 640);
+  const chartHeight = heightProp ?? 220;
   const [layoutHeight, setLayoutHeight] = useState(chartHeight);
   const height = layoutHeight || chartHeight;
 

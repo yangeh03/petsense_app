@@ -187,7 +187,8 @@ export function parseTelemetryMessage(raw: unknown): TelemetryFrame | null {
   if (!payload || Array.isArray(payload)) return null;
 
   // 音频分片 / 重组进度帧没有 health 结构，APP 端不消费
-  if (!payload.health && !payload.battery && !payload.imu && !payload.audio) return null;
+  if (!payload.health && !payload.battery && !payload.imu && !payload.audio && !payload.uwb)
+    return null;
   if (typeof payload.deviceId !== 'string' || !Number.isFinite(payload.ts_ms)) return null;
 
   const frame: TelemetryFrame = {
@@ -227,8 +228,28 @@ export function parseTelemetryMessage(raw: unknown): TelemetryFrame | null {
     experiment: validExperiment(payload.experiment)
       ? (payload.experiment as TelemetryFrame['experiment'])
       : undefined,
+    uwb: validUwb(payload.uwb) ? (payload.uwb as TelemetryFrame['uwb']) : undefined,
   };
-  return frame.health || frame.battery || frame.imu || frame.audio ? frame : null;
+  return frame.health || frame.battery || frame.imu || frame.audio || frame.uwb ? frame : null;
+}
+
+function validUwb(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const object = value as Record<string, unknown>;
+  return (
+    typeof object.valid === 'boolean' &&
+    ['tagId', 'anchorId', 'sequence', 'anchorMask'].every(
+      (key) => typeof object[key] === 'number' && Number.isFinite(object[key]),
+    ) &&
+    typeof object.kalmanEnabled === 'boolean' &&
+    ['distanceMm', 'rawMm', 'kalmanMm'].every(
+      (key) =>
+        Array.isArray(object[key]) &&
+        (object[key] as unknown[]).every(
+          (item) => typeof item === 'number' && Number.isFinite(item),
+        ),
+    )
+  );
 }
 
 function numericObject(value: unknown, keys: string[]): boolean {

@@ -3,7 +3,7 @@ import { useColorScheme } from 'react-native';
 
 import { Colors } from '@/constants/theme';
 
-/** 底部 Tab 栏：iOS / Android 原生渲染，图标使用系统符号。 */
+/** 底部 Tab 栏（原生渲染）：今日 / 位置 / 社区 / 我的，中央 ⊕ 由布局层浮动按钮承担。 */
 export default function AppTabs() {
   const scheme = useColorScheme();
   const colors = Colors[scheme === 'unspecified' ? 'light' : scheme];
@@ -23,11 +23,20 @@ export default function AppTabs() {
         />
       </NativeTabs.Trigger>
 
-      <NativeTabs.Trigger name="pets">
-        <NativeTabs.Trigger.Label>宠物</NativeTabs.Trigger.Label>
+      <NativeTabs.Trigger name="tracking">
+        <NativeTabs.Trigger.Label>位置</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon
-          sf={{ default: 'pawprint', selected: 'pawprint.fill' }}
-          md="pets"
+          sf={{ default: 'mappin.and.ellipse', selected: 'mappin.and.ellipse.circle' }}
+          md={{ default: 'place', selected: 'place' }}
+          selectedColor={colors.tint}
+        />
+      </NativeTabs.Trigger>
+
+      <NativeTabs.Trigger name="community">
+        <NativeTabs.Trigger.Label>社区</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Icon
+          sf={{ default: 'person.2', selected: 'person.2.fill' }}
+          md={{ default: 'people_outline', selected: 'people' }}
           selectedColor={colors.tint}
         />
       </NativeTabs.Trigger>
@@ -36,7 +45,7 @@ export default function AppTabs() {
         <NativeTabs.Trigger.Label>我的</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon
           sf={{ default: 'person', selected: 'person.fill' }}
-          md="person"
+          md={{ default: 'person_outline', selected: 'person' }}
           selectedColor={colors.tint}
         />
       </NativeTabs.Trigger>
