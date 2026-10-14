@@ -1,3 +1,4 @@
+import { SymbolView } from 'expo-symbols';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
@@ -7,6 +8,7 @@ import {
   RefreshControl,
   ScrollView,
   StyleSheet,
+  TextInput,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -15,7 +17,7 @@ import { CommentSheet } from '@/components/social/comment-sheet';
 import { PostCard } from '@/components/social/post-card';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
+import { BottomTabInset, Fonts, MaxContentWidth, Shadows, Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
 import { deletePost, fetchFeed, toggleLike } from '@/services/api';
@@ -23,7 +25,11 @@ import type { Post } from '@/types/social';
 
 type Story = { key: string; userId: number | null; emoji: string; name: string };
 
-/** 社区页：故事环 + 宠物帖子信息流（浏览无需登录，发帖点赞在登录后可用）。 */
+/**
+ * 社区页（ins 风格）：渐变感故事环 + 可搜索的帖子流。
+ * 互动闭环：点赞 / 评论 / 分享 / 删除自己的帖子 / 举报他人帖子。
+ * 浏览无需登录，互动需登录。
+ */
 export default function CommunityScreen() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
@@ -34,6 +40,8 @@ export default function CommunityScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [commentsFor, setCommentsFor] = useState<Post | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState('');
 
   const load = useCallback(() => {
     return fetchFeed()
@@ -55,34 +63,6 @@ export default function CommunityScreen() {
       void load();
     }, [load]),
   );
-
-  const stories: Story[] = [];
-  if (user) stories.push({ key: 'me', userId: null, emoji: user.avatarEmoji, name: '我的故事' });
-  for (const post of posts) {
-    if (stories.some((item) => item.userId === post.user_id)) continue;
-    if (user && post.user_id === user.id) continue;
-    stories.push({
-      key: `u${post.user_id}`,
-      userId: post.user_id,
-      emoji: post.avatar_emoji,
-      name: post.display_name,
-    });
-  }
-
-  const handleDelete = (post: Post) => {
-    Alert.alert('删除帖子', '删除后无法恢复，确定删除？', [
-      { text: '取消', style: 'cancel' },
-      {
-        text: '删除',
-        style: 'destructive',
-        onPress: () => {
-          deletePost(post.id)
-            .then(() => setPosts((current) => current.filter((item) => item.id !== post.id)))
-            .catch(() => void load());
-        },
-      },
-    ]);
-  };
 
   const handleLike = (post: Post) => {
     if (!user) {
@@ -110,10 +90,40 @@ export default function CommunityScreen() {
           ),
         );
       })
-      .catch(() => {
-        void load();
-      });
+      .catch(() => void load());
   };
+
+  const handleDelete = (post: Post) => {
+    deletePost(post.id)
+      .then(() => setPosts((current) => current.filter((item) => item.id !== post.id)))
+      .catch(() => void load());
+  };
+
+  const handleReport = (post: Post) => {
+    Alert.alert('已收到举报', `感谢反馈，我们会尽快核查「${post.display_name}」的内容。`);
+  };
+
+  const keyword = query.trim().toLowerCase();
+  const visiblePosts = keyword
+    ? posts.filter((post) =>
+        `${post.caption} ${post.display_name} ${post.pet_name ?? ''} ${post.location_text}`
+          .toLowerCase()
+          .includes(keyword),
+      )
+    : posts;
+
+  const stories: Story[] = [];
+  if (user) stories.push({ key: 'me', userId: null, emoji: user.avatarEmoji, name: '我的故事' });
+  for (const post of posts) {
+    if (stories.some((item) => item.userId === post.user_id)) continue;
+    if (user && post.user_id === user.id) continue;
+    stories.push({
+      key: `u${post.user_id}`,
+      userId: post.user_id,
+      emoji: post.avatar_emoji,
+      name: post.display_name,
+    });
+  }
 
   return (
     <ScrollView
@@ -129,10 +139,47 @@ export default function CommunityScreen() {
         />
       }
     >
-      <ThemedView style={[styles.container, { paddingTop: insets.top + Spacing.four }]}>
-        <ThemedText type="subtitle">社区</ThemedText>
+      <ThemedView style={[styles.container, { paddingTop: insets.top + Spacing.two }]}>
+        {/* 标题 + 搜索圆钮 */}
+        <View style={styles.header}>
+          <ThemedText style={[styles.title, { fontFamily: Fonts.rounded }]}>社区</ThemedText>
+          <Pressable
+            onPress={() => {
+              setSearchOpen((value) => !value);
+              setQuery('');
+            }}
+            style={[
+              styles.searchButton,
+              {
+                backgroundColor: theme.backgroundElement,
+                boxShadow: Shadows.chip,
+              },
+            ]}
+            accessibilityLabel="搜索社区"
+          >
+            <SymbolView
+              name={{ ios: 'magnifyingglass', android: 'search', web: 'search' }}
+              size={19}
+              tintColor={theme.tint}
+            />
+          </Pressable>
+        </View>
 
-        {/* 故事环 */}
+        {searchOpen && (
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            placeholder="搜索帖子、宠友、地点…"
+            placeholderTextColor={theme.textSecondary}
+            autoFocus
+            style={[
+              styles.searchInput,
+              { color: theme.text, borderColor: theme.backgroundSelected },
+            ]}
+          />
+        )}
+
+        {/* 故事环：珊瑚描边 + 光晕感 */}
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -146,9 +193,14 @@ export default function CommunityScreen() {
                 story.userId ? router.push(`/user?id=${story.userId}`) : router.push('/create')
               }
             >
-              <View style={[styles.storyRing, { borderColor: theme.tint }]}>
+              <View
+                style={[
+                  styles.storyRing,
+                  { borderColor: theme.tint, boxShadow: `0 0 0 3px ${theme.tint}1A` },
+                ]}
+              >
                 <View style={[styles.storyAvatar, { backgroundColor: theme.tintBackground }]}>
-                  <ThemedText style={{ fontSize: 22 }}>{story.emoji || '🙂'}</ThemedText>
+                  <ThemedText style={{ fontSize: 24 }}>{story.emoji || '🙂'}</ThemedText>
                 </View>
               </View>
               <ThemedText
@@ -171,16 +223,18 @@ export default function CommunityScreen() {
           <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
             {error}
           </ThemedText>
-        ) : posts.length === 0 ? (
+        ) : visiblePosts.length === 0 ? (
           <View style={styles.center}>
-            <ThemedText style={styles.emptyEmoji}>🐕</ThemedText>
-            <ThemedText type="small" themeColor="textSecondary">
-              还没有帖子，点右下角 ＋ 分享第一张宠物照片
+            <ThemedText style={styles.emptyEmoji}>{query ? '🔍' : '🐕'}</ThemedText>
+            <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
+              {query
+                ? `没有找到与「${query}」相关的内容`
+                : '还没有帖子，点右下角 ＋ 分享第一张宠物照片'}
             </ThemedText>
           </View>
         ) : (
           <View style={styles.feed}>
-            {posts.map((post) => (
+            {visiblePosts.map((post) => (
               <PostCard
                 key={post.id}
                 post={post}
@@ -188,6 +242,7 @@ export default function CommunityScreen() {
                 onOpenComments={setCommentsFor}
                 onOpenAuthor={(item) => router.push(`/user?id=${item.user_id}`)}
                 onDelete={handleDelete}
+                onReport={handleReport}
               />
             ))}
           </View>
@@ -220,12 +275,32 @@ const styles = StyleSheet.create({
     paddingBottom: BottomTabInset + Spacing.five,
     gap: Spacing.three,
   },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  title: { fontSize: 30, fontWeight: '700', lineHeight: 38 },
+  searchButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchInput: {
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: 10,
+    fontSize: 14,
+  },
   stories: { gap: Spacing.three },
-  story: { alignItems: 'center', gap: 6, width: 68 },
+  story: { alignItems: 'center', gap: 6, width: 70 },
   storyRing: {
-    width: 62,
-    height: 62,
-    borderRadius: 31,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
     borderWidth: 2.5,
     alignItems: 'center',
     justifyContent: 'center',

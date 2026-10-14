@@ -1,6 +1,6 @@
 import { Image } from 'expo-image';
 import { SymbolView } from 'expo-symbols';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Alert, Pressable, Share, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -9,22 +9,60 @@ import { useTheme } from '@/hooks/use-theme';
 import { absoluteUrl } from '@/services/api';
 import type { Post } from '@/types/social';
 
-/** 社区帖子卡：作者 / 宠物 / 图片 / 文案 / 点赞评论。 */
+/** 点赞/评论数格式化：千位缩写（1.2k），对齐 ins 观感 */
+function formatCount(value: number): string {
+  if (value >= 1000) {
+    const k = value / 1000;
+    return `${k >= 10 ? Math.round(k) : k.toFixed(1).replace(/\.0$/, '')}k`;
+  }
+  return String(value);
+}
+
+/** 社区帖子卡（ins 风格）：⋯ 菜单（删除/举报）、大图、文案、点赞/评论/分享。 */
 export function PostCard({
   post,
   onLike,
   onOpenComments,
   onOpenAuthor,
   onDelete,
+  onReport,
 }: {
   post: Post;
   onLike: (post: Post) => void;
   onOpenComments: (post: Post) => void;
   onOpenAuthor: (post: Post) => void;
   onDelete?: (post: Post) => void;
+  onReport?: (post: Post) => void;
 }) {
   const theme = useTheme();
   const liked = post.liked_by_me;
+
+  const openMenu = () => {
+    const buttons: {
+      text: string;
+      style?: 'cancel' | 'destructive' | 'default';
+      onPress?: () => void;
+    }[] = [];
+    if (post.isMine && onDelete) {
+      buttons.push({
+        text: '删除帖子',
+        style: 'destructive',
+        onPress: () => onDelete(post),
+      });
+    } else if (onReport) {
+      buttons.push({ text: '举报', onPress: () => onReport(post) });
+    }
+    buttons.push({ text: '取消', style: 'cancel' });
+    Alert.alert(post.display_name, undefined, buttons);
+  };
+
+  const share = () => {
+    Share.share({
+      message: post.caption ? `${post.caption}\n— 来自 PetSense 社区` : '来自 PetSense 社区',
+    }).catch(() => {
+      // 当前环境不支持系统分享时静默
+    });
+  };
 
   return (
     <ThemedView type="backgroundElement" style={styles.card}>
@@ -33,27 +71,26 @@ export function PostCard({
           <ThemedText style={{ fontSize: 20 }}>{post.avatar_emoji || '🙂'}</ThemedText>
         </View>
         <View style={styles.authorTexts}>
-          <ThemedText type="smallBold">{post.display_name}</ThemedText>
+          <ThemedText type="smallBold" style={styles.authorName}>
+            {post.display_name}
+          </ThemedText>
           <ThemedText type="small" themeColor="textSecondary" style={styles.meta}>
             {post.pet_name ? `${post.pet_emoji || '🐾'} ${post.pet_name} · ` : ''}
             {timeAgo(post.created_at)}
-            {post.location_text ? ` · ${post.location_text}` : ''}
           </ThemedText>
         </View>
-        {post.isMine && onDelete && (
-          <Pressable
-            onPress={() => onDelete(post)}
-            hitSlop={8}
-            accessibilityLabel="删除帖子"
-            style={styles.deleteButton}
-          >
-            <SymbolView
-              name={{ ios: 'trash', android: 'delete_outline', web: 'delete_outline' }}
-              size={16}
-              tintColor={theme.textSecondary}
-            />
-          </Pressable>
-        )}
+        <Pressable
+          onPress={openMenu}
+          hitSlop={8}
+          accessibilityLabel="更多操作"
+          style={styles.moreButton}
+        >
+          <SymbolView
+            name={{ ios: 'ellipsis', android: 'more_vert', web: 'more_horiz' }}
+            size={18}
+            tintColor={theme.textSecondary}
+          />
+        </Pressable>
       </Pressable>
 
       <Image
@@ -70,26 +107,39 @@ export function PostCard({
       ) : null}
 
       <View style={styles.actionRow}>
-        <ActionIcon
-          icon={{
-            ios: liked ? 'heart.fill' : 'heart',
-            android: liked ? 'favorite' : 'favorite_border',
-            web: liked ? 'favorite' : 'favorite_border',
-          }}
-          label={String(post.likes)}
-          color={liked ? theme.danger : theme.textSecondary}
-          onPress={() => onLike(post)}
-        />
-        <ActionIcon
-          icon={{
-            ios: 'bubble.right',
-            android: 'chat_bubble_outline',
-            web: 'chat_bubble_outline',
-          }}
-          label={String(post.comments_count)}
-          color={theme.textSecondary}
-          onPress={() => onOpenComments(post)}
-        />
+        <View style={styles.actionGroup}>
+          <ActionIcon
+            icon={{
+              ios: liked ? 'heart.fill' : 'heart',
+              android: liked ? 'favorite' : 'favorite_border',
+              web: liked ? 'favorite' : 'favorite_border',
+            }}
+            label={formatCount(post.likes)}
+            color={liked ? theme.danger : theme.textSecondary}
+            onPress={() => onLike(post)}
+          />
+          <ActionIcon
+            icon={{
+              ios: 'bubble.right',
+              android: 'chat_bubble_outline',
+              web: 'chat_bubble_outline',
+            }}
+            label={formatCount(post.comments_count)}
+            color={theme.textSecondary}
+            onPress={() => onOpenComments(post)}
+          />
+        </View>
+        <Pressable
+          onPress={share}
+          style={({ pressed }) => [styles.action, pressed && { opacity: 0.6 }]}
+          accessibilityLabel="分享"
+        >
+          <SymbolView
+            name={{ ios: 'square.and.arrow.up', android: 'share', web: 'share' }}
+            size={20}
+            tintColor={theme.textSecondary}
+          />
+        </Pressable>
       </View>
     </ThemedView>
   );
@@ -111,7 +161,7 @@ function ActionIcon({
       onPress={onPress}
       style={({ pressed }) => [styles.action, pressed && { opacity: 0.6 }]}
     >
-      <SymbolView name={icon} size={20} tintColor={color} />
+      <SymbolView name={icon} size={22} tintColor={color} />
       {label !== '0' && (
         <ThemedText type="small" style={{ color }}>
           {label}
@@ -133,7 +183,7 @@ function timeAgo(iso: string) {
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 20,
+    borderRadius: 24,
     paddingVertical: Spacing.three,
     gap: Spacing.three,
     boxShadow: Shadows.card,
@@ -141,21 +191,28 @@ const styles = StyleSheet.create({
   authorRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.three,
+    gap: Spacing.two + 4,
     paddingHorizontal: Spacing.three,
   },
   authorAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     alignItems: 'center',
     justifyContent: 'center',
   },
   authorTexts: { gap: 2, flexShrink: 1 },
-  deleteButton: { marginLeft: 'auto', paddingLeft: Spacing.one },
-  meta: { flexShrink: 1 },
-  image: { width: '100%', aspectRatio: 4 / 3, borderRadius: 14 },
-  caption: { paddingHorizontal: Spacing.three },
-  actionRow: { flexDirection: 'row', gap: Spacing.four, paddingHorizontal: Spacing.three },
+  authorName: { fontSize: 15, lineHeight: 20 },
+  meta: { flexShrink: 1, fontSize: 11, lineHeight: 15 },
+  moreButton: { marginLeft: 'auto', paddingHorizontal: Spacing.one },
+  image: { width: '100%', aspectRatio: 4 / 3, borderRadius: 16 },
+  caption: { paddingHorizontal: Spacing.three, lineHeight: 20 },
+  actionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.three,
+  },
+  actionGroup: { flexDirection: 'row', gap: Spacing.four },
   action: { flexDirection: 'row', alignItems: 'center', gap: 6 },
 });
