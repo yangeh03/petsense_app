@@ -18,14 +18,13 @@
 APP 与硬件设备**不要求同一局域网**，数据全程经云端中转：
 
 ```
-ESP32 硬件 ──MQTT──▶ 阿里云 Mosquitto ──▶ petsense-server(Flask) ──WebSocket──▶ APP
- (任意网络)            8.148.188.68:1883     :8080                /ws            (任意网络)
+ESP32 硬件 ──MQTT──▶ 腾讯云 Mosquitto ──▶ petsense-server(Flask) ──WebSocket──▶ APP
+ (任意网络)            81.71.71.31:1883      :8080                /ws            (任意网络)
 ```
 
-- 服务端（`server.py`）部署在阿里云 `/root/petsense-server`，订阅 `petsense/sensor/#` 并向 `/ws` 广播
+- 服务端（`server.py`）部署在腾讯云 `/home/ubuntu/petsense-server`，订阅 `petsense/sensor/#` 并向 `/ws` 广播
 - APP 端实时层在 `src/services/telemetry-service.ts`（自动重连），页面通过 `useTelemetry()` 订阅
 - 连接地址在 `src/config.ts` 配置，默认线上地址，可用环境变量 `EXPO_PUBLIC_TELEMETRY_URL` 覆盖
-- 设备离线时云端有 `tools/device-simulator.py` 模拟器补数据流（部署在阿里云常驻运行）
 - 服务端 HTTP 接口：`/api/latest-full`（最近 200 帧）、`/api/stats`（统计）、`/ws`（实时推送）
 
 ### 本地联调（不依赖云端）
@@ -165,8 +164,7 @@ petsense_app/
 │   ├── icons/                    # 品牌图标 SVG 源文件
 │   └── generate-icons.sh         # 图标生成脚本（macOS 自带工具，无需装依赖）
 ├── tools/
-│   ├── mock-server.js            # 本地遥测模拟服务（零依赖 WebSocket）
-│   └── device-simulator.py       # 设备模拟器（部署在阿里云，MQTT 上报）
+│   └── mock-server.js            # 本地遥测模拟服务（零依赖 WebSocket）
 └── src/
     ├── app/                      # 页面（expo-router 文件式路由）
     │   ├── _layout.tsx           # 根布局：Stack + 主题
@@ -217,7 +215,7 @@ A：2025 年起 Expo Go 强制登录。手机 Expo Go 与电脑 CLI 需登录**�
 A：项目使用 SDK 57，手机端 Expo Go 太旧会报 "requires a newer version" → App Store 更新 Expo Go 后重连。
 
 **Q：实时监测显示「未连接」？**
-A：① 确认手机能访问 `http://8.148.188.68:8080/api/stats`；② 本地联调时检查 `EXPO_PUBLIC_TELEMETRY_URL` 是否指向电脑局域网 IP（手机上 `localhost` 不是电脑）；③ 服务重启后 APP 会自动指数退避重连，稍等即可。
+A：① 确认手机能访问 `http://81.71.71.31:8080/api/stats`；② 本地联调时检查 `EXPO_PUBLIC_TELEMETRY_URL` 是否指向电脑局域网 IP（手机上 `localhost` 不是电脑）；③ 服务重启后 APP 会自动指数退避重连，稍等即可。
 
 ## License
 

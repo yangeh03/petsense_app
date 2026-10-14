@@ -6,7 +6,7 @@
 
 - 技术栈：Expo SDK 57、React Native 0.86、TypeScript（strict）、expo-router（文件式路由）、Reanimated、react-native-svg
 - 目录结构：页面在 `src/app/`（`(tabs)/` 为 Tab 组、`monitor.tsx` 为监测详情页），通用组件在 `src/components/`（`live/` 为实时监测组件），WebSocket 遥测客户端在 `src/services/`，实时数据 Hook 在 `src/hooks/use-telemetry.ts`，帧类型在 `src/types/telemetry.ts`，主题在 `src/constants/theme.ts`，Mock 数据在 `src/data/`，全局状态在 `src/context/`
-- 实时链路：设备 → MQTT（阿里云）→ server.py → WebSocket `/ws` → `telemetry-service.ts`（自动重连）→ `useTelemetry()`；连接地址在 `src/config.ts`，可用 `EXPO_PUBLIC_TELEMETRY_URL` 覆盖；本地联调用 `npm run mock:server`
+- 实时链路：设备 → MQTT（腾讯云）→ server.py → WebSocket `/ws` → `telemetry-service.ts`（自动重连）→ `useTelemetry()`；连接地址在 `src/config.ts`，可用 `EXPO_PUBLIC_TELEMETRY_URL` 覆盖；本地联调用 `npm run mock:server`
 - 路径别名：`@/*` → `src/*`，`@/assets/*` → `assets/*`
 - 品牌色：健康绿（light `#1FA35C` / dark `#3DD68C`），全部颜色定义在 `src/constants/theme.ts`，不要在页面里写死颜色
 
