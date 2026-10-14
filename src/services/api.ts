@@ -12,6 +12,7 @@ import type {
   Post,
   PostComment,
   SocialPet,
+  FollowListUser,
   TrendPeriod,
   TrendsResponse,
   UserProfile,
@@ -207,6 +208,19 @@ export function fetchUserProfile(userId: number): Promise<{ profile: UserProfile
 
 export function toggleFollow(userId: number): Promise<{ following: boolean }> {
   return request(`/users/${userId}/follow`, { method: 'POST' });
+}
+
+// ─── 社区补充 ───
+
+export function deletePost(postId: number): Promise<{ success: boolean }> {
+  return request(`/posts/${postId}`, { method: 'DELETE' });
+}
+
+export function fetchFollowList(
+  userId: number,
+  kind: 'followers' | 'following',
+): Promise<{ users: FollowListUser[] }> {
+  return request(`/users/${userId}/${kind}`);
 }
 
 // ─── 趋势统计 ───

@@ -1985,6 +1985,27 @@ def app_create_post():
     return {'success': True, 'postId': post_id}, 201
 
 
+@app.route('/api/app/posts/<int:post_id>', methods=['DELETE'])
+def app_delete_post(post_id):
+    user, error = require_app_user()
+    if error:
+        return error
+    with app_connect() as db:
+        row = db.execute('SELECT user_id, image_path FROM posts WHERE id=?', (post_id,)).fetchone()
+        if not row:
+            return {'success': False, 'message': '帖子不存在'}, 404
+        if row['user_id'] != user['id']:
+            return {'success': False, 'message': '只能删除自己的帖子'}, 403
+        db.execute('DELETE FROM comments WHERE post_id=?', (post_id,))
+        db.execute('DELETE FROM post_likes WHERE post_id=?', (post_id,))
+        db.execute('DELETE FROM posts WHERE id=?', (post_id,))
+    try:
+        os.remove(os.path.join(UPLOADS_DIR, row['image_path']))
+    except OSError:
+        pass
+    return {'success': True}
+
+
 @app.route('/api/app/posts/<int:post_id>/like', methods=['POST'])
 def app_like_post(post_id):
     user, error = require_app_user()
@@ -2051,19 +2072,25 @@ def app_user_profile(user_id):
 
 @app.route('/api/app/users/<int:user_id>/followers')
 def app_user_followers(user_id):
+    viewer = app_user_from_request()
+    viewer_id = viewer['id'] if viewer else -1
     with app_connect() as db:
-        rows = db.execute('''SELECT u.id,u.display_name,u.avatar_emoji FROM follows f
-            JOIN users u ON u.id=f.follower_id WHERE f.followee_id=? ORDER BY f.created_at DESC LIMIT 200''',
-                          (user_id,)).fetchall()
+        rows = db.execute('''SELECT u.id,u.display_name,u.avatar_emoji,
+            EXISTS(SELECT 1 FROM follows f2 WHERE f2.follower_id=? AND f2.followee_id=u.id) AS is_following
+            FROM follows f JOIN users u ON u.id=f.follower_id WHERE f.followee_id=? ORDER BY f.created_at DESC LIMIT 200''',
+                          (viewer_id, user_id)).fetchall()
     return {'success': True, 'users': [dict(row) for row in rows]}
 
 
 @app.route('/api/app/users/<int:user_id>/following')
 def app_user_following(user_id):
+    viewer = app_user_from_request()
+    viewer_id = viewer['id'] if viewer else -1
     with app_connect() as db:
-        rows = db.execute('''SELECT u.id,u.display_name,u.avatar_emoji FROM follows f
-            JOIN users u ON u.id=f.followee_id WHERE f.follower_id=? ORDER BY f.created_at DESC LIMIT 200''',
-                          (user_id,)).fetchall()
+        rows = db.execute('''SELECT u.id,u.display_name,u.avatar_emoji,
+            EXISTS(SELECT 1 FROM follows f2 WHERE f2.follower_id=? AND f2.followee_id=u.id) AS is_following
+            FROM follows f JOIN users u ON u.id=f.followee_id WHERE f.follower_id=? ORDER BY f.created_at DESC LIMIT 200''',
+                          (viewer_id, user_id)).fetchall()
     return {'success': True, 'users': [dict(row) for row in rows]}
 
 

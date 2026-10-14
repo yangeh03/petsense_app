@@ -2,6 +2,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -17,7 +18,7 @@ import { ThemedView } from '@/components/themed-view';
 import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
-import { fetchFeed, toggleLike } from '@/services/api';
+import { deletePost, fetchFeed, toggleLike } from '@/services/api';
 import type { Post } from '@/types/social';
 
 type Story = { key: string; userId: number | null; emoji: string; name: string };
@@ -34,17 +35,19 @@ export default function CommunityScreen() {
   const [error, setError] = useState<string | null>(null);
   const [commentsFor, setCommentsFor] = useState<Post | null>(null);
 
-  const load = useCallback(async () => {
-    try {
-      const data = await fetchFeed();
-      setPosts(data.posts);
-      setError(null);
-    } catch {
-      setError('社区动态加载失败，下拉重试');
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
+  const load = useCallback(() => {
+    return fetchFeed()
+      .then((data) => {
+        setPosts(data.posts);
+        setError(null);
+        setLoading(false);
+        setRefreshing(false);
+      })
+      .catch(() => {
+        setError('社区动态加载失败，下拉重试');
+        setLoading(false);
+        setRefreshing(false);
+      });
   }, []);
 
   useFocusEffect(
@@ -65,6 +68,21 @@ export default function CommunityScreen() {
       name: post.display_name,
     });
   }
+
+  const handleDelete = (post: Post) => {
+    Alert.alert('删除帖子', '删除后无法恢复，确定删除？', [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '删除',
+        style: 'destructive',
+        onPress: () => {
+          deletePost(post.id)
+            .then(() => setPosts((current) => current.filter((item) => item.id !== post.id)))
+            .catch(() => void load());
+        },
+      },
+    ]);
+  };
 
   const handleLike = (post: Post) => {
     if (!user) {
@@ -169,6 +187,7 @@ export default function CommunityScreen() {
                 onLike={handleLike}
                 onOpenComments={setCommentsFor}
                 onOpenAuthor={(item) => router.push(`/user?id=${item.user_id}`)}
+                onDelete={handleDelete}
               />
             ))}
           </View>

@@ -1,8 +1,8 @@
-import { AppIcon } from '@/components/ui/icon';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -11,16 +11,18 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { CommentSheet } from '@/components/social/comment-sheet';
+import { FollowListModal } from '@/components/social/follow-list-modal';
 import { PostCard } from '@/components/social/post-card';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
-import { fetchFeed, fetchUserProfile, toggleFollow, toggleLike } from '@/services/api';
+import { deletePost, fetchFeed, fetchUserProfile, toggleFollow, toggleLike } from '@/services/api';
 import type { Post, UserProfile } from '@/types/social';
 
-/** 用户主页：资料卡 + 关注按钮 + TA 的帖子。 */
+/** 用户主页：资料卡 + 关注按钮 + 粉丝/关注列表 + TA 的帖子（评论/删除闭环）。 */
 export default function UserScreen() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
@@ -32,6 +34,8 @@ export default function UserScreen() {
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [commentsFor, setCommentsFor] = useState<Post | null>(null);
+  const [followListKind, setFollowListKind] = useState<'followers' | 'following' | null>(null);
   const isMe = user?.id === userId;
 
   const load = useCallback(async () => {
@@ -57,18 +61,42 @@ export default function UserScreen() {
     }, [load]),
   );
 
-  const handleFollow = () => {
+  const requireLogin = () => {
     if (!user) {
       router.push('/login');
-      return;
+      return true;
     }
-    if (!profile) return;
+    return false;
+  };
+
+  const handleFollow = () => {
+    if (requireLogin() || !profile) return;
     setProfile({
       ...profile,
       is_following: !profile.is_following,
       followers: profile.followers + (profile.is_following ? -1 : 1),
     });
     toggleFollow(userId).catch(() => void load());
+  };
+
+  const handleDelete = (post: Post) => {
+    Alert.alert('删除帖子', '删除后无法恢复，确定删除？', [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '删除',
+        style: 'destructive',
+        onPress: () => {
+          deletePost(post.id)
+            .then(() => {
+              setPosts((current) => current.filter((item) => item.id !== post.id));
+              setProfile((current) =>
+                current ? { ...current, posts_count: current.posts_count - 1 } : current,
+              );
+            })
+            .catch(() => void load());
+        },
+      },
+    ]);
   };
 
   return (
@@ -87,7 +115,7 @@ export default function UserScreen() {
     >
       <ThemedView style={[styles.container, { paddingTop: insets.top + Spacing.three }]}>
         <Pressable onPress={() => router.back()} hitSlop={10} style={styles.back}>
-          <AppIcon name="chevron-left" size={20} color={theme.text} />
+          <ThemedText type="smallBold">← 返回</ThemedText>
         </Pressable>
 
         {loading || !profile ? (
@@ -131,8 +159,16 @@ export default function UserScreen() {
 
             <ThemedView type="backgroundElement" style={styles.statsRow}>
               <StatCell value={profile.posts_count} label="帖子" />
-              <StatCell value={profile.followers} label="粉丝" />
-              <StatCell value={profile.following} label="关注" />
+              <StatCell
+                value={profile.followers}
+                label="粉丝"
+                onPress={() => setFollowListKind('followers')}
+              />
+              <StatCell
+                value={profile.following}
+                label="关注"
+                onPress={() => setFollowListKind('following')}
+              />
             </ThemedView>
 
             {profile.pets.length > 0 && (
@@ -166,10 +202,7 @@ export default function UserScreen() {
                     key={post.id}
                     post={post}
                     onLike={() => {
-                      if (!user) {
-                        router.push('/login');
-                        return;
-                      }
+                      if (requireLogin()) return;
                       toggleLike(post.id)
                         .then((result) =>
                           setPosts((current) =>
@@ -182,10 +215,9 @@ export default function UserScreen() {
                         )
                         .catch(() => void load());
                     }}
-                    onOpenComments={() => router.push('/community')}
-                    onOpenAuthor={() => {
-                      // 已在该用户页
-                    }}
+                    onOpenComments={setCommentsFor}
+                    onOpenAuthor={() => {}}
+                    onDelete={handleDelete}
                   />
                 ))
               )}
@@ -193,19 +225,55 @@ export default function UserScreen() {
           </>
         )}
       </ThemedView>
+
+      <CommentSheet
+        key={commentsFor?.id ?? 'none'}
+        post={commentsFor}
+        onClose={() => setCommentsFor(null)}
+        onCommented={(postId) => {
+          setPosts((current) =>
+            current.map((item) =>
+              item.id === postId ? { ...item, comments_count: item.comments_count + 1 } : item,
+            ),
+          );
+        }}
+      />
+
+      <FollowListModal
+        visible={followListKind !== null}
+        userId={userId}
+        kind={followListKind ?? 'followers'}
+        onClose={() => setFollowListKind(null)}
+      />
     </ScrollView>
   );
 }
 
-function StatCell({ value, label }: { value: number; label: string }) {
-  return (
-    <View style={styles.statCell}>
+function StatCell({
+  value,
+  label,
+  onPress,
+}: {
+  value: number;
+  label: string;
+  onPress?: () => void;
+}) {
+  const content = (
+    <>
       <ThemedText style={styles.statValue}>{value}</ThemedText>
       <ThemedText type="small" themeColor="textSecondary">
         {label}
       </ThemedText>
-    </View>
+    </>
   );
+  if (onPress) {
+    return (
+      <Pressable onPress={onPress} style={styles.statCell}>
+        {content}
+      </Pressable>
+    );
+  }
+  return <View style={styles.statCell}>{content}</View>;
 }
 
 const styles = StyleSheet.create({

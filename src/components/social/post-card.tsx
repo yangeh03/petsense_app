@@ -15,11 +15,13 @@ export function PostCard({
   onLike,
   onOpenComments,
   onOpenAuthor,
+  onDelete,
 }: {
   post: Post;
   onLike: (post: Post) => void;
   onOpenComments: (post: Post) => void;
   onOpenAuthor: (post: Post) => void;
+  onDelete?: (post: Post) => void;
 }) {
   const theme = useTheme();
   const liked = post.liked_by_me;
@@ -38,6 +40,20 @@ export function PostCard({
             {post.location_text ? ` · ${post.location_text}` : ''}
           </ThemedText>
         </View>
+        {post.isMine && onDelete && (
+          <Pressable
+            onPress={() => onDelete(post)}
+            hitSlop={8}
+            accessibilityLabel="删除帖子"
+            style={styles.deleteButton}
+          >
+            <SymbolView
+              name={{ ios: 'trash', android: 'delete_outline', web: 'delete_outline' }}
+              size={16}
+              tintColor={theme.textSecondary}
+            />
+          </Pressable>
+        )}
       </Pressable>
 
       <Image
@@ -136,6 +152,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   authorTexts: { gap: 2, flexShrink: 1 },
+  deleteButton: { marginLeft: 'auto', paddingLeft: Spacing.one },
   meta: { flexShrink: 1 },
   image: { width: '100%', aspectRatio: 4 / 3, borderRadius: 14 },
   caption: { paddingHorizontal: Spacing.three },

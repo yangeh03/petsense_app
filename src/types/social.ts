@@ -112,3 +112,11 @@ export type TrendsResponse = {
   period: string;
   buckets: TrendBucket[];
 };
+
+/** 关注/粉丝列表行 */
+export type FollowListUser = {
+  id: number;
+  display_name: string;
+  avatar_emoji: string;
+  is_following: boolean;
+};

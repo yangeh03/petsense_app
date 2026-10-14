@@ -1,6 +1,8 @@
 import { AppIcon } from '@/components/ui/icon';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
+
+import { FollowListModal } from '@/components/social/follow-list-modal';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -19,6 +21,7 @@ export default function ProfileScreen() {
   const router = useRouter();
   const { user, loading, logout } = useAuth();
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [followKind, setFollowKind] = useState<'followers' | 'following' | null>(null);
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -147,6 +150,13 @@ export default function ProfileScreen() {
             ) : null}
           </ThemedView>
         ))}
+
+        <FollowListModal
+          visible={followKind !== null && profile !== null}
+          userId={user.id}
+          kind={followKind ?? 'followers'}
+          onClose={() => setFollowKind(null)}
+        />
 
         {/* 设备诊断入口 */}
         <Pressable onPress={() => router.push('/monitor')}>
