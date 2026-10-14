@@ -11,6 +11,6 @@ export const TELEMETRY_MODE: TelemetryMode =
 
 /**
  * 实时模式遥测地址。优先读 EXPO_PUBLIC_TELEMETRY_URL（本地联调时指向本机 mock server），
- * 默认连线上腾讯云服务，实现硬件设备 → 云端 → APP 的跨网实时链路。
+ * 默认连接当前 PetSense 网关（80 端口），实现设备 → 云端 → APP 的实时链路。
  */
-export const TELEMETRY_WS_URL = process.env.EXPO_PUBLIC_TELEMETRY_URL ?? 'ws://81.71.71.31:8080/ws';
+export const TELEMETRY_WS_URL = process.env.EXPO_PUBLIC_TELEMETRY_URL ?? 'ws://81.71.71.31/ws';

@@ -2,6 +2,8 @@
 
 宠物健康管理 App（Demo），使用 **React Native + Expo** 构建，一套代码同时支持 **iOS / Android / Web**。
 
+ESP32 板端源码、接线、Arduino CLI 下载、编译和烧录说明见 [firmware/README.md](firmware/README.md)。仅使用固件不需要安装 App 依赖。
+
 ## 功能演示
 
 | 模块        | 说明                                                                 |

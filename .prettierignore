@@ -4,3 +4,4 @@ dist
 ios
 android
 package-lock.json
+firmware/**/build
