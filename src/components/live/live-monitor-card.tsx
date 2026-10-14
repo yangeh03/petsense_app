@@ -16,6 +16,7 @@ const STATUS_LABEL: Record<TelemetryStatus, string> = {
   connecting: '连接中…',
   reconnecting: '重连中…',
   closed: '未连接',
+  replaying: '回放 · 实验数据',
 };
 
 /** 首页「实时监测」卡片：云端 WebSocket 实时数据（心率 / 血氧 / 体温 / 电量）。 */

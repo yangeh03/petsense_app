@@ -19,6 +19,7 @@ const STATUS_LABEL: Record<TelemetryStatus, string> = {
   connecting: '连接中…',
   reconnecting: '重连中…',
   closed: '未连接',
+  replaying: '回放数据集',
 };
 
 type MetricConfig = {

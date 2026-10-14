@@ -1,10 +1,12 @@
 /**
- * 遥测 WebSocket 客户端（模块级单例）。
- * 服务端在收到 MQTT 传感器帧后会向 /ws 广播 {topic, payload, received_at}，
- * payload 为 JSON 字符串或对象；这里统一解析、过滤非传感器帧后分发给订阅者。
+ * 遥测客户端（模块级单例），按 TELEMETRY_MODE 提供两种数据源：
+ * - live：连接云端 WebSocket，服务端在收到 MQTT 传感器帧后向 /ws 广播
+ *   {topic, payload, received_at}，这里解析、过滤非传感器帧后分发给订阅者；
+ * - replay：不联网，按设备原始节奏循环回放 src/data/replay-dataset.ts 的实验数据集片段。
  */
 
-import { TELEMETRY_WS_URL } from '@/config';
+import { TELEMETRY_MODE, TELEMETRY_WS_URL } from '@/config';
+import { REPLAY_BATTERY, REPLAY_HEALTH, REPLAY_META } from '@/data/replay-dataset';
 import type { TelemetryFrame, TelemetryPacket, TelemetryStatus } from '@/types/telemetry';
 
 const SENSOR_TOPIC_PREFIX = 'petsense/sensor/';
@@ -20,6 +22,8 @@ class TelemetryService {
   private retryCount = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private status: TelemetryStatus = 'closed';
+  private replayTimer: ReturnType<typeof setInterval> | null = null;
+  private replayIndex = 0;
 
   getStatus() {
     return this.status;
@@ -28,7 +32,14 @@ class TelemetryService {
   subscribeFrame(listener: FrameListener) {
     this.frameListeners.add(listener);
     this.ensureConnected();
-    return () => this.frameListeners.delete(listener);
+    return () => {
+      this.frameListeners.delete(listener);
+      // 回放模式没有断连回调可依托，订阅清空时在此收尾
+      if (TELEMETRY_MODE === 'replay' && this.frameListeners.size === 0) {
+        this.stopReplay();
+        this.setStatus('closed');
+      }
+    };
   }
 
   subscribeStatus(listener: StatusListener) {
@@ -43,8 +54,56 @@ class TelemetryService {
   }
 
   private ensureConnected() {
+    if (TELEMETRY_MODE === 'replay') {
+      this.ensureReplay();
+      return;
+    }
     if (this.ws && (this.status === 'open' || this.status === 'connecting')) return;
     this.connect();
+  }
+
+  private ensureReplay() {
+    if (this.replayTimer) return;
+    this.setStatus('replaying');
+    this.emitReplayFrame();
+    this.replayTimer = setInterval(() => this.emitReplayFrame(), REPLAY_META.cadenceMs);
+  }
+
+  private stopReplay() {
+    if (this.replayTimer) {
+      clearInterval(this.replayTimer);
+      this.replayTimer = null;
+    }
+  }
+
+  private emitReplayFrame() {
+    const t = REPLAY_HEALTH[this.replayIndex % REPLAY_HEALTH.length];
+    this.replayIndex += 1;
+    const batteryTuple = REPLAY_BATTERY.filter((b) => b[0] <= t[0]).at(-1);
+    const frame: TelemetryFrame = {
+      deviceId: REPLAY_META.deviceId,
+      tsMs: t[0],
+      receivedAt: new Date().toISOString(),
+      health: {
+        valid: t[1] === 1,
+        heartRate: t[2],
+        spo2: t[3],
+        bodyTemp: t[4],
+        envTemp: t[5],
+        respiration: t[6],
+        microCir: t[7],
+        fatigue: t[8],
+        rrInterval: t[9],
+        hrvSdnn: t[10],
+        hrvRmssd: t[11],
+        systolic: t[12],
+        diastolic: t[13],
+      },
+      battery: batteryTuple
+        ? { ok: true, found: true, percent: batteryTuple[1], voltage: batteryTuple[2] }
+        : undefined,
+    };
+    this.frameListeners.forEach((listener) => listener(frame));
   }
 
   private connect() {

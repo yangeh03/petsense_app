@@ -14,16 +14,17 @@ const COLORS: Record<TelemetryStatus, string> = {
   connecting: '#E8A13A',
   reconnecting: '#E8A13A',
   closed: '#9AA0A6',
+  replaying: '#5B8DEF',
 };
 
-/** 连接状态圆点：open 时带呼吸光晕动画。 */
+/** 连接状态圆点：有数据流时（open / replaying）带呼吸光晕动画。 */
 export function ConnectionDot({ status }: { status: TelemetryStatus }) {
   const glow = useSharedValue(0);
   const color = COLORS[status];
 
   useEffect(() => {
     glow.value =
-      status === 'open'
+      status === 'open' || status === 'replaying'
         ? withRepeat(withTiming(1, { duration: 900 }), -1, true)
         : withTiming(0, { duration: 200 });
   }, [status, glow]);
@@ -35,7 +36,7 @@ export function ConnectionDot({ status }: { status: TelemetryStatus }) {
 
   return (
     <View style={styles.container}>
-      {status === 'open' && (
+      {(status === 'open' || status === 'replaying') && (
         <Animated.View style={[styles.glow, { backgroundColor: color }, glowStyle]} />
       )}
       <View style={[styles.dot, { backgroundColor: color }]} />

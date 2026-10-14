@@ -27,6 +27,19 @@ ESP32 硬件 ──MQTT──▶ 腾讯云 Mosquitto ──▶ petsense-server(F
 - 连接地址在 `src/config.ts` 配置，默认线上地址，可用环境变量 `EXPO_PUBLIC_TELEMETRY_URL` 覆盖
 - 服务端 HTTP 接口：`/api/latest-full`（最近 200 帧）、`/api/stats`（统计）、`/ws`（实时推送）
 
+### 遥测双模式（实时 / 回放）
+
+`src/config.ts` 的 `TELEMETRY_MODE` 控制数据源，改模式需重启 Metro（打包期注入）：
+
+```bash
+npm start                    # live：默认，连云端收硬件实时数据
+npm run start:replay         # replay：离线循环回放实验数据集片段（无需服务器/设备）
+```
+
+- 回放数据在 `src/data/replay-dataset.ts`：截取自腾讯云真实实验数据集（2026-08-12 佩戴实验，
+  已剔除设备离身段，约 24 分钟按原始 2s 节奏循环），由 `tools/gen-replay-dataset.cjs` 生成
+- 回放时状态点显示蓝色「回放」，与实时（绿色「已连接云端」）明确区分
+
 ### 本地联调（不依赖云端）
 
 ```bash
@@ -164,7 +177,8 @@ petsense_app/
 │   ├── icons/                    # 品牌图标 SVG 源文件
 │   └── generate-icons.sh         # 图标生成脚本（macOS 自带工具，无需装依赖）
 ├── tools/
-│   └── mock-server.js            # 本地遥测模拟服务（零依赖 WebSocket）
+│   ├── mock-server.js            # 本地遥测模拟服务（零依赖 WebSocket）
+│   └── gen-replay-dataset.cjs    # 从云端实验数据集生成回放数据（一次性工具）
 └── src/
     ├── app/                      # 页面（expo-router 文件式路由）
     │   ├── _layout.tsx           # 根布局：Stack + 主题

@@ -41,7 +41,7 @@ export type TelemetryFrame = {
   battery?: TelemetryBattery;
 };
 
-export type TelemetryStatus = 'connecting' | 'open' | 'reconnecting' | 'closed';
+export type TelemetryStatus = 'connecting' | 'open' | 'reconnecting' | 'closed' | 'replaying';
 
 /** 单指标时间序列点 */
 export type SeriesPoint = { t: number; v: number };
