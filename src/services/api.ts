@@ -6,6 +6,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { API_BASE_URL } from '@/config';
+import { buildUploadForm } from '@/services/form-upload';
 import type {
   AppUser,
   DashboardData,
@@ -172,21 +173,20 @@ export function fetchFeed(userId?: number): Promise<{ posts: Post[] }> {
   return request(`/feed${query}`);
 }
 
-export function createPost(form: {
+export async function createPost(input: {
   image: { uri: string; name: string; type: string };
   caption: string;
   location: string;
   petId?: number;
 }): Promise<{ postId: number }> {
-  const data = new FormData();
-  data.append('image', {
-    uri: form.image.uri,
-    name: form.image.name,
-    type: form.image.type,
-  } as unknown as string);
-  data.append('caption', form.caption);
-  data.append('location', form.location);
-  if (form.petId) data.append('pet_id', String(form.petId));
+  const data = await buildUploadForm(
+    {
+      caption: input.caption,
+      location: input.location,
+      ...(input.petId ? { pet_id: String(input.petId) } : {}),
+    },
+    [{ field: 'image', ...input.image }],
+  );
   return request('/posts', { method: 'POST', form: data });
 }
 

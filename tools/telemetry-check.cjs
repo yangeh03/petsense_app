@@ -246,6 +246,74 @@ const uwbMapModule = loadModule('../src/constants/uwb-map.ts', () => {
 }
 console.log('UWB checks passed');
 
+// ─── 跨端上传组装检查（Web 分支真实执行；RN 分支为静态对象 part） ───
+{
+  // form-upload 需要浏览器式全局（FormData/Blob/fetch），vm 沙箱单独注入
+  function loadFormUpload(withDocument) {
+    const code = ts.transpileModule(
+      fs.readFileSync(path.join(__dirname, '../src/services/form-upload.ts'), 'utf8'),
+      { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } },
+    ).outputText;
+    const module = { exports: {} };
+    const sandbox = {
+      module,
+      exports: module.exports,
+      require: () => {
+        throw new Error('form-upload.ts 不应有运行时依赖');
+      },
+      document: withDocument ? {} : undefined,
+      FormData,
+      Blob,
+      fetch,
+    };
+    vm.runInNewContext(code, sandbox);
+    return module.exports;
+  }
+
+  const dataUri =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+  async function runBranch(withDocument) {
+    const mod = loadFormUpload(withDocument);
+    return mod.buildUploadForm({ caption: '测试', media_kind: 'gif' }, [
+      { field: 'image', uri: dataUri, name: 'dot.png', type: 'image/png' },
+    ]);
+  }
+
+  (async () => {
+    // Web 分支（注入 document）：fetch(data:) → Blob → append 不抛 Unsupported FormDataPart
+    const webForm = await runBranch(true);
+    assert.ok(webForm instanceof FormData, 'web 分支应返回 FormData');
+    const webParts = [];
+    for (const [key, value] of webForm.entries()) {
+      webParts.push([key, value instanceof Blob ? 'blob' : value]);
+    }
+    assert.deepEqual(
+      webParts.map((p) => p[0]),
+      ['caption', 'media_kind', 'image'],
+      'web 分支字段顺序',
+    );
+    assert.equal(
+      webParts[2][1],
+      'blob',
+      'web 分支文件必须是 Blob（否则 react-native-web 抛 Unsupported FormDataPart）',
+    );
+
+    // 原生分支冒烟（无 document）：对象 part 原样 append——node FormData 会把它字符串化
+    // （真 RN polyfill 保留对象语义），这里只验证走的是“未转 Blob”的分支且字段齐全
+    const nativeForm = await runBranch(false);
+    const nativeEntries = [...nativeForm.entries()];
+    assert.equal(nativeEntries.length, 3, '原生分支应有 3 个字段');
+    assert.equal(nativeEntries[2][0], 'image');
+    assert.equal(nativeEntries[2][1], '[object Object]', '原生分支传对象 part（未转 Blob）');
+    delete global.document;
+    console.log('Form upload checks passed');
+  })().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
+
 if (process.argv.includes('--live')) {
   let count = 0;
   let first;

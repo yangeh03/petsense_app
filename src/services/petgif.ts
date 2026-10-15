@@ -5,6 +5,7 @@
 
 import { ApiError, loadToken, request } from '@/services/api';
 import { API_BASE_URL } from '@/config';
+import { buildUploadForm } from '@/services/form-upload';
 import type { PetgifPet } from '@/types/social';
 
 async function buildAuthHeaders(): Promise<Record<string, string>> {
@@ -34,19 +35,15 @@ export async function generateDiary(
   let body: BodyInit;
   const headers = await buildAuthHeaders();
   if (input.photos?.length) {
-    const form = new FormData();
-    form.append('durationMin', String(input.durationMin));
-    form.append('steps', String(input.steps));
-    form.append('places', input.places);
-    form.append('notes', input.notes);
-    for (const photo of input.photos) {
-      form.append('photos', {
-        uri: photo.uri,
-        name: photo.name,
-        type: photo.type,
-      } as unknown as string);
-    }
-    body = form;
+    body = await buildUploadForm(
+      {
+        durationMin: String(input.durationMin),
+        steps: String(input.steps),
+        places: input.places,
+        notes: input.notes,
+      },
+      input.photos.map((photo) => ({ field: 'photos', ...photo })),
+    );
   } else {
     headers['Content-Type'] = 'application/json';
     body = JSON.stringify({
@@ -90,13 +87,7 @@ export async function createPetgifPetSync(input: {
   image: { uri: string; name: string; type: string };
   name: string;
 }): Promise<{ petgifId: string; characterCardUrl?: string | null }> {
-  const data = new FormData();
-  data.append('photo', {
-    uri: input.image.uri,
-    name: input.image.name,
-    type: input.image.type,
-  } as unknown as string);
-  data.append('name', input.name);
+  const data = await buildUploadForm({ name: input.name }, [{ field: 'photo', ...input.image }]);
   // 后端最长阻塞 150s，客户端给 200s 余量
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 200_000);
