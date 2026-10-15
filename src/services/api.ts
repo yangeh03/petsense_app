@@ -60,7 +60,7 @@ export function absoluteUrl(path: string): string {
   return `${API_BASE_URL}${path}`;
 }
 
-async function request<T>(
+export async function request<T>(
   path: string,
   options: { method?: string; body?: unknown; form?: FormData; auth?: boolean } = {},
 ): Promise<T> {

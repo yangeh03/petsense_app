@@ -7,6 +7,34 @@ export type AppUser = {
   avatarEmoji: string;
 };
 
+export type PetgifBehavior = {
+  status?: string;
+  gifUrl?: string | null;
+  videoUrl?: string | null;
+};
+
+export type PetgifPet = {
+  id: string;
+  name?: string | null;
+  status?: string;
+  stage?: string;
+  profile: {
+    name?: string | null;
+    breed?: string | null;
+    traits?: string[];
+    summary?: string | null;
+  };
+  characterCardUrl?: string | null;
+  behaviors: Record<string, PetgifBehavior>;
+  diaries: {
+    id?: string;
+    date?: string | null;
+    durationMin?: number | null;
+    steps?: number | null;
+    posterUrl?: string | null;
+  }[];
+};
+
 export type SocialPet = {
   id: number;
   user_id: number;
@@ -16,6 +44,9 @@ export type SocialPet = {
   avatar_emoji: string;
   device_id: string;
   created_at: string;
+  petgif_id?: string | null;
+  avatar_image?: string | null;
+  avatarImageUrl?: string | null;
   batteryPercent?: number | null;
   online?: boolean;
 };
@@ -26,11 +57,15 @@ export type PostAuthor = {
   avatar_emoji: string;
 };
 
+export type PostMediaKind = 'image' | 'gif' | 'video';
+
 export type Post = PostAuthor & {
   id: number;
   caption: string;
   location_text: string;
   imageUrl: string;
+  mediaUrl?: string | null;
+  mediaKind?: PostMediaKind | null;
   created_at: string;
   pet_id: number | null;
   pet_name: string | null;
@@ -90,6 +125,7 @@ export type DashboardData = {
     avgHeartRate: number;
   };
   insight: Insight;
+  petgif?: PetgifPet | null;
 };
 
 /** 趋势统计周期 */

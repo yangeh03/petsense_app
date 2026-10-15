@@ -94,10 +94,16 @@ export function PostCard({
       </Pressable>
 
       <Image
-        source={{ uri: absoluteUrl(post.imageUrl) }}
+        source={{
+          uri:
+            post.mediaKind === 'gif' && post.mediaUrl
+              ? absoluteUrl(post.mediaUrl)
+              : absoluteUrl(post.imageUrl),
+        }}
         style={styles.image}
         contentFit="cover"
         transition={150}
+        autoplay={true}
       />
 
       {post.caption ? (

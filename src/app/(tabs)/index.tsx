@@ -1,6 +1,7 @@
+import { Image } from 'expo-image';
 import { SymbolView } from 'expo-symbols';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useState, type ComponentProps } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ComponentProps } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -13,6 +14,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { DiaryModal } from '@/components/dashboard/diary-modal';
 import { NotificationBell } from '@/components/alerts/notification-bell';
 import { LineChart } from '@/components/live/line-chart';
 import { ThemedText } from '@/components/themed-text';
@@ -22,7 +24,7 @@ import { useAlerts, worstSeverity } from '@/hooks/use-alerts';
 import { useAuth } from '@/hooks/use-auth';
 import { useTelemetry } from '@/hooks/use-telemetry';
 import { useTheme } from '@/hooks/use-theme';
-import { fetchDashboard, fetchPets, fetchTrends } from '@/services/api';
+import { absoluteUrl, fetchDashboard, fetchPets, fetchTrends } from '@/services/api';
 import type { DashboardData, SocialPet, TrendBucket, TrendPeriod } from '@/types/social';
 import type { SeriesKey } from '@/types/telemetry';
 
@@ -38,9 +40,8 @@ function greeting() {
 }
 
 /**
- * 今日页：设计稿的风格语言（暖色圆角卡 / 柔和投影 / 圆体大字 / 悬浮芯片），
- * 内容为设备真实在测的体征遥测——心率、血氧、体温、呼吸、HRV、环境温度等，
- * IMU / 音频等工程数据不在此页（见「设备诊断」）。
+ * 今日页：设计稿风格（暖色圆角卡 / 柔和投影 / 圆体大字 / 悬浮芯片），
+ * 内容为设备真实在测的体征遥测 + PetGIF 数字形象 + 时间维度统计趋势 + 运动日记。
  */
 export default function DashboardScreen() {
   const theme = useTheme();
@@ -53,6 +54,12 @@ export default function DashboardScreen() {
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [diaryVisible, setDiaryVisible] = useState(false);
+  const [trendMetric, setTrendMetric] = useState<SeriesKey>('heartRate');
+  const [trendPeriod, setTrendPeriod] = useState<TrendPeriod>('all');
+  const [trendBuckets, setTrendBuckets] = useState<TrendBucket[]>([]);
+  const [trendLoading, setTrendLoading] = useState(false);
+  const [trendWidth, setTrendWidth] = useState(0);
 
   const load = useCallback(
     async (petId?: number) => {
@@ -84,6 +91,28 @@ export default function DashboardScreen() {
     }, [user, load]),
   );
 
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => {
+        if (!cancelled) setTrendLoading(true);
+        return fetchTrends(trendPeriod);
+      })
+      .then((data) => {
+        if (!cancelled) setTrendBuckets(data.buckets);
+      })
+      .catch(() => {
+        if (!cancelled) setTrendBuckets([]);
+      })
+      .finally(() => {
+        if (!cancelled) setTrendLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user, trendPeriod]);
+
   const pet = dashboard?.pet ?? null;
   const petName = pet?.name ?? '毛孩子';
   const liveForPet = latest && pet?.device_id && latest.deviceId === pet.device_id ? latest : null;
@@ -93,42 +122,36 @@ export default function DashboardScreen() {
   const vitals =
     (liveForPet?.health?.valid ? liveForPet.health : null) ??
     (dashboard?.latest?.valid ? dashboard.latest : null);
-  const fmt = (value: number | undefined, digits = 0) =>
+  const fmt = (value: number | undefined | null, digits = 0) =>
     value && value > 0 ? value.toFixed(digits) : '--';
   const batteryPercent =
     liveForPet?.battery?.found || dashboard?.latest?.batteryPercent
       ? Math.round(liveForPet?.battery?.percent ?? dashboard?.latest?.batteryPercent ?? 0)
       : null;
 
-  // 趋势统计卡：按时间维度聚合的平均值（数据来自云端实验历史与实时累积）
-  const [trendMetric, setTrendMetric] = useState<SeriesKey>('heartRate');
-  const [trendPeriod, setTrendPeriod] = useState<TrendPeriod>('all');
-  const [trendBuckets, setTrendBuckets] = useState<TrendBucket[]>([]);
-  const [trendLoading, setTrendLoading] = useState(false);
-  const [trendWidth, setTrendWidth] = useState(0);
+  // 数字宠物：优先 AI 角色卡头像，其次 PetGIF 行为动图（白天行走 / 夜间睡觉）
+  const heroGifUri = useMemo(() => {
+    const behaviors = dashboard?.petgif?.behaviors;
+    if (!behaviors) return null;
+    const hour = new Date().getHours();
+    const key = hour >= 22 || hour < 8 ? 'sleep' : 'walk';
+    return behaviors[key]?.gifUrl ?? null;
+  }, [dashboard?.petgif]);
+  const heroAvatarImage = pet?.avatarImageUrl ? absoluteUrl(pet.avatarImageUrl) : null;
 
-  const loadTrends = useCallback(
-    async (period: TrendPeriod) => {
-      if (!user) return;
-      setTrendLoading(true);
-      try {
-        const data = await fetchTrends(period);
-        setTrendBuckets(data.buckets);
-      } catch {
-        setTrendBuckets([]);
-      } finally {
-        setTrendLoading(false);
-      }
-    },
-    [user],
-  );
+  const worst = worstSeverity(activeAlerts);
+  const ringColor =
+    worst === 'critical'
+      ? theme.danger
+      : worst === 'warning'
+        ? theme.warning
+        : worst === 'info'
+          ? theme.info
+          : online
+            ? theme.online
+            : theme.textSecondary;
 
-  useFocusEffect(
-    useCallback(() => {
-      if (user) void loadTrends(trendPeriod);
-    }, [user, loadTrends, trendPeriod]),
-  );
-
+  // 趋势统计：均值曲线 + 平均/最低/最高
   const TREND_METRICS: Record<
     SeriesKey,
     {
@@ -172,22 +195,10 @@ export default function DashboardScreen() {
     .filter((item): item is { v: number; label: string } => item.v !== null && item.v > 0)
     .map((item, index) => ({ ...item, t: index }));
   const trendAvg = trendPoints.length
-    ? trendPoints.reduce((sum, p) => sum + p.v, 0) / trendPoints.length
+    ? trendPoints.reduce((sum, point) => sum + point.v, 0) / trendPoints.length
     : null;
-  const trendMin = trendPoints.length ? Math.min(...trendPoints.map((p) => p.v)) : null;
-  const trendMax = trendPoints.length ? Math.max(...trendPoints.map((p) => p.v)) : null;
-
-  const worst = worstSeverity(activeAlerts);
-  const ringColor =
-    worst === 'critical'
-      ? theme.danger
-      : worst === 'warning'
-        ? theme.warning
-        : worst === 'info'
-          ? theme.info
-          : online
-            ? theme.online
-            : theme.textSecondary;
+  const trendMin = trendPoints.length ? Math.min(...trendPoints.map((point) => point.v)) : null;
+  const trendMax = trendPoints.length ? Math.max(...trendPoints.map((point) => point.v)) : null;
 
   return (
     <ScrollView
@@ -203,7 +214,7 @@ export default function DashboardScreen() {
         />
       }
     >
-      <ThemedView style={[styles.container, { paddingTop: insets.top + 10 }]}>
+      <ThemedView style={[styles.container, { paddingTop: insets.top + Spacing.two }]}>
         <View style={styles.topBar}>
           <ThemedText type="small" themeColor="textSecondary">
             {new Date().getMonth() + 1} 月 {new Date().getDate()} 日
@@ -269,7 +280,7 @@ export default function DashboardScreen() {
               </ScrollView>
             )}
 
-            {/* Hero：心率/血氧悬浮芯片 + 大头像 + ONLINE 徽章 */}
+            {/* Hero：心率/血氧悬浮芯片 + 数字宠物 + ONLINE 徽章 */}
             <View style={styles.hero}>
               <FloatingChip
                 icon={{ ios: 'lungs.fill', android: 'air', web: 'air' }}
@@ -293,7 +304,22 @@ export default function DashboardScreen() {
                 ]}
               >
                 <View style={[styles.avatarInner, { borderColor: theme.backgroundElement }]}>
-                  <ThemedText style={styles.avatarEmoji}>{pet.avatar_emoji}</ThemedText>
+                  {heroAvatarImage ? (
+                    <Image
+                      source={{ uri: heroAvatarImage }}
+                      style={styles.avatarGif}
+                      contentFit="cover"
+                    />
+                  ) : heroGifUri ? (
+                    <Image
+                      source={{ uri: heroGifUri }}
+                      style={styles.avatarGif}
+                      contentFit="cover"
+                      autoplay={true}
+                    />
+                  ) : (
+                    <ThemedText style={styles.avatarEmoji}>{pet.avatar_emoji}</ThemedText>
+                  )}
                 </View>
                 <View
                   style={[
@@ -314,7 +340,7 @@ export default function DashboardScreen() {
               </View>
             </View>
 
-            {/* 生命体征主卡：设备真实在测的核心指标 */}
+            {/* 生命体征主卡 */}
             <View
               style={[
                 styles.vitalsCard,
@@ -403,7 +429,6 @@ export default function DashboardScreen() {
                 />
               </View>
 
-              {/* 次级指标行 */}
               <View style={[styles.miniRow, { borderTopColor: `${theme.textSecondary}1A` }]}>
                 <MiniPill
                   label="血压"
@@ -422,7 +447,7 @@ export default function DashboardScreen() {
               </View>
             </View>
 
-            {/* 趋势统计：按时间维度聚合的平均值（苹果健康式） */}
+            {/* 趋势统计：时间维度聚合均值 */}
             <View
               style={[
                 styles.trendCard,
@@ -532,24 +557,50 @@ export default function DashboardScreen() {
                 </View>
               )}
             </View>
+
+            {/* 运动日记入口 */}
+            <Pressable
+              onPress={() => setDiaryVisible(true)}
+              style={[
+                styles.diaryEntry,
+                { backgroundColor: theme.backgroundElement, boxShadow: Shadows.card },
+              ]}
+            >
+              <SymbolView
+                name={{ ios: 'book.pages', android: 'menu_book', web: 'menu_book' }}
+                size={20}
+                tintColor={theme.tint}
+              />
+              <View style={styles.diaryTexts}>
+                <ThemedText type="smallBold">生成运动日记</ThemedText>
+                <ThemedText type="small" themeColor="textSecondary">
+                  把今天的活跃生成手账风海报
+                </ThemedText>
+              </View>
+              <SymbolView
+                name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }}
+                size={14}
+                tintColor={theme.textSecondary}
+              />
+            </Pressable>
           </>
         )}
       </ThemedView>
-    </ScrollView>
-  );
-}
 
-function SummaryCell({ label, value }: { label: string; value: string }) {
-  const theme = useTheme();
-  return (
-    <View style={[styles.summaryCell, { backgroundColor: theme.backgroundSelected }]}>
-      <ThemedText type="small" themeColor="textSecondary" style={styles.summaryCellLabel}>
-        {label}
-      </ThemedText>
-      <ThemedText type="smallBold" style={styles.summaryCellValue}>
-        {value}
-      </ThemedText>
-    </View>
+      <DiaryModal
+        key={`diary-${diaryVisible}-${dashboard?.today.activeMinutes ?? 0}`}
+        visible={diaryVisible}
+        onClose={() => setDiaryVisible(false)}
+        petName={petName}
+        petId={pet?.id ?? null}
+        petgifId={pet?.petgif_id ?? null}
+        activeMinutes={dashboard?.today.activeMinutes ?? 0}
+        onShared={() => {
+          void load();
+          router.push('/community');
+        }}
+      />
+    </ScrollView>
   );
 }
 
@@ -594,6 +645,20 @@ function MiniPill({ label, value }: { label: string; value: string }) {
         {label}
       </ThemedText>
       <ThemedText type="smallBold" style={styles.miniPillValue}>
+        {value}
+      </ThemedText>
+    </View>
+  );
+}
+
+function SummaryCell({ label, value }: { label: string; value: string }) {
+  const theme = useTheme();
+  return (
+    <View style={[styles.summaryCell, { backgroundColor: theme.backgroundSelected }]}>
+      <ThemedText type="small" themeColor="textSecondary" style={styles.summaryCellLabel}>
+        {label}
+      </ThemedText>
+      <ThemedText type="smallBold" style={styles.summaryCellValue}>
         {value}
       </ThemedText>
     </View>
@@ -728,6 +793,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     overflow: 'hidden',
   },
+  avatarGif: { width: '100%', height: '100%' },
   avatarEmoji: { fontSize: 56, lineHeight: 68, marginTop: 4 },
   onlineBadge: {
     position: 'absolute',
@@ -805,7 +871,6 @@ const styles = StyleSheet.create({
     gap: 8,
     borderTopWidth: StyleSheet.hairlineWidth,
     paddingTop: 12,
-    // 右侧避让 ⊕ 悬浮按钮
     paddingRight: 68,
   },
   miniPill: {
@@ -842,7 +907,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(148,131,111,0.12)',
   },
   trendChipText: { fontSize: 11, lineHeight: 15 },
-  trendChart: { width: '100%' },
   periodRow: { flexDirection: 'row', gap: 6 },
   periodChip: {
     borderRadius: 12,
@@ -850,6 +914,7 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     backgroundColor: 'rgba(148,131,111,0.12)',
   },
+  trendChart: { width: '100%' },
   trendLabels: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -868,6 +933,15 @@ const styles = StyleSheet.create({
   },
   summaryCellLabel: { fontSize: 11, lineHeight: 14 },
   summaryCellValue: { fontSize: 15, lineHeight: 19 },
+
+  diaryEntry: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.three,
+    borderRadius: 20,
+    padding: Spacing.three,
+  },
+  diaryTexts: { flex: 1, gap: 2 },
 
   guideCard: {
     borderRadius: 24,

@@ -967,6 +967,18 @@ def init_app_db():
             updated_at TEXT NOT NULL
         )''')
 
+        # 增量列：PetGIF 数字形象绑定 / 头像图片 / 社区外部媒体
+        pet_cols = {row[1] for row in db.execute('PRAGMA table_info(pets)')}
+        if 'petgif_id' not in pet_cols:
+            db.execute('ALTER TABLE pets ADD COLUMN petgif_id TEXT')
+        if 'avatar_image' not in pet_cols:
+            db.execute('ALTER TABLE pets ADD COLUMN avatar_image TEXT')
+        post_cols = {row[1] for row in db.execute('PRAGMA table_info(posts)')}
+        if 'media_url' not in post_cols:
+            db.execute('ALTER TABLE posts ADD COLUMN media_url TEXT')
+        if 'media_kind' not in post_cols:
+            db.execute('ALTER TABLE posts ADD COLUMN media_kind TEXT')
+
 
 init_app_db()
 
@@ -1730,10 +1742,10 @@ def app_pets():
         pets = []
         for row in rows:
             item = dict(row)
-            item['species'] = item['species']
             telemetry = pet_latest_telemetry(item['device_id'])
             item['batteryPercent'] = telemetry.get('batteryPercent') if telemetry else None
             item['online'] = telemetry.get('online') if telemetry else False
+            item['avatarImageUrl'] = '/uploads/' + item['avatar_image'] if item.get('avatar_image') else None
             pets.append(item)
         return {'success': True, 'pets': pets}
 
@@ -1755,6 +1767,49 @@ def app_pets():
     return {'success': True, 'pet': {'id': pet_id, 'name': name}}, 201
 
 
+@app.route('/api/app/pets/<int:pet_id>/avatar-image', methods=['POST'])
+def app_pet_avatar_image(pet_id):
+    """把 PetGIF 生成的角色卡/媒体下载为宠物头像图。"""
+    user, error = require_app_user()
+    if error:
+        return error
+    body = request.get_json(silent=True) or {}
+    image_url = str(body.get('imageUrl', ''))
+    if not image_url.startswith(PETGIF_STORAGE_PUBLIC):
+        return {'success': False, 'message': '图片地址不受支持'}, 400
+    try:
+        response = requests.get(image_url, timeout=30)
+        response.raise_for_status()
+    except requests.RequestException:
+        return {'success': False, 'message': '图片下载失败'}, 502
+    filename = f'avatar_{secrets.token_hex(6)}_{int(time.time())}.png'
+    with open(os.path.join(UPLOADS_DIR, filename), 'wb') as handle:
+        handle.write(response.content)
+    with app_connect() as db:
+        owned = db.execute('SELECT 1 FROM pets WHERE id=? AND user_id=?', (pet_id, user['id'])).fetchone()
+        if not owned:
+            return {'success': False, 'message': '宠物不存在'}, 404
+        db.execute('UPDATE pets SET avatar_image=? WHERE id=?', (filename, pet_id))
+    return {'success': True, 'avatarImageUrl': '/uploads/' + filename}
+
+
+@app.route('/api/app/pets/<int:pet_id>/petgif', methods=['POST'])
+def app_pet_bind_petgif(pet_id):
+    """把 PetGIF 数字形象绑定到宠物（看板 Hero / 位置页使用其行为 GIF）。"""
+    user, error = require_app_user()
+    if error:
+        return error
+    petgif_id = str((request.get_json(silent=True) or {}).get('petgifId', '')).strip()[:40]
+    if not petgif_id:
+        return {'success': False, 'message': '缺少 petgifId'}, 400
+    with app_connect() as db:
+        owned = db.execute('SELECT 1 FROM pets WHERE id=? AND user_id=?', (pet_id, user['id'])).fetchone()
+        if not owned:
+            return {'success': False, 'message': '宠物不存在'}, 404
+        db.execute('UPDATE pets SET petgif_id=? WHERE id=?', (petgif_id, pet_id))
+    return {'success': True}
+
+
 @app.route('/api/app/dashboard')
 def app_dashboard():
     user, error = require_app_user()
@@ -1769,15 +1824,227 @@ def app_dashboard():
     if not pet:
         return {'success': True, 'pet': None}
     pet = dict(pet)
+    if pet.get('avatar_image'):
+        pet['avatarImageUrl'] = '/uploads/' + pet['avatar_image']
     telemetry = pet_latest_telemetry(pet['device_id'])
     today = pet_today_stats(pet['id'])
+    petgif = None
+    if pet.get('petgif_id'):
+        try:
+            petgif = app_petgif_pet(pet['petgif_id'])
+        except requests.RequestException:
+            petgif = None
     return {
         'success': True,
         'pet': pet,
         'latest': telemetry,
         'today': today,
+        'petgif': petgif,
         'insight': build_insight(pet, telemetry, today),
     }
+
+
+# ─── PetBehaviorGIF 外部服务代理（key 只存服务端） ───
+PETGIF_BASE = 'https://qioyo.site/petsenseIMG/api'
+PETGIF_STORAGE_PUBLIC = 'https://qioyo.site/petsenseIMG/storage/'
+try:
+    PETGIF_KEY = open(os.environ.get('PETGIF_KEY_FILE', os.path.expanduser('~/.petgif-api-key'))).read().strip()
+except OSError:
+    PETGIF_KEY = ''
+PETGIF_CACHE = {'at': 0.0, 'pets': {}}
+
+
+def petgif_headers():
+    return {'x-api-key': PETGIF_KEY} if PETGIF_KEY else {}
+
+
+def petgif_get(path):
+    response = requests.get(PETGIF_BASE + path, headers=petgif_headers(), timeout=20)
+    response.raise_for_status()
+    return response.json()
+
+
+def petgif_public(url):
+    """只下发可信存储域名的媒体地址。"""
+    if url and str(url).startswith(PETGIF_STORAGE_PUBLIC):
+        return str(url)
+    return None
+
+
+def petgif_simplify(pet):
+    behaviors = {}
+    for key, info in (pet.get('behaviors') or {}).items():
+        assets = info.get('assets') or {}
+        gif = petgif_public((assets.get('colorGif') or {}).get('publicUrl'))
+        if gif:
+            behaviors[key] = {
+                'status': info.get('status'),
+                'gifUrl': gif,
+                'videoUrl': petgif_public((assets.get('video') or {}).get('publicUrl')),
+            }
+    card = petgif_public((pet.get('characterCard') or {}).get('publicUrl'))
+    diaries = []
+    for diary in pet.get('diaries') or []:
+        image = (diary.get('assets') or {}).get('image') or {}
+        poster = petgif_public(image.get('publicUrl'))
+        stats = diary.get('stats') or {}
+        diaries.append({
+            'id': diary.get('id'),
+            'date': stats.get('date'),
+            'durationMin': stats.get('durationMin'),
+            'steps': stats.get('steps'),
+            'notes': diary.get('notes'),
+            'posterUrl': poster,
+        })
+    profile = pet.get('profile') or {}
+    return {
+        'id': pet.get('id'),
+        'name': pet.get('name') or profile.get('name'),
+        'status': pet.get('status'),
+        'stage': pet.get('stage'),
+        'profile': {
+            'name': profile.get('name'),
+            'breed': profile.get('breed'),
+            'traits': profile.get('traits') or [],
+            'summary': profile.get('summary'),
+        },
+        'characterCardUrl': card,
+        'behaviors': behaviors,
+        'diaries': diaries,
+    }
+
+
+def app_petgif_pet(petgif_id):
+    """带 10 分钟缓存的 petgif 宠物数据（供看板/社区取媒体地址）。"""
+    now = time.time()
+    if PETGIF_CACHE['at'] and now - PETGIF_CACHE['at'] < 600 and petgif_id in PETGIF_CACHE['pets']:
+        return PETGIF_CACHE['pets'][petgif_id]
+    data = petgif_get(f'/pets/{petgif_id}')
+    pet = petgif_simplify(data.get('pet') or {})
+    PETGIF_CACHE['at'] = now
+    PETGIF_CACHE['pets'][petgif_id] = pet
+    return pet
+
+
+@app.route('/api/app/petgif/pet/<petgif_id>')
+def app_petgif_pet_route(petgif_id):
+    try:
+        return {'success': True, 'pet': app_petgif_pet(petgif_id)}
+    except requests.RequestException as exc:
+        return {'success': False, 'message': f'PetGIF 服务不可达：{exc}'}, 502
+
+
+@app.route('/api/app/petgif/pets', methods=['POST'])
+def app_petgif_create():
+    """转发宠物照片 → 外部生成专属数字形象（异步，App 轮询状态）。"""
+    photo = request.files.get('photo')
+    name = str(request.form.get('name', '')).strip()[:20] or 'my pet'
+    if photo is None:
+        return {'success': False, 'message': '请选择一张宠物照片'}, 400
+    forward_files = {'photo': (photo.filename or 'photo.jpg', photo.stream, photo.mimetype or 'image/jpeg')}
+    forward = {'name': name}
+    response = requests.post(PETGIF_BASE + '/pets', headers=petgif_headers(), files=forward_files, data=forward, timeout=60)
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {'error': f'HTTP {response.status_code}'}
+    return payload, (200 if response.ok else 502)
+
+
+@app.route('/api/app/petgif/pet/<petgif_id>/diary', methods=['POST'])
+def app_petgif_diary(petgif_id):
+    """转发运动日记生成（照片+统计）并轮询到出图（最长 90 秒）。"""
+    duration = max(1, min(600, int(request.form.get('durationMin', 30) or 30)))
+    steps = max(0, min(100000, int(request.form.get('steps', 0) or 0)))
+    places = str(request.form.get('places', ''))[:200]
+    notes = str(request.form.get('notes', ''))[:200]
+    photos = request.files.getlist('photos')
+    forward_files = []
+    for index, photo in enumerate(photos[:6]):
+        forward_files.append(
+            ('photos', (photo.filename or f'photo_{index}.jpg', photo.stream, photo.mimetype or 'image/jpeg'))
+        )
+    data = {'durationMin': duration, 'steps': steps, 'places': places, 'notes': notes, 'petId': petgif_id}
+    response = requests.post(
+        PETGIF_BASE + f'/pets/{petgif_id}/diaries', headers=petgif_headers(), files=forward_files, data=data, timeout=120
+    )
+    try:
+        created = response.json()
+    except ValueError:
+        created = {}
+    diary_id = created.get('id') or created.get('diaryId')
+    if not diary_id:
+        return {'success': False, 'message': '日记生成任务创建失败'}, 502
+    deadline = time.time() + 90
+    diary = {}
+    while time.time() < deadline:
+        try:
+            diary = petgif_get(f'/pets/{petgif_id}/diaries/{diary_id}')
+        except requests.RequestException:
+            diary = {}
+        if str(diary.get('status', '')) == 'complete':
+            break
+        time.sleep(3)
+    image = (diary.get('assets') or {}).get('image') or {}
+    return {
+        'success': True,
+        'status': diary.get('status', 'unknown'),
+        'posterUrl': petgif_public(image.get('publicUrl')),
+        'stats': diary.get('stats') or {},
+    }
+
+
+@app.route('/api/app/petgif/diary-post', methods=['POST'])
+def app_petgif_diary_post():
+    """把生成的运动日记海报一键发到社区（后端代下载海报图）。"""
+    user, error = require_app_user()
+    if error:
+        return error
+    body = request.get_json(silent=True) or {}
+    poster_url = str(body.get('posterUrl', ''))
+    caption = str(body.get('caption', '')).strip()[:500]
+    location = str(body.get('location', '')).strip()[:80]
+    pet_id = body.get('pet_id')
+    if not poster_url.startswith(PETGIF_STORAGE_PUBLIC):
+        return {'success': False, 'message': '海报地址不受支持'}, 400
+    try:
+        response = requests.get(poster_url, timeout=30)
+        response.raise_for_status()
+    except requests.RequestException:
+        return {'success': False, 'message': '海报下载失败'}, 502
+    filename = f'diary_{secrets.token_hex(6)}_{int(time.time())}.png'
+    with open(os.path.join(UPLOADS_DIR, filename), 'wb') as handle:
+        handle.write(response.content)
+    if pet_id:
+        with app_connect() as db:
+            owned = db.execute('SELECT 1 FROM pets WHERE id=? AND user_id=?', (pet_id, user['id'])).fetchone()
+        if not owned:
+            pet_id = None
+    created_at = datetime.now(timezone.utc).isoformat()
+    with app_connect() as db:
+        post_id = db.execute(
+            'INSERT INTO posts(user_id,pet_id,image_path,caption,location_text,created_at) VALUES(?,?,?,?,?,?)',
+            (user['id'], pet_id, filename, caption or '今天的运动日记 🏃', location, created_at),
+        ).lastrowid
+    return {'success': True, 'postId': post_id}, 201
+
+
+@app.route('/api/app/petgif/pet/<petgif_id>/floor-plan', methods=['POST'])
+def app_petgif_floorplan(petgif_id):
+    """转发家居户型图渲染。"""
+    plan = request.files.get('plan')
+    if plan is None:
+        return {'success': False, 'message': '请选择户型图'}, 400
+    forward_files = {'plan': (plan.filename or 'plan.png', plan.stream, plan.mimetype or 'image/png')}
+    response = requests.post(
+        PETGIF_BASE + f'/pets/{petgif_id}/floor-plan', headers=petgif_headers(), files=forward_files,
+        data={'petId': petgif_id, 'notes': str(request.form.get('notes', ''))[:200]}, timeout=120,
+    )
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {'error': f'HTTP {response.status_code}'}
+    return payload, (200 if response.ok else 502)
 
 
 trend_cache = {'at': 0.0, 'daily': None}
@@ -1926,7 +2193,7 @@ def app_uwb_latest():
 
 
 def post_rows(viewer_id, where_clause='', params=()):
-    query = f'''SELECT p.id,p.caption,p.location_text,p.image_path,p.created_at,
+    query = f'''SELECT p.id,p.caption,p.location_text,p.image_path,p.created_at,p.media_url,p.media_kind,
         u.id AS user_id,u.display_name,u.avatar_emoji,
         pet.id AS pet_id,pet.name AS pet_name,pet.avatar_emoji AS pet_emoji,
         (SELECT COUNT(*) FROM post_likes l WHERE l.post_id=p.id) AS likes,
@@ -1939,7 +2206,9 @@ def post_rows(viewer_id, where_clause='', params=()):
     items = []
     for row in rows:
         item = dict(row)
-        item['imageUrl'] = '/uploads/' + item.pop('image_path')
+        item['imageUrl'] = '/uploads/' + item.pop('image_path') if item.pop('image_path') else ''
+        item['mediaUrl'] = item.pop('media_url')
+        item['mediaKind'] = item.pop('media_kind')
         item['isMine'] = item['user_id'] == viewer_id
         items.append(item)
     return items
@@ -1966,13 +2235,22 @@ def app_create_post():
     pet_id = request.form.get('pet_id', type=int)
     if len(caption) > 500:
         return {'success': False, 'message': '文案最多 500 字'}, 400
-    image = request.files.get('image')
-    if image is None:
-        return {'success': False, 'message': '请选择一张照片'}, 400
-    try:
-        filename, _ = save_upload_image(image, 'post')
-    except ValueError as exc:
-        return {'success': False, 'message': str(exc)}, 400
+    media_url = str(request.form.get('media_url', '')).strip()
+    media_kind = str(request.form.get('media_kind', '')).strip()
+    if media_url and not media_url.startswith(PETGIF_STORAGE_PUBLIC):
+        media_url = ''
+    if media_url:
+        media_kind = 'gif' if media_kind == 'gif' else 'image'
+        filename = None
+    else:
+        media_kind = None
+        image = request.files.get('image')
+        if image is None:
+            return {'success': False, 'message': '请选择一张照片'}, 400
+        try:
+            filename, _ = save_upload_image(image, 'post')
+        except ValueError as exc:
+            return {'success': False, 'message': str(exc)}, 400
     if pet_id:
         with app_connect() as db:
             owned = db.execute('SELECT 1 FROM pets WHERE id=? AND user_id=?', (pet_id, user['id'])).fetchone()
@@ -1980,8 +2258,8 @@ def app_create_post():
             pet_id = None
     created_at = datetime.now(timezone.utc).isoformat()
     with app_connect() as db:
-        post_id = db.execute('INSERT INTO posts(user_id,pet_id,image_path,caption,location_text,created_at) VALUES(?,?,?,?,?,?)',
-                             (user['id'], pet_id, filename, caption, location, created_at)).lastrowid
+        post_id = db.execute('INSERT INTO posts(user_id,pet_id,image_path,caption,location_text,created_at,media_url,media_kind) VALUES(?,?,?,?,?,?,?,?)',
+                             (user['id'], pet_id, filename or '', caption, location, created_at, media_url or None, media_kind or None)).lastrowid
     return {'success': True, 'postId': post_id}, 201
 
 
