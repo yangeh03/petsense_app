@@ -55,7 +55,13 @@ export default function LoginScreen() {
       }
       router.back();
     } catch (exc) {
-      setError(exc instanceof Error ? exc.message : '登录失败，请重试');
+      // 网络层失败（请求未到达服务器）与业务错误（账号/密码）分开提示
+      const message = exc instanceof Error ? exc.message : '';
+      if (/network|fetch|timeout|abort/i.test(message) || !(exc instanceof Error)) {
+        setError('网络连接失败，请检查网络后重试');
+      } else {
+        setError(message || '登录失败，请重试');
+      }
     } finally {
       setBusy(false);
     }
