@@ -2,7 +2,7 @@
 """PetSense 演示数据种子：向 /api/app/* 写入演示用户、宠物、帖子（PetGIF 真实行为动图）、点赞、评论与关注关系。
 
 用法：python3 seed-demo.py [BASE，默认 http://localhost:8080]
-幂等：主账号 e2e_max_dad 能登录时跳过。
+幂等：主账号 petsense 能登录时跳过。
 """
 
 import json
@@ -51,9 +51,9 @@ def form_request(method, path, token, fields):
 USERS = [
     {
         # 演示主账号：与 EXPO_PUBLIC_DEV_AUTOLOGIN 的自动登录账号一致
-        'username': 'e2e_max_dad',
+        'username': 'petsense',
         'display_name': 'Max 爸爸',
-        'password': 'secret66',
+        'password': '123456',
         'avatarEmoji': '🧑‍🌾',
         'pet': {'name': 'Max', 'species': 'dog', 'breed': '金毛寻回犬', 'avatarEmoji': '🦮', 'deviceId': 'esp32-001'},
     },

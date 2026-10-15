@@ -1122,6 +1122,19 @@ def pet_today_stats(pet_id):
     }
 
 
+# ─── 演示账号：Dashboard 数值按设定展示（设备不在线也可控） ───
+DEMO_USERNAME = 'demo'
+DEMO_VITALS = {
+    'heartRate': 92, 'spo2': 98, 'bodyTemp': 38.6, 'envTemp': 24.5,
+    'respiration': 22, 'microCir': 4, 'fatigue': 8,
+    'hrvSdnn': 45, 'hrvRmssd': 32, 'rrInterval': 652,
+    'systolic': 118, 'diastolic': 76,
+    'valid': True, 'batteryPercent': 86, 'online': True,
+    'receivedAt': None,
+}
+DEMO_TODAY = {'sleepMinutes': 428, 'activeMinutes': 42, 'avgHeartRate': 92}
+
+
 def build_insight(pet, telemetry, today):
     name = pet['name']
     if not telemetry or not telemetry.get('online'):
@@ -1826,8 +1839,13 @@ def app_dashboard():
     pet = dict(pet)
     if pet.get('avatar_image'):
         pet['avatarImageUrl'] = '/uploads/' + pet['avatar_image']
-    telemetry = pet_latest_telemetry(pet['device_id'])
-    today = pet_today_stats(pet['id'])
+    if user['username'] == DEMO_USERNAME:
+        telemetry = dict(DEMO_VITALS)
+        telemetry['receivedAt'] = datetime.now(timezone.utc).isoformat()
+        today = dict(DEMO_TODAY)
+    else:
+        telemetry = pet_latest_telemetry(pet['device_id'])
+        today = pet_today_stats(pet['id'])
     petgif = None
     if pet.get('petgif_id'):
         try:
