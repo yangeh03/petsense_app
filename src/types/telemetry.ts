@@ -71,6 +71,22 @@ export type TelemetryUwb = {
   kalmanMm: number[];
 };
 
+/** 服务端动作识别预测（action_classifier.py 随机森林 1s 窗口推理，随帧广播） */
+export type TelemetryAction = {
+  source: string;
+  modelVersion: string;
+  deviceId: string;
+  eventId: string;
+  label: string;
+  actionKey: string;
+  confidence: number;
+  scores: { eventId: string; label: string; actionKey: string; probability: number }[];
+  sampleCount: number;
+  windowStartTsMs: number;
+  windowEndTsMs: number;
+  predictedAt: string;
+};
+
 /** 服务端通过 /ws 广播的原始包 */
 export type TelemetryPacket = {
   topic: string;
@@ -91,6 +107,7 @@ export type TelemetryFrame = {
   audio?: TelemetryAudio;
   experiment?: TelemetryExperiment;
   uwb?: TelemetryUwb;
+  action?: TelemetryAction;
 };
 
 export type TelemetryStatus = 'connecting' | 'open' | 'reconnecting' | 'closed' | 'replaying';

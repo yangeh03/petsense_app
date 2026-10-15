@@ -2,8 +2,9 @@
  * 实时行为推断：把遥测帧映射为宠物当前动作（run/walk/stand/sit/lie_down…），
  * 供 Dashboard Hero 切换 PetGIF 行为动图。优先级：
  * 1. 实验标注事件（研究者正在标记的真实行为）
- * 2. IMU 加速度合幅值分档（剧烈→run，中→walk）
- * 3. 静止兜底：夜间 sleep、白天 stand
+ * 2. 云端动作识别（随机森林 1s 窗口在线推理，服务端 enrich 到帧上的 action 字段）
+ * 3. IMU 加速度合幅值分档（剧烈→run，中→walk）
+ * 4. 静止兜底：夜间 sleep、白天 stand
  */
 
 import { useMemo } from 'react';
@@ -43,6 +44,9 @@ const EVENT_TO_ACTION: Record<string, PetActionKey> = {
 const RUN_THRESHOLD_G = 0.32;
 const WALK_THRESHOLD_G = 0.16;
 
+/** 云端模型 actionKey（stand/sit/lie_down/walk/run/jump）都在 PetActionKey 词表内 */
+const SERVER_ACTION_KEYS: readonly string[] = ['stand', 'sit', 'lie_down', 'walk', 'run', 'jump'];
+
 export function inferPetAction(
   latest: TelemetryFrame | null | undefined,
   now = new Date(),
@@ -57,7 +61,13 @@ export function inferPetAction(
     }
   }
 
-  // 2) IMU 加速度合幅值分档
+  // 2) 云端随机森林动作识别
+  const serverAction = latest?.action;
+  if (serverAction && SERVER_ACTION_KEYS.includes(serverAction.actionKey)) {
+    return serverAction.actionKey as PetActionKey;
+  }
+
+  // 3) IMU 加速度合幅值分档
   const accel = latest?.imu?.ok ? latest.imu.accel : null;
   if (accel && accel.length === 3 && accel.every((v) => Number.isFinite(v))) {
     const magnitude = Math.hypot(accel[0], accel[1], accel[2]);
@@ -66,7 +76,7 @@ export function inferPetAction(
     if (delta > WALK_THRESHOLD_G) return 'walk';
   }
 
-  // 3) 静止兜底：夜间睡觉、白天站立
+  // 4) 静止兜底：夜间睡觉、白天站立
   const hour = now.getHours();
   return hour >= 22 || hour < 8 ? 'sleep' : 'stand';
 }
@@ -77,7 +87,8 @@ export function usePetAction(latest: TelemetryFrame | null | undefined): PetActi
   const eventKey = latest?.experiment?.eventActive
     ? `${latest.experiment.eventId}|${latest.experiment.eventLabel}`
     : '';
-  // accel/eventKey 是 latest 的稳定派生键：帧对象引用每次都变，但只有这两个字段影响结果
+  const serverActionKey = latest?.action?.actionKey ?? '';
+  // accel/eventKey/serverActionKey 是 latest 的稳定派生键：帧对象引用每次都变，但只有这三个字段影响结果
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  return useMemo(() => inferPetAction(latest), [accel, eventKey]);
+  return useMemo(() => inferPetAction(latest), [accel, eventKey, serverActionKey]);
 }

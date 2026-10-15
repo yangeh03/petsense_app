@@ -271,6 +271,7 @@ export function parseTelemetryMessage(raw: unknown): TelemetryFrame | null {
       ? (payload.experiment as TelemetryFrame['experiment'])
       : undefined,
     uwb: validUwb(payload.uwb) ? (payload.uwb as TelemetryFrame['uwb']) : undefined,
+    action: validAction(payload.action) ? (payload.action as TelemetryFrame['action']) : undefined,
   };
   return frame.health || frame.battery || frame.imu || frame.audio || frame.uwb ? frame : null;
 }
@@ -291,6 +292,20 @@ function validUwb(value: unknown): boolean {
           (item) => typeof item === 'number' && Number.isFinite(item),
         ),
     )
+  );
+}
+
+function validAction(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const object = value as Record<string, unknown>;
+  return (
+    ['source', 'modelVersion', 'deviceId', 'eventId', 'label', 'actionKey', 'predictedAt'].every(
+      (key) => typeof object[key] === 'string' && object[key].length > 0,
+    ) &&
+    ['confidence', 'sampleCount', 'windowStartTsMs', 'windowEndTsMs'].every(
+      (key) => typeof object[key] === 'number' && Number.isFinite(object[key]),
+    ) &&
+    Array.isArray(object.scores)
   );
 }
 
