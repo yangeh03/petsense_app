@@ -20,12 +20,59 @@ export function fetchPetgifPet(petgifId: string): Promise<PetgifPet> {
   return request(`/petgif/pet/${petgifId}`);
 }
 
-/** 生成运动日记海报（后端最长轮询 90 秒） */
-export function generateDiary(
+/** 生成运动日记海报（外部全流程约 2 分钟；后端轮询 200s，客户端 240s 超时兜底） */
+export async function generateDiary(
   petgifId: string,
-  input: { durationMin: number; steps: number; places: string; notes: string },
-): Promise<{ posterUrl?: string | null; status: string }> {
-  return request(`/petgif/pet/${petgifId}/diary`, { method: 'POST', body: input });
+  input: {
+    durationMin: number;
+    steps: number;
+    places: string;
+    notes: string;
+    photos?: { uri: string; name: string; type: string }[];
+  },
+): Promise<{ posterUrl?: string | null; status: string; message?: string }> {
+  let body: BodyInit;
+  const headers = await buildAuthHeaders();
+  if (input.photos?.length) {
+    const form = new FormData();
+    form.append('durationMin', String(input.durationMin));
+    form.append('steps', String(input.steps));
+    form.append('places', input.places);
+    form.append('notes', input.notes);
+    for (const photo of input.photos) {
+      form.append('photos', {
+        uri: photo.uri,
+        name: photo.name,
+        type: photo.type,
+      } as unknown as string);
+    }
+    body = form;
+  } else {
+    headers['Content-Type'] = 'application/json';
+    body = JSON.stringify({
+      durationMin: input.durationMin,
+      steps: input.steps,
+      places: input.places,
+      notes: input.notes,
+    });
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 240_000);
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/app/petgif/pet/${petgifId}/diary`, {
+      method: 'POST',
+      headers,
+      body,
+      signal: controller.signal,
+    });
+    return (await response.json()) as {
+      posterUrl?: string | null;
+      status: string;
+      message?: string;
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 /** 把生成的日记海报发到社区 */

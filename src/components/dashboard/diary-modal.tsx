@@ -1,4 +1,5 @@
 import { Image } from 'expo-image';
+import * as ImagePicker from 'expo-image-picker';
 import { SymbolView } from 'expo-symbols';
 import { useState } from 'react';
 import {
@@ -49,8 +50,29 @@ export function DiaryModal({
   const [generating, setGenerating] = useState(false);
   const [posterUrl, setPosterUrl] = useState<string | null>(null);
   const [sharing, setSharing] = useState(false);
+  const [photos, setPhotos] = useState<{ uri: string; name: string; type: string }[]>([]);
+
+  const pickPhotos = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.8,
+      allowsMultipleSelection: true,
+      selectionLimit: 3,
+    });
+    const assets = (result.assets ?? []).slice(0, 3);
+    if (assets.length) {
+      setPhotos(
+        assets.map((asset) => ({
+          uri: asset.uri,
+          name: asset.fileName ?? 'walk.jpg',
+          type: asset.mimeType ?? 'image/jpeg',
+        })),
+      );
+    }
+  };
 
   const generate = async () => {
+    if (generating) return;
     setGenerating(true);
     try {
       const result = await generateDiary(petgifId ?? 'default', {
@@ -58,11 +80,15 @@ export function DiaryModal({
         steps: Number(steps) || 0,
         places: places.trim(),
         notes: notes.trim() || `${petName} 今天的运动日记`,
+        photos,
       });
       if (result.posterUrl) {
         setPosterUrl(result.posterUrl);
       } else {
-        Alert.alert('生成超时', 'AI 还在绘制，稍后再来看看');
+        Alert.alert(
+          result.posterUrl === null && result.status === 'complete' ? '生成失败' : '生成超时',
+          result.message ?? 'AI 绘制约需 2 分钟，请稍后再试',
+        );
       }
     } catch {
       Alert.alert('生成失败', '请稍后重试');
@@ -143,6 +169,35 @@ export function DiaryModal({
             </View>
           </View>
 
+          <Pressable onPress={pickPhotos} disabled={generating} style={styles.photoRow}>
+            <SymbolView
+              name={{
+                ios: 'photo.on.rectangle.angled',
+                android: 'photo_library',
+                web: 'photo_library',
+              }}
+              size={18}
+              tintColor={theme.tint}
+            />
+            <ThemedText type="small" style={styles.photoRowText}>
+              {photos.length
+                ? `已选 ${photos.length} 张遛弯照片`
+                : '添加遛弯照片（可选，无照片用形象照）'}
+            </ThemedText>
+            {photos.length > 0 && (
+              <View style={styles.photoThumbs}>
+                {photos.map((photo) => (
+                  <Image
+                    key={photo.uri}
+                    source={{ uri: photo.uri }}
+                    style={styles.photoThumb}
+                    contentFit="cover"
+                  />
+                ))}
+              </View>
+            )}
+          </Pressable>
+
           <TextInput
             value={places}
             onChangeText={setPlaces}
@@ -181,7 +236,12 @@ export function DiaryModal({
               ]}
             >
               {generating ? (
-                <ActivityIndicator color="#ffffff" />
+                <View style={styles.generatingRow}>
+                  <ActivityIndicator color="#ffffff" size="small" />
+                  <ThemedText type="smallBold" style={{ color: '#ffffff' }}>
+                    AI 绘制中，约 2 分钟…
+                  </ThemedText>
+                </View>
               ) : (
                 <ThemedText type="smallBold" style={{ color: '#ffffff' }}>
                   ✨ 生成运动日记
@@ -250,6 +310,20 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     fontSize: 14,
   },
+  photoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    borderWidth: 1,
+    borderRadius: 14,
+    borderColor: 'rgba(148,131,111,0.3)',
+    paddingHorizontal: Spacing.three,
+    paddingVertical: 10,
+  },
+  photoRowText: { flex: 1, flexShrink: 1 },
+  photoThumbs: { flexDirection: 'row', gap: 4 },
+  photoThumb: { width: 28, height: 28, borderRadius: 6 },
+  generatingRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
   poster: {
     borderRadius: 18,
     borderWidth: 1,

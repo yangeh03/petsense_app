@@ -2002,42 +2002,78 @@ def app_petgif_create_sync():
 
 @app.route('/api/app/petgif/pet/<petgif_id>/diary', methods=['POST'])
 def app_petgif_diary(petgif_id):
-    """转发运动日记生成（照片+统计）并轮询到出图（最长 90 秒）。"""
-    duration = max(1, min(600, int(request.form.get('durationMin', 30) or 30)))
-    steps = max(0, min(100000, int(request.form.get('steps', 0) or 0)))
-    places = str(request.form.get('places', ''))[:200]
-    notes = str(request.form.get('notes', ''))[:200]
-    photos = request.files.getlist('photos')
+    """运动日记生成：兼容 JSON / form / multipart（App 端 JSON 无照片时自动用宠物形象照兜底）。
+
+    外部服务要求 multipart 且至少一张照片；实测全流程约 2 分钟，轮询上限 200 秒。
+    """
+    payload_json = request.get_json(silent=True) or {}
+    fields = {}
+    for source in (request.form, payload_json):
+        for key in ('durationMin', 'steps', 'places', 'notes'):
+            if source.get(key) is not None:
+                fields[key] = source[key]
+    try:
+        duration = max(1, min(600, int(float(fields.get('durationMin', 30) or 30))))
+        steps = max(0, min(100000, int(float(fields.get('steps', 0) or 0))))
+    except (TypeError, ValueError):
+        return {'success': False, 'message': '时长与步数需为数字'}, 400
+    places = str(fields.get('places', ''))[:200]
+    notes = str(fields.get('notes', ''))[:200]
+
     forward_files = []
-    for index, photo in enumerate(photos[:6]):
+    for index, photo in enumerate(request.files.getlist('photos')[:6]):
         forward_files.append(
             ('photos', (photo.filename or f'photo_{index}.jpg', photo.stream, photo.mimetype or 'image/jpeg'))
         )
+
+    # 无照片兜底：用宠物形象（角色卡 → 行为首帧）作为日记底图，保证一键可生成
+    if not forward_files:
+        fallback_url = None
+        try:
+            petgif = app_petgif_pet(petgif_id)
+            fallback_url = petgif.get('characterCardUrl')
+        except requests.RequestException:
+            pass
+        if not fallback_url:
+            fallback_url = PETGIF_STORAGE_PUBLIC + f'pets/{petgif_id}/character-card.png'
+        try:
+            image = requests.get(fallback_url, timeout=30)
+            image.raise_for_status()
+            forward_files.append(('photos', ('cover.png', image.content, 'image/png')))
+        except requests.RequestException:
+            return {'success': False, 'message': '生成失败：缺少照片且兜底图不可用'}, 502
+
     data = {'durationMin': duration, 'steps': steps, 'places': places, 'notes': notes, 'petId': petgif_id}
-    response = requests.post(
-        PETGIF_BASE + f'/pets/{petgif_id}/diaries', headers=petgif_headers(), files=forward_files, data=data, timeout=120
-    )
     try:
-        created = response.json()
-    except ValueError:
+        response = requests.post(
+            PETGIF_BASE + f'/pets/{petgif_id}/diaries', headers=petgif_headers(),
+            files=forward_files, data=data, timeout=120,
+        )
+        created = response.json() if response.ok else {}
+    except (requests.RequestException, ValueError):
         created = {}
-    diary_id = created.get('id') or created.get('diaryId')
+    diary_id = (created.get('diary') or {}).get('id') or created.get('id')
     if not diary_id:
-        return {'success': False, 'message': '日记生成任务创建失败'}, 502
-    deadline = time.time() + 90
+        message = created.get('error') or f'日记生成任务创建失败（HTTP {response.status_code}）'
+        return {'success': False, 'message': message}, 502
+
+    deadline = time.time() + 200
     diary = {}
     while time.time() < deadline:
         try:
-            diary = petgif_get(f'/pets/{petgif_id}/diaries/{diary_id}')
+            raw = petgif_get(f'/pets/{petgif_id}/diaries/{diary_id}')
         except requests.RequestException:
-            diary = {}
-        if str(diary.get('status', '')) == 'complete':
+            raw = {}
+        # 响应为 {diary: {...}, active: ...} 嵌套结构
+        diary = raw.get('diary') or raw
+        if str(diary.get('status', '')) in ('complete', 'failed'):
             break
-        time.sleep(3)
+        time.sleep(4)
     image = (diary.get('assets') or {}).get('image') or {}
+    success = str(diary.get('status', '')) == 'complete' and bool(image.get('publicUrl'))
     return {
-        'success': True,
-        'status': diary.get('status', 'unknown'),
+        'success': success,
+        'status': diary.get('status') or 'unknown',
         'posterUrl': petgif_public(image.get('publicUrl')),
         'stats': diary.get('stats') or {},
     }
@@ -2255,7 +2291,8 @@ def post_rows(viewer_id, where_clause='', params=()):
     items = []
     for row in rows:
         item = dict(row)
-        item['imageUrl'] = '/uploads/' + item.pop('image_path') if item.pop('image_path') else ''
+        image_path = item.pop('image_path') or ''
+        item['imageUrl'] = f'/uploads/{image_path}' if image_path else ''
         item['mediaUrl'] = item.pop('media_url')
         item['mediaKind'] = item.pop('media_kind')
         item['isMine'] = item['user_id'] == viewer_id
