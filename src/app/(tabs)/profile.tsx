@@ -221,11 +221,14 @@ function StatCell({
 
 const styles = StyleSheet.create({
   scrollView: { flex: 1 },
-  contentContainer: { flexDirection: 'row', justifyContent: 'center' },
+  // 水平边距统一放在 contentContainer（滚动容器级），兼容各端渲染差异
+  contentContainer: { paddingHorizontal: Spacing.four },
+  // 宽屏内容居中由 container 的 maxWidth + alignSelf 完成
   container: {
     flexGrow: 1,
+    width: '100%',
     maxWidth: MaxContentWidth,
-    paddingHorizontal: Spacing.four,
+    alignSelf: 'center',
     paddingBottom: BottomTabInset + Spacing.five,
     gap: Spacing.three,
   },
