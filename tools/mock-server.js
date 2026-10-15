@@ -1,16 +1,22 @@
 #!/usr/bin/env node
 /**
  * PetSense 本地模拟服务（零依赖）。
- * 模拟线上 server.py 的 /ws 行为：每秒广播一帧传感器数据，
+ * 模拟线上 server.py 的 /ws 行为：每秒广播一帧传感器数据 + 每 10s 一帧心跳，
  * APP 通过 EXPO_PUBLIC_TELEMETRY_URL=ws://<本机IP>:8090/ws 连接本地联调。
  *
- * 用法：node tools/mock-server.js [端口，默认 8090]
+ * 用法：node tools/mock-server.js [端口，默认 8090] [--silent-after 秒]
+ * --silent-after N：启动 N 秒后停止传感器帧（心跳照发），模拟设备静默，
+ *                   用于验证 App 端 waiting_device 状态与看门狗重连逻辑。
  */
 
 const crypto = require('crypto');
 const http = require('http');
 
-const PORT = Number(process.argv[2] || 8090);
+const args = process.argv.slice(2);
+const PORT = Number(args.find((arg) => !arg.startsWith('--')) || 8090);
+const silentAfterIdx = args.indexOf('--silent-after');
+const SILENT_AFTER_MS = silentAfterIdx !== -1 ? Number(args[silentAfterIdx + 1] || 0) * 1000 : 0;
+const startedAt = Date.now();
 const TOPIC = 'petsense/sensor/esp32-001';
 
 // ─── 模拟生理数据（随机游走） ───
@@ -125,8 +131,13 @@ server.on('upgrade', (req, socket) => {
   });
 });
 
+let silentLogged = false;
 setInterval(() => {
-  if (clients.size === 0) return;
+  if (SILENT_AFTER_MS && !silentLogged && Date.now() - startedAt >= SILENT_AFTER_MS) {
+    silentLogged = true;
+    console.log('[mock] --silent-after 生效：传感器帧停止，仅保留心跳（模拟设备静默）');
+  }
+  if (clients.size === 0 || silentLogged) return;
   const frame = encodeTextFrame(makeFrame());
   for (const socket of clients) {
     try {
@@ -137,6 +148,22 @@ setInterval(() => {
   }
 }, 1000);
 
+// 应用层心跳：与线上 server.py 的 ws_ping_loop 行为对齐
+setInterval(() => {
+  if (clients.size === 0) return;
+  const frame = encodeTextFrame(JSON.stringify({ type: 'ping', ts: Date.now() }));
+  for (const socket of clients) {
+    try {
+      socket.write(frame);
+    } catch {
+      clients.delete(socket);
+    }
+  }
+}, 10000);
+
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`[mock] PetSense 模拟服务已启动 ws://0.0.0.0:${PORT}/ws（1s/帧）`);
+  console.log(
+    `[mock] PetSense 模拟服务已启动 ws://0.0.0.0:${PORT}/ws（1s/帧）` +
+      (SILENT_AFTER_MS ? `，${SILENT_AFTER_MS / 1000}s 后设备静默` : ''),
+  );
 });

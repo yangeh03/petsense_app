@@ -62,7 +62,7 @@ export default function DashboardScreen() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
   const { activeAlerts } = useAlerts();
-  const { latest } = useTelemetry();
+  const { latest, displayState } = useTelemetry();
   const [pets, setPets] = useState<SocialPet[]>([]);
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -134,7 +134,9 @@ export default function DashboardScreen() {
   const liveForPet = latest && pet?.device_id && latest.deviceId === pet.device_id ? latest : null;
   // 动作推断用帧：优先绑定设备，其次任意在线设备（演示宠物也有动作可看）
   const latestForAction = liveForPet ?? latest;
-  const online = liveForPet ? true : (dashboard?.latest?.online ?? false);
+  // 在线判定：实时流仍在更新且属于绑定宠物才算在线（陈旧帧不算），否则回退后端 60s 窗口判定
+  const online =
+    displayState === 'streaming' && !!liveForPet ? true : (dashboard?.latest?.online ?? false);
 
   // 有效体征：优先实时流（valid 帧），否则回退后端转发的最近有效帧
   const vitals =

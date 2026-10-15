@@ -25,6 +25,10 @@ AUDIO_DIR     = os.path.join(APP_DIR, 'audio_files')
 CLOUD_DATA_DIR = os.path.join(APP_DIR, 'cloud_data')
 MAX_HISTORY   = 10000
 
+# ── 在线检测 / 心跳参数（与 App 端对齐：App 静默看门狗 25s，帧新鲜窗口 10s）──
+DEVICE_ONLINE_TIMEOUT_S = 60   # 设备在线判定：最近一帧距今的窗口
+WS_PING_INTERVAL_S      = 10   # /ws 应用层心跳间隔，兼做僵尸连接清理
+
 RAIL_STATION_URL = 'https://kyfw.12306.cn/otn/resources/js/framework/station_name.js'
 RAIL_QUERY_BASE = 'https://kyfw.12306.cn/otn/leftTicket/'
 RAIL_HEADERS = {
@@ -767,6 +771,21 @@ mqtt_client = mqtt.Client(client_id='petsense-server')
 mqtt_client.username_pw_set(MQTT_USER, MQTT_PASS)
 ws_clients = set()
 
+def ws_ping_loop():
+    """应用层心跳：让客户端能检测半死连接，同时清理发送失败的僵尸 socket。"""
+    while True:
+        time.sleep(WS_PING_INTERVAL_S)
+        if not ws_clients:
+            continue
+        ping = json.dumps({'type': 'ping', 'ts': int(time.time() * 1000)})
+        for sock in list(ws_clients):
+            try:
+                sock.send(ping)
+            except Exception:
+                ws_clients.discard(sock)
+
+threading.Thread(target=ws_ping_loop, daemon=True, name='ws-ping').start()
+
 def publish_control_command(command):
     payload = json.dumps(command, separators=(',', ':'))
     info = mqtt_client.publish(CONTROL_TOPIC, payload, qos=1, retain=False)
@@ -1103,7 +1122,7 @@ def pet_latest_telemetry(device_id):
             'diastolic': health.get('diastolic') or 0,
             'valid': bool(health.get('valid')),
             'batteryPercent': round(battery.get('percent') or 0),
-            'online': age < 60,
+            'online': age < DEVICE_ONLINE_TIMEOUT_S,
             'receivedAt': received_at,
         }
     return None
@@ -1123,7 +1142,7 @@ def pet_today_stats(pet_id):
 
 
 # ─── 演示账号：Dashboard 数值按设定展示（设备不在线也可控） ───
-DEMO_USERNAME = 'demo'
+DEMO_USERNAME = 'petsense'
 DEMO_VITALS = {
     'heartRate': 92, 'spo2': 98, 'bodyTemp': 38.6, 'envTemp': 24.5,
     'respiration': 22, 'microCir': 4, 'fatigue': 8,

@@ -11,15 +11,16 @@ import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useTelemetry } from '@/hooks/use-telemetry';
 import { useTheme } from '@/hooks/use-theme';
-import type { SeriesKey, TelemetryStatus } from '@/types/telemetry';
+import type { SeriesKey, TelemetryDisplayState } from '@/types/telemetry';
 
 type SymbolName = ComponentProps<typeof SymbolView>['name'];
 
-const STATUS_LABEL: Record<TelemetryStatus, string> = {
-  open: '已连接云端',
+const STATUS_LABEL: Record<TelemetryDisplayState, string> = {
+  streaming: '实时数据流',
+  waiting_device: '云端已连接 · 等待设备',
   connecting: '连接中…',
   reconnecting: '重连中…',
-  closed: '未连接',
+  offline: '未连接',
   replaying: '回放数据集',
 };
 
@@ -60,7 +61,7 @@ export default function MonitorScreen() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { status, latest, series, isFresh } = useTelemetry();
+  const { displayState, latest, series, isFresh } = useTelemetry();
   const [activeKey, setActiveKey] = useState<SeriesKey>('heartRate');
   const active = METRICS.find((m) => m.key === activeKey) ?? METRICS[0];
   const points = series[active.key];
@@ -70,7 +71,6 @@ export default function MonitorScreen() {
   const imu = latest?.imu?.ok ? latest.imu : null;
   const audio = latest?.audio?.ok ? latest.audio : null;
   const experiment = latest?.experiment;
-  const showWaitingDevice = status === 'open' && !isFresh;
 
   return (
     <ScrollView
@@ -91,10 +91,9 @@ export default function MonitorScreen() {
 
         {/* 连接状态 */}
         <View style={styles.statusRow}>
-          <ConnectionDot status={showWaitingDevice ? 'closed' : status} />
+          <ConnectionDot displayState={displayState} />
           <ThemedText type="small" themeColor="textSecondary">
-            {showWaitingDevice ? '云端已连接 · 等待设备' : STATUS_LABEL[status]} ·{' '}
-            {latest?.deviceId ?? 'petsense 设备'}
+            {STATUS_LABEL[displayState]} · {latest?.deviceId ?? 'petsense 设备'}
           </ThemedText>
           {battery && (
             <View style={styles.batteryBox}>

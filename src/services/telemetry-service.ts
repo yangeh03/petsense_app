@@ -2,6 +2,7 @@
  * 遥测客户端（模块级单例），按 TELEMETRY_MODE 提供两种数据源：
  * - live：连接云端 WebSocket，服务端在收到 MQTT 传感器帧后向 /ws 广播
  *   {topic, payload, received_at}，解析、过滤非传感器帧后分发给订阅者；
+ *   服务端每 10s 发一帧 {type:"ping"} 心跳，配合看门狗检测半死连接；
  * - replay：不联网，按设备原始节奏循环回放 src/data/replay-dataset.ts 的实验数据集片段。
  */
 
@@ -11,6 +12,9 @@ import type { TelemetryFrame, TelemetryPacket, TelemetryStatus } from '@/types/t
 
 const SENSOR_TOPIC_PREFIX = 'petsense/sensor/';
 const MAX_RETRY_DELAY_MS = 15_000;
+/** 服务端心跳间隔 10s；连续 25s（含心跳在内）没有任何下行消息视为半死连接 */
+const HEARTBEAT_SILENCE_MS = 25_000;
+const WATCHDOG_TICK_MS = 5_000;
 
 type FrameListener = (frame: TelemetryFrame) => void;
 type StatusListener = (status: TelemetryStatus) => void;
@@ -24,6 +28,8 @@ class TelemetryService {
   private status: TelemetryStatus = 'closed';
   private replayTimer: ReturnType<typeof setInterval> | null = null;
   private replayIndex = 0;
+  private watchdogTimer: ReturnType<typeof setInterval> | null = null;
+  private lastMessageAt = 0;
 
   getStatus() {
     return this.status;
@@ -36,6 +42,7 @@ class TelemetryService {
       this.frameListeners.delete(listener);
       if (this.frameListeners.size === 0) {
         this.stopReplay();
+        this.stopWatchdog();
         if (this.retryTimer) clearTimeout(this.retryTimer);
         this.retryTimer = null;
         const ws = this.ws;
@@ -124,15 +131,21 @@ class TelemetryService {
       this.retryTimer = null;
     }
     this.setStatus(this.retryCount > 0 ? 'reconnecting' : 'connecting');
+    this.lastMessageAt = Date.now();
+    this.startWatchdog();
 
     const ws = new WebSocket(TELEMETRY_WS_URL);
     this.ws = ws;
 
     ws.onopen = () => {
       this.retryCount = 0;
+      this.lastMessageAt = Date.now();
       this.setStatus('open');
     };
-    ws.onmessage = (event) => this.handleMessage(event.data);
+    ws.onmessage = (event) => {
+      this.lastMessageAt = Date.now();
+      this.handleMessage(event.data);
+    };
     ws.onclose = () => this.handleDisconnect();
     ws.onerror = () => {
       // onclose 随后触发，统一在 handleDisconnect 里重连
@@ -147,6 +160,7 @@ class TelemetryService {
       this.ws.onerror = null;
       this.ws = null;
     }
+    this.stopWatchdog();
     if (this.frameListeners.size === 0) {
       this.retryCount = 0;
       this.setStatus('closed');
@@ -156,6 +170,34 @@ class TelemetryService {
     this.retryCount += 1;
     this.setStatus('reconnecting');
     this.retryTimer = setTimeout(() => this.connect(), delay);
+  }
+
+  /** 半死连接检测：open 状态下长时间（含心跳在内）无任何下行消息，主动断开走统一重连 */
+  private startWatchdog() {
+    if (this.watchdogTimer) return;
+    this.watchdogTimer = setInterval(() => {
+      if (!this.ws || this.status !== 'open') return;
+      if (Date.now() - this.lastMessageAt <= HEARTBEAT_SILENCE_MS) return;
+      const ws = this.ws;
+      this.ws = null;
+      ws.onopen = null;
+      ws.onmessage = null;
+      ws.onclose = null;
+      ws.onerror = null;
+      try {
+        ws.close();
+      } catch {
+        // close 失败也不影响，状态已按断开处理
+      }
+      this.handleDisconnect();
+    }, WATCHDOG_TICK_MS);
+  }
+
+  private stopWatchdog() {
+    if (this.watchdogTimer) {
+      clearInterval(this.watchdogTimer);
+      this.watchdogTimer = null;
+    }
   }
 
   private handleMessage(raw: unknown) {

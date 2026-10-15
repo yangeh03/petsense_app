@@ -95,6 +95,18 @@ export type TelemetryFrame = {
 
 export type TelemetryStatus = 'connecting' | 'open' | 'reconnecting' | 'closed' | 'replaying';
 
+/**
+ * 面向 UI 的展示状态：连接状态 × 数据新鲜度归一后的六态。
+ * status 只描述 App↔云端的 WebSocket 连接，设备是否在发数据由 isFresh 补充。
+ */
+export type TelemetryDisplayState =
+  | 'streaming' // 数据流实时更新中
+  | 'waiting_device' // 云端已连接，但设备侧无数据
+  | 'connecting'
+  | 'reconnecting'
+  | 'offline'
+  | 'replaying';
+
 /** 单指标时间序列点 */
 export type SeriesPoint = { t: number; v: number };
 

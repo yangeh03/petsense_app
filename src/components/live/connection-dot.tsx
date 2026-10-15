@@ -7,27 +7,28 @@ import Animated, {
 } from 'react-native-reanimated';
 import { StyleSheet, View } from 'react-native';
 
-import type { TelemetryStatus } from '@/types/telemetry';
+import type { TelemetryDisplayState } from '@/types/telemetry';
 
-const COLORS: Record<TelemetryStatus, string> = {
-  open: '#34C77B',
+const COLORS: Record<TelemetryDisplayState, string> = {
+  streaming: '#34C77B',
+  waiting_device: '#8E9AAF',
   connecting: '#E8A13A',
   reconnecting: '#E8A13A',
-  closed: '#9AA0A6',
+  offline: '#9AA0A6',
   replaying: '#5B8DEF',
 };
 
-/** 连接状态圆点：有数据流时（open / replaying）带呼吸光晕动画。 */
-export function ConnectionDot({ status }: { status: TelemetryStatus }) {
+/** 连接状态圆点：有数据流时（streaming / replaying）带呼吸光晕动画。 */
+export function ConnectionDot({ displayState }: { displayState: TelemetryDisplayState }) {
   const glow = useSharedValue(0);
-  const color = COLORS[status];
+  const color = COLORS[displayState];
 
   useEffect(() => {
     glow.value =
-      status === 'open' || status === 'replaying'
+      displayState === 'streaming' || displayState === 'replaying'
         ? withRepeat(withTiming(1, { duration: 900 }), -1, true)
         : withTiming(0, { duration: 200 });
-  }, [status, glow]);
+  }, [displayState, glow]);
 
   const glowStyle = useAnimatedStyle(() => ({
     transform: [{ scale: 1 + glow.value * 1.4 }],
@@ -36,7 +37,7 @@ export function ConnectionDot({ status }: { status: TelemetryStatus }) {
 
   return (
     <View style={styles.container}>
-      {(status === 'open' || status === 'replaying') && (
+      {(displayState === 'streaming' || displayState === 'replaying') && (
         <Animated.View style={[styles.glow, { backgroundColor: color }, glowStyle]} />
       )}
       <View style={[styles.dot, { backgroundColor: color }]} />
