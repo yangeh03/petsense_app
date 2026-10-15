@@ -51,6 +51,34 @@ const packet = {
   },
 };
 assert.equal(parseTelemetryMessage(JSON.stringify(packet)).battery.percent, 80);
+const action = {
+  source: 'random_forest_1s',
+  modelVersion: 'test-v1',
+  deviceId: 'test',
+  eventId: '01_standing',
+  label: '站立',
+  actionKey: 'stand',
+  confidence: 0.8,
+  scores: [{ eventId: '01_standing', label: '站立', actionKey: 'stand', probability: 0.8 }],
+  sampleCount: 10,
+  windowStartTsMs: 0,
+  windowEndTsMs: 1000,
+  predictedAt: new Date().toISOString(),
+};
+assert.equal(
+  parseTelemetryMessage(JSON.stringify({ ...packet, payload: { ...packet.payload, action } }))
+    .action.label,
+  '站立',
+);
+assert.equal(
+  parseTelemetryMessage(
+    JSON.stringify({
+      ...packet,
+      payload: { ...packet.payload, action: { ...action, confidence: 'bad' } },
+    }),
+  ).action,
+  undefined,
+);
 assert.equal(
   parseTelemetryMessage(JSON.stringify({ ...packet, payload: JSON.stringify(packet.payload) }))
     .tsMs,

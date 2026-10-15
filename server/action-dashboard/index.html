@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>PetSense 实时动作识别</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #08110f;
+        --panel: #101c19;
+        --line: #263a34;
+        --text: #f2f7f5;
+        --muted: #91a69f;
+        --mint: #63e6be;
+        --amber: #ffd166;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font:
+          15px/1.5 ui-sans-serif,
+          system-ui,
+          -apple-system,
+          'PingFang SC',
+          sans-serif;
+        background: radial-gradient(circle at 80% 0, #17382f 0, transparent 36%), var(--bg);
+        color: var(--text);
+      }
+      main {
+        width: min(1100px, calc(100% - 32px));
+        margin: auto;
+        padding: 42px 0 64px;
+      }
+      header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 20px;
+        margin-bottom: 24px;
+      }
+      h1 {
+        margin: 4px 0 6px;
+        font-size: clamp(26px, 5vw, 44px);
+        letter-spacing: -0.04em;
+      }
+      .eyebrow {
+        color: var(--mint);
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+        white-space: nowrap;
+        margin-top: 12px;
+      }
+      .dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--amber);
+        box-shadow: 0 0 14px var(--amber);
+      }
+      .dot.ok {
+        background: var(--mint);
+        box-shadow: 0 0 14px var(--mint);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1.2fr 0.8fr;
+        gap: 16px;
+      }
+      .card {
+        background: rgba(16, 28, 25, 0.9);
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        padding: 22px;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.22);
+      }
+      .hero {
+        min-height: 290px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+      }
+      .label {
+        font-size: clamp(48px, 10vw, 94px);
+        font-weight: 800;
+        letter-spacing: -0.07em;
+        margin: 12px 0 2px;
+      }
+      .sub {
+        color: var(--muted);
+      }
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+        margin-top: 26px;
+      }
+      .metric {
+        padding: 12px;
+        border-radius: 13px;
+        background: #0a1512;
+      }
+      .metric b {
+        display: block;
+        font-size: 20px;
+      }
+      .metric span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      h2 {
+        font-size: 14px;
+        margin: 0 0 16px;
+        color: var(--muted);
+        font-weight: 600;
+      }
+      .bars {
+        display: grid;
+        gap: 12px;
+      }
+      .bar-head {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 5px;
+        font-size: 13px;
+      }
+      .track {
+        height: 7px;
+        background: #07100e;
+        border-radius: 9px;
+        overflow: hidden;
+      }
+      .fill {
+        height: 100%;
+        background: linear-gradient(90deg, #32ba91, var(--mint));
+        border-radius: inherit;
+        transition: width 0.4s ease;
+      }
+      .wide {
+        grid-column: 1/-1;
+      }
+      .timeline {
+        display: flex;
+        height: 64px;
+        gap: 2px;
+        align-items: stretch;
+        overflow: hidden;
+        border-radius: 10px;
+        background: #07100e;
+        padding: 5px;
+      }
+      .tick {
+        min-width: 4px;
+        flex: 1;
+        border-radius: 4px;
+        opacity: 0.9;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th,
+      td {
+        padding: 12px 8px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+      }
+      th {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      td:nth-child(3),
+      th:nth-child(3) {
+        text-align: right;
+      }
+      .empty {
+        color: var(--muted);
+        padding: 28px 0;
+        text-align: center;
+      }
+      @media (max-width: 760px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+        .metrics {
+          grid-template-columns: 1fr 1fr;
+        }
+        .wide {
+          grid-column: auto;
+        }
+        header {
+          display: block;
+        }
+        .status {
+          margin-bottom: 10px;
+        }
+        table th:nth-child(2),
+        table td:nth-child(2) {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <div class="eyebrow">PetSense · Random Forest</div>
+          <h1>实时动作识别</h1>
+          <div class="sub">使用设备时间戳组成完整 1 秒九轴 IMU 窗口</div>
+        </div>
+        <div class="status"><i class="dot" id="dot"></i><span id="status">正在连接服务…</span></div>
+      </header>
+      <section class="grid">
+        <article class="card hero">
+          <div>
+            <h2>当前预测</h2>
+            <div class="label" id="label">等待数据</div>
+            <div class="sub" id="event">设备上线并完成首个窗口后显示</div>
+          </div>
+          <div class="metrics">
+            <div class="metric"><b id="confidence">--</b><span>置信度</span></div>
+            <div class="metric"><b id="samples">--</b><span>窗口样本数</span></div>
+            <div class="metric"><b id="device">--</b><span>设备</span></div>
+          </div>
+        </article>
+        <article class="card">
+          <h2>六类预测概率</h2>
+          <div class="bars" id="bars"><div class="empty">暂无预测</div></div>
+        </article>
+        <article class="card wide">
+          <h2>最近动作时间线（每格 1 秒）</h2>
+          <div class="timeline" id="timeline"></div>
+        </article>
+        <article class="card wide">
+          <h2>最近预测记录</h2>
+          <div style="overflow: auto">
+            <table>
+              <thead>
+                <tr>
+                  <th>动作</th>
+                  <th>时间窗口</th>
+                  <th>置信度</th>
+                  <th>样本</th>
+                </tr>
+              </thead>
+              <tbody id="rows">
+                <tr>
+                  <td colspan="4" class="empty">等待新数据</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+    </main>
+    <script>
+      const colors = {
+        stand: '#63e6be',
+        sit: '#74c0fc',
+        lie_down: '#b197fc',
+        walk: '#ffd166',
+        run: '#ff7b72',
+        jump: '#f783ac',
+      };
+      const fmtTime = (ms) => {
+        const s = Math.floor(ms / 1000),
+          m = Math.floor(s / 60);
+        return `${m}:${String(s % 60).padStart(2, '0')}`;
+      };
+      const esc = (value) =>
+        String(value ?? '').replace(
+          /[&<>"']/g,
+          (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c],
+        );
+      function render(latest, history, status) {
+        const enabled = status.enabled === true;
+        document.querySelector('#dot').className = `dot ${enabled ? 'ok' : ''}`;
+        document.querySelector('#status').textContent = enabled
+          ? `模型已运行 · ${status.modelVersion}`
+          : status.error || '模型未启用';
+        if (!latest) return;
+        document.querySelector('#label').textContent = latest.label;
+        document.querySelector('#event').textContent = `${latest.eventId} · ${latest.source}`;
+        document.querySelector('#confidence').textContent =
+          `${(latest.confidence * 100).toFixed(1)}%`;
+        document.querySelector('#samples').textContent = latest.sampleCount;
+        document.querySelector('#device').textContent = latest.deviceId;
+        document.querySelector('#bars').innerHTML = (latest.scores || [])
+          .map(
+            (s) =>
+              `<div><div class="bar-head"><span>${esc(s.label)}</span><b>${(s.probability * 100).toFixed(1)}%</b></div><div class="track"><div class="fill" style="width:${s.probability * 100}%"></div></div></div>`,
+          )
+          .join('');
+        document.querySelector('#timeline').innerHTML = history
+          .slice(-120)
+          .map(
+            (x) =>
+              `<div class="tick" title="${esc(x.label)} ${(x.confidence * 100).toFixed(1)}%" style="background:${colors[x.actionKey] || '#91a69f'}"></div>`,
+          )
+          .join('');
+        document.querySelector('#rows').innerHTML = history
+          .slice(-12)
+          .reverse()
+          .map(
+            (x) =>
+              `<tr><td><b>${esc(x.label)}</b></td><td>${fmtTime(x.windowStartTsMs)}–${fmtTime(x.windowEndTsMs)}</td><td>${(x.confidence * 100).toFixed(1)}%</td><td>${x.sampleCount}</td></tr>`,
+          )
+          .join('');
+      }
+      async function refresh() {
+        try {
+          const [s, h] = await Promise.all([
+            fetch('/api/action/status', { cache: 'no-store' }),
+            fetch('/api/action/history?limit=300', { cache: 'no-store' }),
+          ]);
+          if (!s.ok || !h.ok) throw Error('接口不可用');
+          const status = await s.json(),
+            history = (await h.json()).data || [];
+          render(status.latest || history.at(-1), history, status);
+        } catch (e) {
+          document.querySelector('#status').textContent = `连接失败：${e.message}`;
+          document.querySelector('#dot').className = 'dot';
+        }
+      }
+      refresh();
+      setInterval(refresh, 2000);
+    </script>
+  </body>
+</html>

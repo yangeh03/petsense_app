@@ -70,6 +70,7 @@ export default function MonitorScreen() {
   const imu = latest?.imu?.ok ? latest.imu : null;
   const audio = latest?.audio?.ok ? latest.audio : null;
   const experiment = latest?.experiment;
+  const action = latest?.action;
   const showWaitingDevice = status === 'open' && !isFresh;
 
   return (
@@ -222,6 +223,14 @@ export default function MonitorScreen() {
           <InfoCell
             label="动作事件"
             value={experiment?.eventActive ? experiment.eventLabel : '无'}
+          />
+          <InfoCell
+            label="模型动作"
+            value={action ? `${action.label} · ${(action.confidence * 100).toFixed(1)}%` : '--'}
+          />
+          <InfoCell
+            label="模型窗口"
+            value={action ? `${action.sampleCount} 个 IMU 样本 · 1 秒` : '--'}
           />
           <InfoCell
             label="SD 卡"

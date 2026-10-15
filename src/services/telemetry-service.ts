@@ -187,7 +187,14 @@ export function parseTelemetryMessage(raw: unknown): TelemetryFrame | null {
   if (!payload || Array.isArray(payload)) return null;
 
   // 音频分片 / 重组进度帧没有 health 结构，APP 端不消费
-  if (!payload.health && !payload.battery && !payload.imu && !payload.audio && !payload.uwb)
+  if (
+    !payload.health &&
+    !payload.battery &&
+    !payload.imu &&
+    !payload.audio &&
+    !payload.uwb &&
+    !payload.action
+  )
     return null;
   if (typeof payload.deviceId !== 'string' || !Number.isFinite(payload.ts_ms)) return null;
 
@@ -228,9 +235,37 @@ export function parseTelemetryMessage(raw: unknown): TelemetryFrame | null {
     experiment: validExperiment(payload.experiment)
       ? (payload.experiment as TelemetryFrame['experiment'])
       : undefined,
+    action: validAction(payload.action) ? (payload.action as TelemetryFrame['action']) : undefined,
     uwb: validUwb(payload.uwb) ? (payload.uwb as TelemetryFrame['uwb']) : undefined,
   };
-  return frame.health || frame.battery || frame.imu || frame.audio || frame.uwb ? frame : null;
+  return frame.health || frame.battery || frame.imu || frame.audio || frame.uwb || frame.action
+    ? frame
+    : null;
+}
+
+function validAction(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const object = value as Record<string, unknown>;
+  return (
+    object.source === 'random_forest_1s' &&
+    ['modelVersion', 'deviceId', 'eventId', 'label', 'actionKey', 'predictedAt'].every(
+      (key) => typeof object[key] === 'string',
+    ) &&
+    ['confidence', 'sampleCount', 'windowStartTsMs', 'windowEndTsMs'].every(
+      (key) => typeof object[key] === 'number' && Number.isFinite(object[key]),
+    ) &&
+    Array.isArray(object.scores) &&
+    object.scores.every(
+      (score) =>
+        !!score &&
+        typeof score === 'object' &&
+        ['eventId', 'label', 'actionKey'].every(
+          (key) => typeof (score as Record<string, unknown>)[key] === 'string',
+        ) &&
+        typeof (score as Record<string, unknown>).probability === 'number' &&
+        Number.isFinite((score as Record<string, unknown>).probability),
+    )
+  );
 }
 
 function validUwb(value: unknown): boolean {

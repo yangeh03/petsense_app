@@ -58,6 +58,29 @@ export type TelemetryExperiment = {
   sdAudioMode: string;
 };
 
+export type TelemetryActionScore = {
+  eventId: string;
+  label: string;
+  actionKey: string;
+  probability: number;
+};
+
+/** 云端 1 秒 IMU 窗口的随机森林预测 */
+export type TelemetryAction = {
+  source: 'random_forest_1s';
+  modelVersion: string;
+  deviceId: string;
+  eventId: string;
+  label: string;
+  actionKey: string;
+  confidence: number;
+  scores: TelemetryActionScore[];
+  sampleCount: number;
+  windowStartTsMs: number;
+  windowEndTsMs: number;
+  predictedAt: string;
+};
+
 /** UWB 定位帧：distanceMm 按锚点序号索引（anchorMask 标记哪些槽位有效） */
 export type TelemetryUwb = {
   valid: boolean;
@@ -90,6 +113,7 @@ export type TelemetryFrame = {
   imu?: TelemetryImu;
   audio?: TelemetryAudio;
   experiment?: TelemetryExperiment;
+  action?: TelemetryAction;
   uwb?: TelemetryUwb;
 };
 
