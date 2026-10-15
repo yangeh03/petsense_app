@@ -9,6 +9,13 @@ import paho.mqtt.client as mqtt
 import requests
 from flask import Flask, send_from_directory, Response, request, make_response
 
+ACTION_IMPORT_ERROR = None
+try:
+    from action_classifier import ActionClassifier
+except Exception as error:
+    ActionClassifier = None
+    ACTION_IMPORT_ERROR = str(error)
+
 MQTT_BROKER   = 'localhost'
 MQTT_PORT     = 1883
 MQTT_USER     = 'petsense-device'
@@ -23,6 +30,8 @@ ANZUO_DB      = os.path.join(APP_DIR, 'anzuo.db')
 DB_PATH       = os.path.join(APP_DIR, 'data.db')
 AUDIO_DIR     = os.path.join(APP_DIR, 'audio_files')
 CLOUD_DATA_DIR = os.path.join(APP_DIR, 'cloud_data')
+ACTION_DASHBOARD_DIR = os.path.join(APP_DIR, 'action-dashboard')
+ACTION_MODEL_PATH = os.environ.get('PETSENSE_ACTION_MODEL', os.path.join(APP_DIR, 'models', 'random_forest_1s.joblib'))
 MAX_HISTORY   = 10000
 
 # ── 在线检测 / 心跳参数（与 App 端对齐：App 静默看门狗 25s，帧新鲜窗口 10s）──
@@ -78,8 +87,38 @@ CONTROL_DEBOUNCE_SEC = 0.8
 conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 cur = conn.cursor()
 cur.execute('CREATE TABLE IF NOT EXISTS readings (id INTEGER PRIMARY KEY AUTOINCREMENT, topic TEXT NOT NULL, payload TEXT NOT NULL, received_at TEXT NOT NULL)')
+cur.execute('''CREATE TABLE IF NOT EXISTS action_predictions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT NOT NULL,
+    event_id TEXT NOT NULL,
+    label TEXT NOT NULL,
+    action_key TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    scores_json TEXT NOT NULL,
+    sample_count INTEGER NOT NULL,
+    window_start_ts_ms INTEGER NOT NULL,
+    window_end_ts_ms INTEGER NOT NULL,
+    model_version TEXT NOT NULL,
+    predicted_at TEXT NOT NULL
+)''')
+cur.execute('CREATE INDEX IF NOT EXISTS action_predictions_device_time ON action_predictions(device_id, id DESC)')
 cur.execute('PRAGMA journal_mode=WAL')
 conn.commit()
+
+action_classifier = None
+action_classifier_error = None
+if ActionClassifier is None:
+    action_classifier_error = f'推理依赖不可用：{ACTION_IMPORT_ERROR}'
+elif not os.path.isfile(ACTION_MODEL_PATH):
+    action_classifier_error = f'模型文件不存在：{ACTION_MODEL_PATH}'
+else:
+    try:
+        action_classifier = ActionClassifier(ACTION_MODEL_PATH)
+        print(f'[ACTION] loaded {ACTION_MODEL_PATH}')
+    except Exception as error:
+        action_classifier_error = f'模型加载失败：{error}'
+if action_classifier_error:
+    print(f'[ACTION] disabled: {action_classifier_error}')
 
 def control_debounced(key):
     now = time.monotonic()
@@ -264,6 +303,40 @@ def store(topic, payload):
         cur.execute('DELETE FROM readings WHERE id IN (SELECT id FROM readings ORDER BY id ASC LIMIT ?)', (cnt - MAX_HISTORY,))
         conn.commit()
     return ts
+
+def action_status_payload():
+    if action_classifier:
+        return action_classifier.status()
+    return {
+        'enabled': False,
+        'source': 'random_forest_1s',
+        'modelVersion': '2026-10-14-device-clock-v1',
+        'error': action_classifier_error or '分类器未启用',
+    }
+
+def persist_action_prediction(prediction):
+    cur.execute('''INSERT INTO action_predictions (
+        device_id, event_id, label, action_key, confidence, scores_json, sample_count,
+        window_start_ts_ms, window_end_ts_ms, model_version, predicted_at
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)''', (
+        prediction['deviceId'], prediction['eventId'], prediction['label'], prediction['actionKey'],
+        prediction['confidence'], json.dumps(prediction['scores'], ensure_ascii=False), prediction['sampleCount'],
+        prediction['windowStartTsMs'], prediction['windowEndTsMs'], prediction['modelVersion'], prediction['predictedAt'],
+    ))
+    conn.commit()
+
+def enrich_frame_with_action(frame):
+    if not action_classifier or not isinstance(frame, dict):
+        return frame
+    try:
+        prediction, is_new = action_classifier.ingest(frame)
+        if prediction:
+            frame['action'] = prediction
+        if is_new:
+            persist_action_prediction(prediction)
+    except Exception as error:
+        print(f'[ACTION] inference error: {error}')
+    return frame
 
 def list_at(value, index, default=None):
     if isinstance(value, (list, tuple)) and index < len(value):
@@ -828,6 +901,7 @@ def on_message(client, userdata, msg):
         frames = expand_sensor_batch(payload_dict)
         if frames:
             for frame in frames:
+                enrich_frame_with_action(frame)
                 frame_payload = json.dumps(frame, ensure_ascii=False, separators=(',', ':'))
                 ts = store(msg.topic, frame_payload)
                 packet = json.dumps({'topic': msg.topic, 'payload': frame_payload, 'received_at': ts})
@@ -845,6 +919,10 @@ def on_message(client, userdata, msg):
                     try: sock.send(packet)
                     except: ws_clients.discard(sock)
             return
+
+    if msg.topic == 'petsense/sensor/esp32-001' and isinstance(payload_dict, dict):
+        enrich_frame_with_action(payload_dict)
+        payload_str = json.dumps(payload_dict, ensure_ascii=False, separators=(',', ':'))
 
     ts = store(msg.topic, payload_str)
     packet = json.dumps({'topic': msg.topic, 'payload': payload_str, 'received_at': ts})
@@ -1141,19 +1219,6 @@ def pet_today_stats(pet_id):
     }
 
 
-# ─── 演示账号：Dashboard 数值按设定展示（设备不在线也可控） ───
-DEMO_USERNAME = 'petsense'
-DEMO_VITALS = {
-    'heartRate': 92, 'spo2': 98, 'bodyTemp': 38.6, 'envTemp': 24.5,
-    'respiration': 22, 'microCir': 4, 'fatigue': 8,
-    'hrvSdnn': 45, 'hrvRmssd': 32, 'rrInterval': 652,
-    'systolic': 118, 'diastolic': 76,
-    'valid': True, 'batteryPercent': 86, 'online': True,
-    'receivedAt': None,
-}
-DEMO_TODAY = {'sleepMinutes': 428, 'activeMinutes': 42, 'avgHeartRate': 92}
-
-
 def build_insight(pet, telemetry, today):
     name = pet['name']
     if not telemetry or not telemetry.get('online'):
@@ -1241,6 +1306,50 @@ def api_stats():
     cur.execute('SELECT COUNT(*), MAX(received_at) FROM readings')
     cnt, latest = cur.fetchone()
     return {'total': cnt, 'latest': latest, 'sse_clients': len(fwd.sse_queues), 'ws_clients': len(ws_clients)}
+
+@app.route('/api/action/status')
+def api_action_status():
+    payload = action_status_payload()
+    payload['latest'] = action_classifier.latest() if action_classifier else None
+    return payload
+
+def action_rows(limit=100, device_id=None):
+    query = '''SELECT device_id, event_id, label, action_key, confidence, scores_json,
+        sample_count, window_start_ts_ms, window_end_ts_ms, model_version, predicted_at
+        FROM action_predictions'''
+    params = []
+    if device_id:
+        query += ' WHERE device_id=?'
+        params.append(device_id)
+    query += ' ORDER BY id DESC LIMIT ?'
+    params.append(limit)
+    with sqlite3.connect(DB_PATH) as action_db:
+        rows = action_db.execute(query, params).fetchall()
+    return [{
+        'deviceId': row[0], 'eventId': row[1], 'label': row[2], 'actionKey': row[3],
+        'confidence': row[4], 'scores': json.loads(row[5]), 'sampleCount': row[6],
+        'windowStartTsMs': row[7], 'windowEndTsMs': row[8], 'modelVersion': row[9],
+        'predictedAt': row[10], 'source': 'random_forest_1s',
+    } for row in rows]
+
+@app.route('/api/action/latest')
+def api_action_latest():
+    device_id = request.args.get('device_id')
+    latest = action_classifier.latest(device_id) if action_classifier else None
+    if not latest:
+        rows = action_rows(1, device_id)
+        latest = rows[0] if rows else None
+    return {'data': latest}
+
+@app.route('/api/action/history')
+def api_action_history():
+    try:
+        limit = max(1, min(1000, int(request.args.get('limit', 300))))
+    except (TypeError, ValueError):
+        limit = 300
+    rows = action_rows(limit, request.args.get('device_id'))
+    rows.reverse()
+    return {'count': len(rows), 'data': rows}
 
 @app.route('/api/audio-recording', methods=['GET', 'POST'])
 def api_audio_recording():
@@ -1697,7 +1806,7 @@ def anzuo_runtime_assets(filename):
 @app.after_request
 def app_cors_headers(response):
     origin = request.headers.get('Origin')
-    if origin and (request.path.startswith('/api/app/') or request.path.startswith('/uploads/')):
+    if origin and (request.path.startswith('/api/app/') or request.path.startswith('/api/action/') or request.path.startswith('/uploads/')):
         response.headers['Access-Control-Allow-Origin'] = origin
         response.headers['Access-Control-Allow-Credentials'] = 'true'
         response.headers['Access-Control-Allow-Headers'] = f'{APP_TOKEN_HEADER}, Content-Type'
@@ -1858,13 +1967,8 @@ def app_dashboard():
     pet = dict(pet)
     if pet.get('avatar_image'):
         pet['avatarImageUrl'] = '/uploads/' + pet['avatar_image']
-    if user['username'] == DEMO_USERNAME:
-        telemetry = dict(DEMO_VITALS)
-        telemetry['receivedAt'] = datetime.now(timezone.utc).isoformat()
-        today = dict(DEMO_TODAY)
-    else:
-        telemetry = pet_latest_telemetry(pet['device_id'])
-        today = pet_today_stats(pet['id'])
+    telemetry = pet_latest_telemetry(pet['device_id'])
+    today = pet_today_stats(pet['id'])
     petgif = None
     if pet.get('petgif_id'):
         try:
@@ -2518,6 +2622,12 @@ def app_follow_user(user_id):
 @app.route('/uploads/<path:filename>')
 def app_uploads(filename):
     return send_from_directory(UPLOADS_DIR, filename)
+
+
+@app.route('/action')
+@app.route('/action/')
+def action_dashboard():
+    return send_from_directory(ACTION_DASHBOARD_DIR, 'index.html')
 
 
 @app.route('/')
