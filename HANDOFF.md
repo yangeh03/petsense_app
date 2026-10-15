@@ -64,17 +64,17 @@ ESP32 项圈 ──MQTT──▶ 腾讯云 Mosquitto(81.71.71.31:1883)
 
 ## 三、账号 / 地址 / 凭据速查
 
-| 项 | 值 |
-|---|---|
-| **演示主账号** | `petsense / 123456`（Max 爸爸，全套内容，App 自动登录用） |
-| 管理员（空） | `petadmin / petsense` |
-| 配角（发帖用） | `seed_doudou` / `seed_niangao` / `seed_xueqiu`，均 `demo123` |
-| 腾讯云 | `ssh ubuntu@81.71.71.31`（密码在 ~/.zcode/skills/cloud-ssh；sudo 提权） |
-| 后端目录 | `/home/ubuntu/petsense-server/`（server.py + 两个 sqlite 库 + uploads/） |
-| MQTT | 同机 Mosquitto:1883，账号 `petsense-device`，密码文件 `/home/ubuntu/.petsense-mqtt-password` |
-| PetGIF key | `/home/ubuntu/.petgif-api-key`（本地 `~/.petgif-api-key`，勿入库） |
-| App 遥测 WS | `ws://81.71.71.31/ws`（`src/config.ts`） |
-| App REST | `http://81.71.71.31/api/app`（EXPO_PUBLIC_API_BASE_URL 覆盖） |
+| 项             | 值                                                                                           |
+| -------------- | -------------------------------------------------------------------------------------------- |
+| **演示主账号** | `petsense / 123456`（Max 爸爸，全套内容，App 自动登录用）                                    |
+| 管理员（空）   | `petadmin / petsense`                                                                        |
+| 配角（发帖用） | `seed_doudou` / `seed_niangao` / `seed_xueqiu`，均 `demo123`                                 |
+| 腾讯云         | `ssh ubuntu@81.71.71.31`（密码在 ~/.zcode/skills/cloud-ssh；sudo 提权）                      |
+| 后端目录       | `/home/ubuntu/petsense-server/`（server.py + 两个 sqlite 库 + uploads/）                     |
+| MQTT           | 同机 Mosquitto:1883，账号 `petsense-device`，密码文件 `/home/ubuntu/.petsense-mqtt-password` |
+| PetGIF key     | `/home/ubuntu/.petgif-api-key`（本地 `~/.petgif-api-key`，勿入库）                           |
+| App 遥测 WS    | `ws://81.71.71.31/ws`（`src/config.ts`）                                                     |
+| App REST       | `http://81.71.71.31/api/app`（EXPO_PUBLIC_API_BASE_URL 覆盖）                                |
 
 ## 四、本地开发环境
 
@@ -159,14 +159,14 @@ curl -s "http://81.71.71.31/api/app/trends?period=all"  # 趋势有 4 个实验�
 
 ## 十、近期提交索引（语义速查）
 
-| 提交 | 内容 |
-|---|---|
-| 513ee3d | Web 端 FormData 上传统一修复（form-upload.ts + 自检用例） |
-| 8035426 | 演示账号更名 petsense/123456 |
-| a740f37 / e52551e / bb37643 | 登录报错提示 / login+create 弹层布局重写 |
-| 239427f | ATS 放行 + 我的页边距 + 云端重播种 https GIF 帖 |
-| b25a9ce | 运动日记三层根因修复（格式/照片/嵌套/超时） |
-| f815b0c | AI 数字形象闭环（同步生成 + Hero 实时动作） |
-| c68d6e7 | PetGIF 集成主体（趋势统计/运动日记/角色卡/GIF 帖） |
-| 58fcace / ddee7d9 | 社区功能闭环 + ins 风格化 |
-| 29de6c4 | 五 Tab 全栈改造（结构基线，更早细节见 git log） |
+| 提交                        | 内容                                                      |
+| --------------------------- | --------------------------------------------------------- |
+| 513ee3d                     | Web 端 FormData 上传统一修复（form-upload.ts + 自检用例） |
+| 8035426                     | 演示账号更名 petsense/123456                              |
+| a740f37 / e52551e / bb37643 | 登录报错提示 / login+create 弹层布局重写                  |
+| 239427f                     | ATS 放行 + 我的页边距 + 云端重播种 https GIF 帖           |
+| b25a9ce                     | 运动日记三层根因修复（格式/照片/嵌套/超时）               |
+| f815b0c                     | AI 数字形象闭环（同步生成 + Hero 实时动作）               |
+| c68d6e7                     | PetGIF 集成主体（趋势统计/运动日记/角色卡/GIF 帖）        |
+| 58fcace / ddee7d9           | 社区功能闭环 + ins 风格化                                 |
+| 29de6c4                     | 五 Tab 全栈改造（结构基线，更早细节见 git log）           |
