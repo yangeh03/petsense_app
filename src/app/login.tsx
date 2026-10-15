@@ -1,4 +1,4 @@
-import { AppIcon } from '@/components/ui/icon';
+import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import {
@@ -14,13 +14,17 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
-import { MaxContentWidth, Spacing } from '@/constants/theme';
+import { Shadows, Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
 
 const USER_EMOJIS = ['🧑‍🌾', '🧑‍🎓', '👩‍💻', '🧑‍🍳', '🧑‍🚀', '🦊', '🐨', '🐼'];
 
-/** 登录 / 注册弹层。 */
+/**
+ * 登录 / 注册弹层。
+ * 布局与创建页同构：sheet 撑满，表单 width:100% + 限宽居中 + 水平边距，
+ * 控件显式定宽——避免宽度收缩导致的贴边与横向拖动。
+ */
 export default function LoginScreen() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
@@ -57,19 +61,21 @@ export default function LoginScreen() {
     }
   };
 
-  const inputStyle = { color: theme.text, borderColor: theme.backgroundSelected };
+  const canSubmit = username.trim().length > 0 && password.length >= 6;
 
   return (
     <KeyboardAvoidingView
-      style={[
-        styles.sheet,
-        { backgroundColor: theme.background, paddingTop: insets.top + Spacing.three },
-      ]}
+      style={[styles.sheet, { backgroundColor: theme.background }]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <View style={styles.header}>
+      {/* 头部：关闭 + 标题 */}
+      <View style={[styles.header, { paddingTop: insets.top + Spacing.two }]}>
         <Pressable onPress={() => router.back()} hitSlop={10} accessibilityLabel="关闭">
-          <AppIcon name="close-circle" size={26} color={theme.textSecondary} />
+          <SymbolView
+            name={{ ios: 'xmark.circle.fill', android: 'cancel', web: 'cancel' }}
+            size={26}
+            tintColor={theme.textSecondary}
+          />
         </Pressable>
         <ThemedText type="subtitle" style={styles.title}>
           {mode === 'login' ? '欢迎回来' : '加入 PetSense'}
@@ -78,32 +84,35 @@ export default function LoginScreen() {
       </View>
 
       <ScrollView
-        contentContainerStyle={[styles.form, { paddingBottom: insets.bottom + Spacing.five }]}
+        contentContainerStyle={[styles.form, { paddingBottom: insets.bottom + Spacing.six }]}
+        keyboardShouldPersistTaps="handled"
       >
+        {/* 分段控件 */}
         <View style={[styles.segment, { backgroundColor: theme.backgroundSelected }]}>
-          {(['login', 'register'] as const).map((item) => (
-            <Pressable
-              key={item}
-              onPress={() => {
-                setMode(item);
-                setError(null);
-              }}
-            >
-              <View
-                style={[
-                  styles.segmentItem,
-                  mode === item && { backgroundColor: theme.background, elevation: 2 },
-                ]}
+          {(['login', 'register'] as const).map((item) => {
+            const selected = mode === item;
+            return (
+              <Pressable
+                key={item}
+                style={styles.segmentItemWrap}
+                onPress={() => {
+                  setMode(item);
+                  setError(null);
+                }}
               >
-                <ThemedText
-                  type="smallBold"
-                  style={mode === item ? { color: theme.tint } : undefined}
+                <View
+                  style={[
+                    styles.segmentItem,
+                    selected && { backgroundColor: theme.background, boxShadow: Shadows.chip },
+                  ]}
                 >
-                  {item === 'login' ? '登录' : '注册'}
-                </ThemedText>
-              </View>
-            </Pressable>
-          ))}
+                  <ThemedText type="smallBold" style={selected ? { color: theme.tint } : undefined}>
+                    {item === 'login' ? '登录' : '注册'}
+                  </ThemedText>
+                </View>
+              </Pressable>
+            );
+          })}
         </View>
 
         <TextInput
@@ -112,7 +121,7 @@ export default function LoginScreen() {
           placeholder="账号（2–20 位中文 / 字母 / 数字 / 下划线）"
           placeholderTextColor={theme.textSecondary}
           autoCapitalize="none"
-          style={[styles.field, inputStyle]}
+          style={[styles.field, { color: theme.text, borderColor: theme.backgroundSelected }]}
         />
         {mode === 'register' && (
           <>
@@ -122,18 +131,33 @@ export default function LoginScreen() {
               placeholder="昵称（默认同账号）"
               placeholderTextColor={theme.textSecondary}
               maxLength={20}
-              style={[styles.field, inputStyle]}
+              style={[styles.field, { color: theme.text, borderColor: theme.backgroundSelected }]}
             />
             <View style={styles.emojiRow}>
-              {USER_EMOJIS.map((emoji) => (
-                <Pressable
-                  key={emoji}
-                  onPress={() => setAvatarEmoji(emoji)}
-                  style={[styles.emojiCell, avatarEmoji === emoji && { borderColor: theme.tint }]}
-                >
-                  <ThemedText style={{ fontSize: 22 }}>{emoji}</ThemedText>
-                </Pressable>
-              ))}
+              <ThemedText type="small" themeColor="textSecondary">
+                头像
+              </ThemedText>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.emojiList}
+              >
+                {USER_EMOJIS.map((emoji) => (
+                  <Pressable
+                    key={emoji}
+                    onPress={() => setAvatarEmoji(emoji)}
+                    style={[
+                      styles.emojiCell,
+                      avatarEmoji === emoji && {
+                        borderColor: theme.tint,
+                        backgroundColor: theme.tintBackground,
+                      },
+                    ]}
+                  >
+                    <ThemedText style={{ fontSize: 20 }}>{emoji}</ThemedText>
+                  </Pressable>
+                ))}
+              </ScrollView>
             </View>
           </>
         )}
@@ -143,23 +167,22 @@ export default function LoginScreen() {
           placeholder="密码（6–72 位）"
           placeholderTextColor={theme.textSecondary}
           secureTextEntry
-          style={[styles.field, inputStyle]}
+          style={[styles.field, { color: theme.text, borderColor: theme.backgroundSelected }]}
         />
 
-        {error && (
+        {error ? (
           <ThemedText type="small" style={{ color: theme.danger }}>
             {error}
           </ThemedText>
-        )}
+        ) : null}
 
         <Pressable
           onPress={submit}
-          disabled={busy || !username.trim() || password.length < 6}
+          disabled={busy || !canSubmit}
           style={({ pressed }) => [
             styles.submit,
             {
-              backgroundColor:
-                username.trim() && password.length >= 6 ? theme.tint : theme.backgroundSelected,
+              backgroundColor: canSubmit ? theme.tint : theme.backgroundSelected,
             },
             pressed && { opacity: 0.85 },
           ]}
@@ -169,9 +192,7 @@ export default function LoginScreen() {
           ) : (
             <ThemedText
               type="smallBold"
-              style={{
-                color: username.trim() && password.length >= 6 ? '#ffffff' : theme.textSecondary,
-              }}
+              style={{ color: canSubmit ? '#ffffff' : theme.textSecondary }}
             >
               {mode === 'login' ? '登录' : '注册并登录'}
             </ThemedText>
@@ -183,42 +204,73 @@ export default function LoginScreen() {
 }
 
 const styles = StyleSheet.create({
-  sheet: { flex: 1, alignItems: 'center' },
+  sheet: {
+    flex: 1,
+  },
   header: {
-    width: '100%',
-    maxWidth: MaxContentWidth,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: Spacing.four,
-    paddingBottom: Spacing.three,
+    paddingHorizontal: Spacing.three,
+    paddingBottom: Spacing.two,
   },
-  title: { fontSize: 22 },
+  title: { fontSize: 20 },
+
   form: {
     width: '100%',
-    maxWidth: MaxContentWidth,
+    maxWidth: 640,
+    alignSelf: 'center',
     paddingHorizontal: Spacing.four,
+    paddingVertical: Spacing.three,
     gap: Spacing.three,
   },
-  segment: { flexDirection: 'row', borderRadius: 14, padding: 3, alignSelf: 'center' },
-  segmentItem: { borderRadius: 11, paddingHorizontal: Spacing.four, paddingVertical: 6 },
+  segment: {
+    flexDirection: 'row',
+    borderRadius: 14,
+    padding: 3,
+    alignSelf: 'center',
+  },
+  segmentItemWrap: {
+    minWidth: 96,
+  },
+  segmentItem: {
+    alignItems: 'center',
+    borderRadius: 11,
+    paddingVertical: 7,
+    paddingHorizontal: Spacing.three,
+  },
   field: {
+    width: '100%',
     borderWidth: 1,
     borderRadius: 14,
     paddingHorizontal: Spacing.three,
-    paddingVertical: 10,
-    fontSize: 14,
+    paddingVertical: 12,
+    fontSize: 15,
   },
-  emojiRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two },
+  emojiRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  emojiList: {
+    gap: Spacing.two,
+  },
   emojiCell: {
-    width: 48,
-    height: 48,
-    borderRadius: 13,
+    width: 42,
+    height: 42,
+    borderRadius: 12,
     borderWidth: 1.5,
     borderColor: 'transparent',
-    backgroundColor: 'rgba(148, 131, 111, 0.10)',
+    backgroundColor: 'rgba(148,131,111,0.10)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  submit: { borderRadius: 16, alignItems: 'center', paddingVertical: 12, marginTop: Spacing.one },
+  submit: {
+    width: '100%',
+    borderRadius: 16,
+    alignItems: 'center',
+    paddingVertical: 14,
+    marginTop: Spacing.one,
+  },
 });
