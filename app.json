@@ -3,6 +3,8 @@
     "name": "PetSense",
     "slug": "petsense_app",
     "version": "1.0.0",
+    "owner": "yangenhui",
+    "runtimeVersion": "exposdk:57.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "petsenseapp",
@@ -45,6 +47,15 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "b390999e-ff9a-44f8-9028-05691e764f80"
+      }
+    },
+    "updates": {
+      "url": "https://u.expo.dev/b390999e-ff9a-44f8-9028-05691e764f80"
     }
   }
 }
