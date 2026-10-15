@@ -3,8 +3,14 @@
  * 全部经腾讯云后端 /api/app/petgif/* 代理，API key 只存服务端。
  */
 
-import { request } from '@/services/api';
+import { ApiError, loadToken, request } from '@/services/api';
+import { API_BASE_URL } from '@/config';
 import type { PetgifPet } from '@/types/social';
+
+async function buildAuthHeaders(): Promise<Record<string, string>> {
+  const token = await loadToken();
+  return token ? { 'X-Petsense-Session': token } : {};
+}
 
 export type { PetgifPet } from '@/types/social';
 
@@ -32,11 +38,11 @@ export function shareDiaryPost(input: {
   return request('/petgif/diary-post', { method: 'POST', body: input });
 }
 
-/** 上传宠物照片生成专属数字形象（返回 petgifId，需轮询状态） */
-export function createPetgifPet(input: {
+/** 上传宠物照片生成专属数字形象（同步版：阻塞至角色卡就绪，约 1 分钟） */
+export async function createPetgifPetSync(input: {
   image: { uri: string; name: string; type: string };
   name: string;
-}): Promise<{ id: string; status?: string }> {
+}): Promise<{ petgifId: string; characterCardUrl?: string | null }> {
   const data = new FormData();
   data.append('photo', {
     uri: input.image.uri,
@@ -44,7 +50,32 @@ export function createPetgifPet(input: {
     type: input.image.type,
   } as unknown as string);
   data.append('name', input.name);
-  return request('/petgif/pets', { method: 'POST', form: data });
+  // 后端最长阻塞 150s，客户端给 200s 余量
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 200_000);
+  try {
+    const response = await fetch(`${API_BASE_URL}/api/app/petgif/pets/sync`, {
+      method: 'POST',
+      headers: await buildAuthHeaders(),
+      body: data,
+      signal: controller.signal,
+    });
+    const payload = (await response.json()) as {
+      success: boolean;
+      petgifId?: string;
+      message?: string;
+      pet?: PetgifPet;
+    };
+    if (!response.ok && response.status !== 202) {
+      throw new ApiError(payload.message ?? `生成失败（${response.status}）`, response.status);
+    }
+    if (!payload.petgifId) {
+      throw new ApiError(payload.message ?? '生成失败', 0);
+    }
+    return { petgifId: payload.petgifId, characterCardUrl: payload.pet?.characterCardUrl ?? null };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 /** 绑定 PetGIF 形象到宠物档案 */

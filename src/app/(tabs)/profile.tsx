@@ -1,7 +1,9 @@
 import { AppIcon } from '@/components/ui/icon';
+import { Image } from 'expo-image';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 
+import { CharacterCardModal } from '@/components/dashboard/character-card-modal';
 import { FollowListModal } from '@/components/social/follow-list-modal';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -11,7 +13,7 @@ import { ThemedView } from '@/components/themed-view';
 import { BottomTabInset, MaxContentWidth, Shadows, Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
-import { fetchUserProfile } from '@/services/api';
+import { absoluteUrl, fetchUserProfile } from '@/services/api';
 import type { UserProfile } from '@/types/social';
 
 /** 我的页：用户卡 + 三格统计 + 宠物列表（含电量/在线）+ 设备诊断入口。 */
@@ -22,6 +24,7 @@ export default function ProfileScreen() {
   const { user, loading, logout } = useAuth();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [followKind, setFollowKind] = useState<'followers' | 'following' | null>(null);
+  const [cardFor, setCardFor] = useState<{ id: number; name: string } | null>(null);
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -125,7 +128,15 @@ export default function ProfileScreen() {
         {(profile?.pets ?? []).map((pet) => (
           <ThemedView key={pet.id} type="backgroundElement" style={styles.petCard}>
             <View style={[styles.petAvatar, { backgroundColor: theme.tintBackground }]}>
-              <ThemedText style={{ fontSize: 26 }}>{pet.avatar_emoji}</ThemedText>
+              {pet.avatarImageUrl ? (
+                <Image
+                  source={{ uri: absoluteUrl(pet.avatarImageUrl) }}
+                  style={styles.petAvatarImage}
+                  contentFit="cover"
+                />
+              ) : (
+                <ThemedText style={{ fontSize: 26 }}>{pet.avatar_emoji}</ThemedText>
+              )}
             </View>
             <View style={styles.petTexts}>
               <ThemedText type="smallBold" style={styles.petName}>
@@ -135,6 +146,14 @@ export default function ProfileScreen() {
                 {pet.breed || '宠物'} · {pet.device_id || '未绑定设备'}
               </ThemedText>
             </View>
+            <Pressable
+              onPress={() => setCardFor({ id: pet.id, name: pet.name })}
+              hitSlop={6}
+              accessibilityLabel={`为${pet.name}生成 AI 形象`}
+              style={styles.aiButton}
+            >
+              <AppIcon name="auto-fix" size={17} color={theme.tint} />
+            </Pressable>
             {pet.batteryPercent != null ? (
               <View style={styles.petBattery}>
                 <View
@@ -150,6 +169,14 @@ export default function ProfileScreen() {
             ) : null}
           </ThemedView>
         ))}
+
+        <CharacterCardModal
+          visible={cardFor !== null}
+          petId={cardFor?.id ?? 0}
+          petName={cardFor?.name ?? ''}
+          onClose={() => setCardFor(null)}
+          onBound={() => void load()}
+        />
 
         <FollowListModal
           visible={followKind !== null && profile !== null}
@@ -268,12 +295,15 @@ const styles = StyleSheet.create({
     padding: Spacing.three,
     boxShadow: Shadows.card,
   },
+  petAvatarImage: { width: '100%', height: '100%' },
+  aiButton: { padding: Spacing.one },
   petAvatar: {
     width: 52,
     height: 52,
     borderRadius: 26,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
   petTexts: { gap: 2, flexShrink: 1 },
   petName: { fontSize: 16 },

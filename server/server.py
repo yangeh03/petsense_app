@@ -1937,11 +1937,11 @@ def app_petgif_pet_route(petgif_id):
 @app.route('/api/app/petgif/pets', methods=['POST'])
 def app_petgif_create():
     """转发宠物照片 → 外部生成专属数字形象（异步，App 轮询状态）。"""
-    photo = request.files.get('photo')
+    photo = request.files.get('photo') or request.files.get('image')
     name = str(request.form.get('name', '')).strip()[:20] or 'my pet'
     if photo is None:
         return {'success': False, 'message': '请选择一张宠物照片'}, 400
-    forward_files = {'photo': (photo.filename or 'photo.jpg', photo.stream, photo.mimetype or 'image/jpeg')}
+    forward_files = {'image': (photo.filename or 'photo.jpg', photo.stream, photo.mimetype or 'image/jpeg')}
     forward = {'name': name}
     response = requests.post(PETGIF_BASE + '/pets', headers=petgif_headers(), files=forward_files, data=forward, timeout=60)
     try:
@@ -1949,6 +1949,55 @@ def app_petgif_create():
     except ValueError:
         payload = {'error': f'HTTP {response.status_code}'}
     return payload, (200 if response.ok else 502)
+
+
+@app.route('/api/app/petgif/pets/sync', methods=['POST'])
+def app_petgif_create_sync():
+    """同步生成：上传宠物照片 → 阻塞轮询直到角色卡就绪（默认最长 150 秒）→ 返回完整形象。
+
+    与异步版 /petgif/pets 的区别：App 端一次请求拿到结果，无需自行轮询。
+    超时未完成时返回 202 + petgifId，可用异步接口继续查。
+    """
+    photo = request.files.get('photo') or request.files.get('image')
+    name = str(request.form.get('name', '')).strip()[:20] or 'my pet'
+    timeout_sec = max(30, min(240, int(request.form.get('timeout', 150) or 150)))
+    if photo is None:
+        return {'success': False, 'message': '请选择一张宠物照片'}, 400
+    forward_files = {'image': (photo.filename or 'photo.jpg', photo.stream, photo.mimetype or 'image/jpeg')}
+    response = requests.post(PETGIF_BASE + '/pets', headers=petgif_headers(),
+                             files=forward_files, data={'name': name}, timeout=60)
+    try:
+        created = response.json()
+    except ValueError:
+        return {'success': False, 'message': f'生成任务创建失败（HTTP {response.status_code}）'}, 502
+    petgif_id = (created.get('pet') or {}).get('id') or created.get('id') or created.get('petId')
+    if not petgif_id:
+        return {'success': False, 'message': created.get('error') or '生成任务创建失败'}, 502
+
+    deadline = time.time() + timeout_sec
+    pet = {}
+    while time.time() < deadline:
+        try:
+            pet = petgif_get(f'/pets/{petgif_id}')
+        except requests.RequestException:
+            pet = {}
+        stage_pet = pet.get('pet') or pet
+        status = str(stage_pet.get('status', ''))
+        if status in ('complete', 'failed', 'error'):
+            break
+        if (stage_pet.get('characterCard') or {}).get('publicUrl'):
+            break
+        time.sleep(4)
+
+    stage_pet = pet.get('pet') or pet
+    simplified = petgif_simplify(stage_pet) if stage_pet else None
+    ready = bool(simplified and simplified.get('characterCardUrl'))
+    PETGIF_CACHE['at'] = time.time()
+    PETGIF_CACHE['pets'][petgif_id] = simplified
+    payload = {'success': ready, 'petgifId': petgif_id, 'pet': simplified}
+    if not ready:
+        return payload, 202
+    return payload
 
 
 @app.route('/api/app/petgif/pet/<petgif_id>/diary', methods=['POST'])

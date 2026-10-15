@@ -63,23 +63,10 @@ export function CharacterCardModal({
     if (!image) return;
     setBusy(true);
     try {
-      const { createPetgifPet, fetchPetgifPet } = await import('@/services/petgif');
-      const created = await createPetgifPet({ image, name: petName });
-      setPetgifId(created.id);
-      // 轮询到角色卡就绪（外部生成约 1–2 分钟，最长等 5 分钟）
-      const deadline = Date.now() + 5 * 60_000;
-      while (Date.now() < deadline) {
-        await new Promise<void>((resolve) => setTimeout(resolve, 5000));
-        try {
-          const pet = await fetchPetgifPet(created.id);
-          if (pet.characterCardUrl) {
-            setCardUrl(pet.characterCardUrl);
-            break;
-          }
-        } catch {
-          // 网络抖动等下一轮
-        }
-      }
+      const { createPetgifPetSync } = await import('@/services/petgif');
+      const result = await createPetgifPetSync({ image, name: petName });
+      setPetgifId(result.petgifId);
+      if (result.characterCardUrl) setCardUrl(result.characterCardUrl);
     } catch {
       Alert.alert('生成任务创建失败', '请稍后重试');
     } finally {

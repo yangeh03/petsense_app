@@ -1,5 +1,7 @@
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
+import { SymbolView } from 'expo-symbols';
+import { createPetgifPetSync, bindPetgif, setPetAvatarImage } from '@/services/petgif';
 import { AppIcon } from '@/components/ui/icon';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
@@ -255,30 +257,83 @@ function PetForm() {
   const [breed, setBreed] = useState('');
   const [deviceId, setDeviceId] = useState('');
   const [avatarEmoji, setAvatarEmoji] = useState('🐾');
-  const [sending, setSending] = useState(false);
+  const [photo, setPhoto] = useState<{ uri: string; name: string; type: string } | null>(null);
+  const [stage, setStage] = useState<'idle' | 'creating' | 'generating'>('idle');
   const [error, setError] = useState<string | null>(null);
+  const sending = stage !== 'idle';
+
+  const pickPhoto = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.9,
+      allowsMultipleSelection: false,
+    });
+    const asset = result.assets?.[0];
+    if (asset?.uri) {
+      setPhoto({
+        uri: asset.uri,
+        name: asset.fileName ?? 'pet.jpg',
+        type: asset.mimeType ?? 'image/jpeg',
+      });
+    }
+  };
 
   const submit = async () => {
     if (!name.trim() || sending) return;
-    setSending(true);
     setError(null);
     try {
-      await createPet({
+      // ① 建宠物档案
+      setStage('creating');
+      const created = await createPet({
         name: name.trim(),
         species,
         breed: breed.trim(),
         avatarEmoji,
         deviceId: deviceId.trim(),
       });
+      // ② 有照片：同步生成 AI 形象（约 1 分钟）并绑定为头像
+      if (photo) {
+        setStage('generating');
+        const result = await createPetgifPetSync({ image: photo, name: name.trim() });
+        await bindPetgif(created.pet.id, result.petgifId);
+        if (result.characterCardUrl) {
+          await setPetAvatarImage(created.pet.id, result.characterCardUrl);
+        }
+      }
       router.back();
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : '添加失败，请重试');
-      setSending(false);
+      setStage('idle');
     }
   };
 
   return (
     <ScrollView contentContainerStyle={[styles.form, { paddingBottom: Spacing.five }]}>
+      {/* AI 数字形象（可选）：上传照片，添加时同步生成角色卡 */}
+      <Pressable
+        onPress={pickPhoto}
+        disabled={sending}
+        style={[styles.photoPicker, { borderColor: theme.backgroundSelected }]}
+      >
+        {photo ? (
+          <Image source={{ uri: photo.uri }} style={styles.photoPreview} contentFit="cover" />
+        ) : (
+          <View style={styles.photoEmpty}>
+            <SymbolView
+              name={{ ios: 'camera.aperture', android: 'photo_camera', web: 'photo_camera' }}
+              size={26}
+              tintColor={theme.tint}
+            />
+            <ThemedText type="smallBold" style={{ color: theme.tint }}>
+              上传照片 · 生成 AI 数字形象
+            </ThemedText>
+            <ThemedText type="small" themeColor="textSecondary" style={styles.photoHint}>
+              可选，AI 将为它生成角色卡与 9 种动作
+            </ThemedText>
+          </View>
+        )}
+      </Pressable>
+
       <View style={styles.emojiRow}>
         {PET_EMOJIS.map((emoji) => (
           <Pressable
@@ -436,6 +491,19 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     marginTop: Spacing.one,
   },
+  photoPicker: {
+    height: 150,
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoEmpty: { alignItems: 'center', gap: Spacing.one },
+  photoHint: { fontSize: 11, lineHeight: 15 },
+  photoPreview: { width: '100%', height: '100%' },
+  generatingRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
   emojiRow: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two },
   emojiCell: {
     width: 52,

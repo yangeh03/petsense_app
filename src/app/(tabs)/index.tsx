@@ -23,12 +23,25 @@ import { BottomTabInset, Fonts, MaxContentWidth, Shadows, Spacing } from '@/cons
 import { useAlerts, worstSeverity } from '@/hooks/use-alerts';
 import { useAuth } from '@/hooks/use-auth';
 import { useTelemetry } from '@/hooks/use-telemetry';
+import { usePetAction } from '@/hooks/use-pet-action';
 import { useTheme } from '@/hooks/use-theme';
 import { absoluteUrl, fetchDashboard, fetchPets, fetchTrends } from '@/services/api';
 import type { DashboardData, SocialPet, TrendBucket, TrendPeriod } from '@/types/social';
 import type { SeriesKey } from '@/types/telemetry';
 
 type SymbolName = ComponentProps<typeof SymbolView>['name'];
+
+const ACTION_LABELS: Record<string, string> = {
+  run: '奔跑中',
+  walk: '散步中',
+  stand: '站立',
+  sit: '坐着',
+  lie_down: '趴着',
+  sniff: '嗅闻',
+  jump: '跳跃',
+  eat: '进食',
+  sleep: '睡觉',
+};
 
 function greeting() {
   const hour = new Date().getHours();
@@ -116,6 +129,8 @@ export default function DashboardScreen() {
   const pet = dashboard?.pet ?? null;
   const petName = pet?.name ?? '毛孩子';
   const liveForPet = latest && pet?.device_id && latest.deviceId === pet.device_id ? latest : null;
+  // 动作推断用帧：优先绑定设备，其次任意在线设备（演示宠物也有动作可看）
+  const latestForAction = liveForPet ?? latest;
   const online = liveForPet ? true : (dashboard?.latest?.online ?? false);
 
   // 有效体征：优先实时流（valid 帧），否则回退后端转发的最近有效帧
@@ -129,14 +144,17 @@ export default function DashboardScreen() {
       ? Math.round(liveForPet?.battery?.percent ?? dashboard?.latest?.batteryPercent ?? 0)
       : null;
 
-  // 数字宠物：优先 AI 角色卡头像，其次 PetGIF 行为动图（白天行走 / 夜间睡觉）
+  // 数字宠物：优先 AI 角色卡头像，其次按「实时行为」播放动作 GIF
+  const action = usePetAction(latestForAction);
   const heroGifUri = useMemo(() => {
     const behaviors = dashboard?.petgif?.behaviors;
     if (!behaviors) return null;
-    const hour = new Date().getHours();
-    const key = hour >= 22 || hour < 8 ? 'sleep' : 'walk';
-    return behaviors[key]?.gifUrl ?? null;
-  }, [dashboard?.petgif]);
+    return (
+      behaviors[action]?.gifUrl ??
+      Object.values(behaviors).find((item) => item?.gifUrl)?.gifUrl ??
+      null
+    );
+  }, [dashboard?.petgif, action]);
   const heroAvatarImage = pet?.avatarImageUrl ? absoluteUrl(pet.avatarImageUrl) : null;
 
   const worst = worstSeverity(activeAlerts);
@@ -304,18 +322,18 @@ export default function DashboardScreen() {
                 ]}
               >
                 <View style={[styles.avatarInner, { borderColor: theme.backgroundElement }]}>
-                  {heroAvatarImage ? (
-                    <Image
-                      source={{ uri: heroAvatarImage }}
-                      style={styles.avatarGif}
-                      contentFit="cover"
-                    />
-                  ) : heroGifUri ? (
+                  {heroGifUri ? (
                     <Image
                       source={{ uri: heroGifUri }}
                       style={styles.avatarGif}
                       contentFit="cover"
                       autoplay={true}
+                    />
+                  ) : heroAvatarImage ? (
+                    <Image
+                      source={{ uri: heroAvatarImage }}
+                      style={styles.avatarGif}
+                      contentFit="cover"
                     />
                   ) : (
                     <ThemedText style={styles.avatarEmoji}>{pet.avatar_emoji}</ThemedText>
@@ -334,7 +352,7 @@ export default function DashboardScreen() {
                     ]}
                   />
                   <ThemedText type="smallBold" style={styles.onlineText}>
-                    {online ? 'ONLINE 在线' : 'OFFLINE 离线'}
+                    {online ? `ONLINE · ${ACTION_LABELS[action]}` : 'OFFLINE 离线'}
                   </ThemedText>
                 </View>
               </View>
