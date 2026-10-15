@@ -68,6 +68,9 @@ export default function DashboardScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [diaryVisible, setDiaryVisible] = useState(false);
+  // 板块默认折叠：首屏聚焦 Hero，点标题行展开
+  const [vitalsOpen, setVitalsOpen] = useState(false);
+  const [trendOpen, setTrendOpen] = useState(false);
   const [trendMetric, setTrendMetric] = useState<SeriesKey>('heartRate');
   const [trendPeriod, setTrendPeriod] = useState<TrendPeriod>('all');
   const [trendBuckets, setTrendBuckets] = useState<TrendBucket[]>([]);
@@ -358,14 +361,18 @@ export default function DashboardScreen() {
               </View>
             </View>
 
-            {/* 生命体征主卡 */}
+            {/* 生命体征主卡（默认折叠，标题行展开） */}
             <View
               style={[
                 styles.vitalsCard,
                 { backgroundColor: theme.backgroundElement, boxShadow: Shadows.card },
               ]}
             >
-              <View style={styles.vitalsHead}>
+              <Pressable
+                style={styles.sectionHead}
+                onPress={() => setVitalsOpen((value) => !value)}
+                accessibilityLabel={vitalsOpen ? '收起生命体征' : '展开生命体征'}
+              >
                 <ThemedText style={[styles.vitalsTitle, { fontFamily: Fonts.rounded }]}>
                   生命体征
                 </ThemedText>
@@ -392,187 +399,245 @@ export default function DashboardScreen() {
                     {online ? '实时' : '离线'}
                   </ThemedText>
                 </View>
-              </View>
+                <SymbolView
+                  name={{ ios: 'chevron.down', android: 'expand_more', web: 'expand_more' }}
+                  size={15}
+                  tintColor={theme.textSecondary}
+                  style={{ transform: [{ rotate: vitalsOpen ? '180deg' : '0deg' }] }}
+                />
+              </Pressable>
 
-              <View style={styles.vitalsGrid}>
-                <VitalCell
-                  icon={{ ios: 'heart.fill', android: 'favorite', web: 'favorite' }}
-                  color={theme.danger}
-                  label="心率"
-                  value={fmt(vitals?.heartRate)}
-                  unit="bpm"
-                />
-                <VitalCell
-                  icon={{ ios: 'lungs.fill', android: 'air', web: 'air' }}
-                  color={theme.info}
-                  label="血氧"
-                  value={fmt(vitals?.spo2)}
-                  unit="%"
-                />
-                <VitalCell
-                  icon={{
-                    ios: 'thermometer.medium',
-                    android: 'device_thermostat',
-                    web: 'device_thermostat',
-                  }}
-                  color={theme.warning}
-                  label="体温"
-                  value={fmt(vitals?.bodyTemp, 1)}
-                  unit="℃"
-                />
-                <VitalCell
-                  icon={{ ios: 'wind', android: 'air', web: 'air' }}
-                  color={theme.tint}
-                  label="呼吸"
-                  value={fmt(vitals?.respiration)}
-                  unit="次/分"
-                />
-                <VitalCell
-                  icon={{
-                    ios: 'heart.text.square',
-                    android: 'monitor_heart',
-                    web: 'monitor_heart',
-                  }}
-                  color={theme.online}
-                  label="HRV"
-                  value={fmt(vitals?.hrvSdnn)}
-                  unit="ms"
-                />
-                <VitalCell
-                  icon={{ ios: 'sun.max', android: 'wb_sunny', web: 'wb_sunny' }}
-                  color={theme.textSecondary}
-                  label="环境温度"
-                  value={fmt(vitals?.envTemp, 1)}
-                  unit="℃"
-                />
-              </View>
+              {vitalsOpen ? (
+                <>
+                  <View style={styles.vitalsGrid}>
+                    <VitalCell
+                      icon={{ ios: 'heart.fill', android: 'favorite', web: 'favorite' }}
+                      color={theme.danger}
+                      label="心率"
+                      value={fmt(vitals?.heartRate)}
+                      unit="bpm"
+                    />
+                    <VitalCell
+                      icon={{ ios: 'lungs.fill', android: 'air', web: 'air' }}
+                      color={theme.info}
+                      label="血氧"
+                      value={fmt(vitals?.spo2)}
+                      unit="%"
+                    />
+                    <VitalCell
+                      icon={{
+                        ios: 'thermometer.medium',
+                        android: 'device_thermostat',
+                        web: 'device_thermostat',
+                      }}
+                      color={theme.warning}
+                      label="体温"
+                      value={fmt(vitals?.bodyTemp, 1)}
+                      unit="℃"
+                    />
+                    <VitalCell
+                      icon={{ ios: 'wind', android: 'air', web: 'air' }}
+                      color={theme.tint}
+                      label="呼吸"
+                      value={fmt(vitals?.respiration)}
+                      unit="次/分"
+                    />
+                    <VitalCell
+                      icon={{
+                        ios: 'heart.text.square',
+                        android: 'monitor_heart',
+                        web: 'monitor_heart',
+                      }}
+                      color={theme.online}
+                      label="HRV"
+                      value={fmt(vitals?.hrvSdnn)}
+                      unit="ms"
+                    />
+                    <VitalCell
+                      icon={{ ios: 'sun.max', android: 'wb_sunny', web: 'wb_sunny' }}
+                      color={theme.textSecondary}
+                      label="环境温度"
+                      value={fmt(vitals?.envTemp, 1)}
+                      unit="℃"
+                    />
+                  </View>
 
-              <View style={[styles.miniRow, { borderTopColor: `${theme.textSecondary}1A` }]}>
-                <MiniPill
-                  label="血压"
-                  value={
-                    vitals?.systolic
-                      ? `${Math.round(vitals.systolic)}/${Math.round(vitals.diastolic ?? 0)}`
-                      : '--'
-                  }
-                />
-                <MiniPill label="微循环" value={fmt(vitals?.microCir)} />
-                <MiniPill label="疲劳度" value={fmt(vitals?.fatigue)} />
-                <MiniPill
-                  label="电量"
-                  value={batteryPercent !== null ? `${batteryPercent}%` : '--'}
-                />
-              </View>
+                  <View style={[styles.miniRow, { borderTopColor: `${theme.textSecondary}1A` }]}>
+                    <MiniPill
+                      label="血压"
+                      value={
+                        vitals?.systolic
+                          ? `${Math.round(vitals.systolic)}/${Math.round(vitals.diastolic ?? 0)}`
+                          : '--'
+                      }
+                    />
+                    <MiniPill label="微循环" value={fmt(vitals?.microCir)} />
+                    <MiniPill label="疲劳度" value={fmt(vitals?.fatigue)} />
+                    <MiniPill
+                      label="电量"
+                      value={batteryPercent !== null ? `${batteryPercent}%` : '--'}
+                    />
+                  </View>
+                </>
+              ) : (
+                <ThemedText type="small" themeColor="textSecondary" style={styles.sectionSummary}>
+                  心率 {fmt(vitals?.heartRate)} · 血氧 {fmt(vitals?.spo2)}% · 体温{' '}
+                  {fmt(vitals?.bodyTemp, 1)}℃ · 呼吸 {fmt(vitals?.respiration)}
+                </ThemedText>
+              )}
             </View>
 
-            {/* 趋势统计：时间维度聚合均值 */}
+            {/* 趋势统计（默认折叠，标题行展开） */}
             <View
               style={[
                 styles.trendCard,
                 { backgroundColor: theme.backgroundElement, boxShadow: Shadows.card },
               ]}
             >
-              <View style={styles.trendHead}>
+              <Pressable
+                style={styles.sectionHead}
+                onPress={() => setTrendOpen((value) => !value)}
+                accessibilityLabel={trendOpen ? '收起趋势统计' : '展开趋势统计'}
+              >
                 <ThemedText style={[styles.trendTitle, { fontFamily: Fonts.rounded }]}>
                   趋势统计
                 </ThemedText>
-                <View style={styles.trendSwitch}>
-                  {(Object.keys(TREND_METRICS) as SeriesKey[]).map((key) => {
-                    const selected = key === trendMetric;
-                    return (
-                      <Pressable key={key} onPress={() => setTrendMetric(key)}>
-                        <View
-                          style={[styles.trendChip, selected && { backgroundColor: theme.tint }]}
-                        >
-                          <ThemedText
-                            type="smallBold"
-                            style={[styles.trendChipText, selected && { color: '#ffffff' }]}
-                          >
-                            {TREND_METRICS[key].label}
-                          </ThemedText>
-                        </View>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              </View>
+                <SymbolView
+                  name={{ ios: 'chevron.down', android: 'expand_more', web: 'expand_more' }}
+                  size={15}
+                  tintColor={theme.textSecondary}
+                  style={{ transform: [{ rotate: trendOpen ? '180deg' : '0deg' }] }}
+                />
+              </Pressable>
 
-              <View style={styles.periodRow}>
-                {(
-                  [
-                    ['day', '24小时'],
-                    ['week', '7天'],
-                    ['month', '30天'],
-                    ['all', '全部'],
-                  ] as const
-                ).map(([period, label]) => {
-                  const selected = trendPeriod === period;
-                  return (
-                    <Pressable key={period} onPress={() => setTrendPeriod(period)}>
-                      <View
-                        style={[styles.periodChip, selected && { backgroundColor: theme.tint }]}
+              {trendOpen ? (
+                <>
+                  <View style={styles.trendHeadRow}>
+                    <View style={styles.trendSwitch}>
+                      {(Object.keys(TREND_METRICS) as SeriesKey[]).map((key) => {
+                        const selected = key === trendMetric;
+                        return (
+                          <Pressable key={key} onPress={() => setTrendMetric(key)}>
+                            <View
+                              style={[
+                                styles.trendChip,
+                                selected && { backgroundColor: theme.tint },
+                              ]}
+                            >
+                              <ThemedText
+                                type="smallBold"
+                                style={[styles.trendChipText, selected && { color: '#ffffff' }]}
+                              >
+                                {TREND_METRICS[key].label}
+                              </ThemedText>
+                            </View>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                    <View style={styles.periodRow}>
+                      {(
+                        [
+                          ['day', '24小时'],
+                          ['week', '7天'],
+                          ['month', '30天'],
+                          ['all', '全部'],
+                        ] as const
+                      ).map(([period, label]) => {
+                        const selected = trendPeriod === period;
+                        return (
+                          <Pressable key={period} onPress={() => setTrendPeriod(period)}>
+                            <View
+                              style={[
+                                styles.periodChip,
+                                selected && { backgroundColor: theme.tint },
+                              ]}
+                            >
+                              <ThemedText
+                                type="smallBold"
+                                style={[styles.trendChipText, selected && { color: '#ffffff' }]}
+                              >
+                                {label}
+                              </ThemedText>
+                            </View>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  </View>
+
+                  <View
+                    style={styles.trendChart}
+                    onLayout={(event) => {
+                      const { width } = event.nativeEvent.layout;
+                      if (width > 0 && width !== trendWidth) setTrendWidth(width);
+                    }}
+                  >
+                    {trendLoading ? (
+                      <ActivityIndicator
+                        color={theme.tint}
+                        style={{ height: 150, width: '100%' }}
+                      />
+                    ) : (
+                      trendWidth > 0 && (
+                        <LineChart
+                          points={trendPoints}
+                          color={trend.color}
+                          unit={trend.unit}
+                          decimals={trend.decimals}
+                          width={trendWidth}
+                          height={150}
+                        />
+                      )
+                    )}
+                  </View>
+
+                  {trendPoints.length >= 2 && (
+                    <View style={styles.trendLabels}>
+                      <ThemedText
+                        type="small"
+                        themeColor="textSecondary"
+                        style={styles.trendLabelText}
                       >
-                        <ThemedText
-                          type="smallBold"
-                          style={[styles.trendChipText, selected && { color: '#ffffff' }]}
-                        >
-                          {label}
-                        </ThemedText>
-                      </View>
-                    </Pressable>
-                  );
-                })}
-              </View>
+                        {trendPoints[0].label}
+                      </ThemedText>
+                      <ThemedText
+                        type="small"
+                        themeColor="textSecondary"
+                        style={styles.trendLabelText}
+                      >
+                        {trendPoints[Math.floor(trendPoints.length / 2)].label}
+                      </ThemedText>
+                      <ThemedText
+                        type="small"
+                        themeColor="textSecondary"
+                        style={styles.trendLabelText}
+                      >
+                        {trendPoints[trendPoints.length - 1].label}
+                      </ThemedText>
+                    </View>
+                  )}
 
-              <View
-                style={styles.trendChart}
-                onLayout={(event) => {
-                  const { width } = event.nativeEvent.layout;
-                  if (width > 0 && width !== trendWidth) setTrendWidth(width);
-                }}
-              >
-                {trendLoading ? (
-                  <ActivityIndicator color={theme.tint} style={{ height: 150, width: '100%' }} />
-                ) : (
-                  trendWidth > 0 && (
-                    <LineChart
-                      points={trendPoints}
-                      color={trend.color}
-                      unit={trend.unit}
-                      decimals={trend.decimals}
-                      width={trendWidth}
-                      height={150}
-                    />
-                  )
-                )}
-              </View>
-
-              {trendPoints.length >= 2 && (
-                <View style={styles.trendLabels}>
-                  <ThemedText type="small" themeColor="textSecondary" style={styles.trendLabelText}>
-                    {trendPoints[0].label}
-                  </ThemedText>
-                  <ThemedText type="small" themeColor="textSecondary" style={styles.trendLabelText}>
-                    {trendPoints[Math.floor(trendPoints.length / 2)].label}
-                  </ThemedText>
-                  <ThemedText type="small" themeColor="textSecondary" style={styles.trendLabelText}>
-                    {trendPoints[trendPoints.length - 1].label}
-                  </ThemedText>
-                </View>
-              )}
-
-              {trendAvg !== null && (
-                <View style={styles.summaryRow}>
-                  <SummaryCell label="平均" value={trendAvg.toFixed(trend.decimals)} />
-                  <SummaryCell
-                    label="最低"
-                    value={trendMin !== null ? trendMin.toFixed(trend.decimals) : '--'}
-                  />
-                  <SummaryCell
-                    label="最高"
-                    value={trendMax !== null ? trendMax.toFixed(trend.decimals) : '--'}
-                  />
-                </View>
+                  {trendAvg !== null && (
+                    <View style={styles.summaryRow}>
+                      <SummaryCell label="平均" value={trendAvg.toFixed(trend.decimals)} />
+                      <SummaryCell
+                        label="最低"
+                        value={trendMin !== null ? trendMin.toFixed(trend.decimals) : '--'}
+                      />
+                      <SummaryCell
+                        label="最高"
+                        value={trendMax !== null ? trendMax.toFixed(trend.decimals) : '--'}
+                      />
+                    </View>
+                  )}
+                </>
+              ) : (
+                <ThemedText type="small" themeColor="textSecondary" style={styles.sectionSummary}>
+                  {trendAvg !== null
+                    ? `${trend.label}平均 ${trendAvg.toFixed(trend.decimals)} ${trend.unit} · 最低 ${trendMin?.toFixed(trend.decimals) ?? '--'} · 最高 ${trendMax?.toFixed(trend.decimals) ?? '--'}`
+                    : '暂无统计记录'}
+                </ThemedText>
               )}
             </View>
 
@@ -847,11 +912,12 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 12,
   },
-  vitalsHead: {
+  sectionHead: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    gap: Spacing.two,
   },
+  sectionSummary: { fontSize: 12, lineHeight: 17 },
   vitalsTitle: { fontSize: 18, fontWeight: '700', lineHeight: 24 },
   livePill: {
     flexDirection: 'row',
@@ -908,10 +974,12 @@ const styles = StyleSheet.create({
     padding: 14,
     gap: 10,
   },
-  trendHead: {
+  trendHeadRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: Spacing.two,
   },
   trendTitle: { fontSize: 18, fontWeight: '700', lineHeight: 24 },
   trendSwitch: {
