@@ -8,6 +8,7 @@
 
 import { TELEMETRY_MODE, TELEMETRY_WS_URL } from '@/config';
 import { REPLAY_BATTERY, REPLAY_HEALTH, REPLAY_META } from '@/data/replay-dataset';
+import { getToken } from '@/services/api';
 import type { TelemetryFrame, TelemetryPacket, TelemetryStatus } from '@/types/telemetry';
 
 const SENSOR_TOPIC_PREFIX = 'petsense/sensor/';
@@ -30,9 +31,39 @@ class TelemetryService {
   private replayIndex = 0;
   private watchdogTimer: ReturnType<typeof setInterval> | null = null;
   private lastMessageAt = 0;
+  /** 服务端 4401/未授权帧后置位：停止重连，等登录态变化再 reconnect */
+  private rejectedAuth = false;
 
   getStatus() {
     return this.status;
+  }
+
+  /** 登录/登出后由 auth 层调用：带上新 token 立即重连 */
+  reconnect() {
+    this.rejectedAuth = false;
+    this.retryCount = 0;
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+    const ws = this.ws;
+    this.ws = null;
+    if (ws) {
+      ws.onclose = null;
+      ws.onmessage = null;
+      ws.onopen = null;
+      ws.onerror = null;
+      try {
+        ws.close();
+      } catch {
+        // 已断开也无妨
+      }
+    }
+    if (this.frameListeners.size > 0) {
+      this.connect();
+    } else {
+      this.setStatus('closed');
+    }
   }
 
   subscribeFrame(listener: FrameListener) {
@@ -130,11 +161,19 @@ class TelemetryService {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;
     }
+    const token = getToken();
+    if (!token) {
+      // 未登录：不连接，等登录成功后 auth 层调 reconnect()
+      this.stopWatchdog();
+      this.setStatus('unauthenticated');
+      return;
+    }
     this.setStatus(this.retryCount > 0 ? 'reconnecting' : 'connecting');
     this.lastMessageAt = Date.now();
     this.startWatchdog();
 
-    const ws = new WebSocket(TELEMETRY_WS_URL);
+    // RN 的 WebSocket 发不了自定义 header，token 走 query 参数
+    const ws = new WebSocket(`${TELEMETRY_WS_URL}?token=${encodeURIComponent(token)}`);
     this.ws = ws;
 
     ws.onopen = () => {
@@ -146,13 +185,13 @@ class TelemetryService {
       this.lastMessageAt = Date.now();
       this.handleMessage(event.data);
     };
-    ws.onclose = () => this.handleDisconnect();
+    ws.onclose = (event) => this.handleDisconnect(event);
     ws.onerror = () => {
       // onclose 随后触发，统一在 handleDisconnect 里重连
     };
   }
 
-  private handleDisconnect() {
+  private handleDisconnect(event?: CloseEvent) {
     if (this.ws) {
       this.ws.onopen = null;
       this.ws.onmessage = null;
@@ -161,6 +200,13 @@ class TelemetryService {
       this.ws = null;
     }
     this.stopWatchdog();
+    // 服务端拒绝（4401/未授权帧）：进入未登录态，不再重连
+    if (this.rejectedAuth || event?.code === 4401) {
+      this.rejectedAuth = true;
+      this.retryCount = 0;
+      this.setStatus('unauthenticated');
+      return;
+    }
     if (this.frameListeners.size === 0) {
       this.retryCount = 0;
       this.setStatus('closed');
@@ -201,9 +247,26 @@ class TelemetryService {
   }
 
   private handleMessage(raw: unknown) {
+    // 服务端握手拒绝前会先发一帧 {type:"unauthorized"} 再 close(4401)
+    if (typeof raw === 'string' && raw.includes('"unauthorized"')) {
+      try {
+        const packet = JSON.parse(raw) as { type?: string };
+        if (packet.type === 'unauthorized') {
+          this.rejectedAuth = true;
+          return;
+        }
+      } catch {
+        // 非 JSON，继续走帧解析
+      }
+    }
     const frame = parseTelemetryMessage(raw);
     if (frame) this.frameListeners.forEach((listener) => listener(frame));
   }
+}
+
+/** 登录/登出后重连遥测（auth 层调用，页面不直接用） */
+export function reconnectTelemetry() {
+  telemetryService.reconnect();
 }
 
 export function parseTelemetryMessage(raw: unknown): TelemetryFrame | null {

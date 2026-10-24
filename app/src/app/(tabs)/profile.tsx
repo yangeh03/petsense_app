@@ -4,6 +4,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 
 import { CharacterCardModal } from '@/components/dashboard/character-card-modal';
+import { DeviceCard } from '@/components/device-card';
 import { FollowListModal } from '@/components/social/follow-list-modal';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -115,6 +116,9 @@ export default function ProfileScreen() {
           <StatCell value={profile?.followers ?? 0} label="粉丝" />
           <StatCell value={profile?.following ?? 0} label="关注" />
         </ThemedView>
+
+        {/* 我的设备（认领/解绑项圈） */}
+        <DeviceCard />
 
         {/* 我的宠物 */}
         <View style={styles.sectionHeader}>

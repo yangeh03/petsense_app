@@ -110,7 +110,8 @@ export type TelemetryFrame = {
   action?: TelemetryAction;
 };
 
-export type TelemetryStatus = 'connecting' | 'open' | 'reconnecting' | 'closed' | 'replaying';
+export type TelemetryStatus =
+  'connecting' | 'open' | 'reconnecting' | 'closed' | 'replaying' | 'unauthenticated';
 
 /**
  * 面向 UI 的展示状态：连接状态 × 数据新鲜度归一后的六态。
@@ -122,7 +123,8 @@ export type TelemetryDisplayState =
   | 'connecting'
   | 'reconnecting'
   | 'offline'
-  | 'replaying';
+  | 'replaying'
+  | 'unauthenticated';
 
 /** 单指标时间序列点 */
 export type SeriesPoint = { t: number; v: number };

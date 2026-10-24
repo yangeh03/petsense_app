@@ -22,6 +22,7 @@ const STATUS_LABEL: Record<TelemetryDisplayState, string> = {
   reconnecting: '重连中…',
   offline: '未连接',
   replaying: '回放数据集',
+  unauthenticated: '登录后可查看实时数据',
 };
 
 type MetricConfig = {
@@ -93,7 +94,7 @@ export default function MonitorScreen() {
         <View style={styles.statusRow}>
           <ConnectionDot displayState={displayState} />
           <ThemedText type="small" themeColor="textSecondary">
-            {STATUS_LABEL[displayState]} · {latest?.deviceId ?? 'petsense 设备'}
+            {STATUS_LABEL[displayState]} · {latest?.deviceId ?? '我的设备'}
           </ThemedText>
           {battery && (
             <View style={styles.batteryBox}>

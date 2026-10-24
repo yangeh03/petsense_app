@@ -387,7 +387,7 @@ function PetForm() {
       <TextInput
         value={deviceId}
         onChangeText={setDeviceId}
-        placeholder="项圈设备 ID，如 esp32-001（可选）"
+        placeholder="项圈设备 ID（选填，机身标签可查，填写后自动绑定）"
         placeholderTextColor={theme.textSecondary}
         maxLength={40}
         autoCapitalize="none"

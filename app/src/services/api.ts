@@ -43,6 +43,11 @@ export async function loadToken(): Promise<string | null> {
   return memoryToken;
 }
 
+/** 同步取内存态 token（WS 连接拼 query 参数用；启动早期可能为 null） */
+export function getToken(): string | null {
+  return memoryToken;
+}
+
 export async function saveToken(token: string | null) {
   memoryToken = token;
   try {
@@ -149,6 +154,31 @@ export async function fetchMe(): Promise<AppUser | null> {
 
 export function fetchPets(): Promise<{ pets: SocialPet[] }> {
   return request('/pets');
+}
+
+// ─── 设备（一人一设备，认领即绑定宠物） ───
+
+export interface MyDevice {
+  deviceId: string;
+  name: string;
+  claimedAt: string;
+  lastSeenAt: string | null;
+  petId: number | null;
+  petName: string | null;
+  online: boolean;
+  batteryPercent: number | null;
+}
+
+export function fetchMyDevice(): Promise<{ device: MyDevice | null }> {
+  return request('/device');
+}
+
+export function claimDevice(deviceId: string, name?: string): Promise<{ device: MyDevice }> {
+  return request('/device/claim', { method: 'POST', body: { deviceId, name: name ?? '' } });
+}
+
+export function releaseDevice(deviceId: string): Promise<{ success: boolean }> {
+  return request('/device/release', { method: 'POST', body: { deviceId } });
 }
 
 export function createPet(input: {

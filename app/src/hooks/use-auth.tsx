@@ -18,6 +18,7 @@ import {
   logout as apiLogout,
   register as apiRegister,
 } from '@/services/api';
+import { reconnectTelemetry } from '@/services/telemetry-service';
 import type { AppUser } from '@/types/social';
 
 type AuthContextValue = {
@@ -62,6 +63,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (username: string, password: string) => {
     const data = await apiLogin({ username, password });
     setUser(data.user);
+    // token 已更新，遥测 WS 换新凭证立即重连
+    reconnectTelemetry();
   }, []);
 
   const register = useCallback(
@@ -73,6 +76,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }) => {
       const data = await apiRegister(input);
       setUser(data.user);
+      reconnectTelemetry();
     },
     [],
   );
@@ -80,6 +84,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     await apiLogout();
     setUser(null);
+    reconnectTelemetry();
   }, []);
 
   const value = useMemo(

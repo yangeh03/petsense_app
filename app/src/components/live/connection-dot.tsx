@@ -16,6 +16,7 @@ const COLORS: Record<TelemetryDisplayState, string> = {
   reconnecting: '#E8A13A',
   offline: '#9AA0A6',
   replaying: '#5B8DEF',
+  unauthenticated: '#9AA0A6',
 };
 
 /** 连接状态圆点：有数据流时（streaming / replaying）带呼吸光晕动画。 */

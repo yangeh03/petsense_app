@@ -30,7 +30,7 @@ const CANVAS_ASPECT = 1330 / 1182;
 export default function TrackingScreen() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
-  const { latest } = useTelemetry();
+  const { latest, status } = useTelemetry();
 
   const [isLive, setIsLive] = useState(true);
   const [floor, setFloor] = useState<1 | 2>(1);
@@ -136,6 +136,13 @@ export default function TrackingScreen() {
       contentContainerStyle={styles.contentContainer}
     >
       <ThemedView style={[styles.container, { paddingTop: insets.top + Spacing.two }]}>
+        {status === 'unauthenticated' && (
+          <ThemedView type="backgroundElement" style={styles.loginHint}>
+            <ThemedText type="small" themeColor="textSecondary">
+              登录并绑定项圈后，这里会显示真实的实时定位与体征
+            </ThemedText>
+          </ThemedView>
+        )}
         {/* 地图卡 */}
         <View
           style={[
@@ -539,4 +546,10 @@ const styles = StyleSheet.create({
   },
   summaryMetricValue: { fontSize: 19, fontWeight: '700', lineHeight: 24 },
   summaryMetricSub: { fontSize: 9, lineHeight: 12 },
+  loginHint: {
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
 });
