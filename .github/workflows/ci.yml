@@ -71,6 +71,8 @@ jobs:
       - name: 安装锁定的服务端依赖
         run: python -m pip install -r server/requirements.lock
       - name: Python 语法和隔离测试
+        env:
+          PETSENSE_MQTT_DISABLED: '1'
         run: |
           python -m compileall -q server
           python -m unittest discover -s server/tests -v

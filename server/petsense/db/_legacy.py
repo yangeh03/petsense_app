@@ -1,7 +1,7 @@
-"""SQLite 连接与 schema 初始化（readings 环冲 + App 业务库）。
+"""旧数据访问垫片：仅过渡期使用，Task 11 整体删除。
 
-readings 库沿用旧版全局连接（check_same_thread=False），
-schema 与原 server.py 完全一致，生产数据无需迁移。
+读写旧库文件（data.db / petsense_app.db），内容与原 db.py 完全一致，
+保证未迁移域在过渡期行为不变。
 """
 
 import sqlite3
