@@ -65,6 +65,19 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual((self.root / "petsense" / "__init__.py").read_text(), "old")
         self.assertEqual(self.calls, [])
 
+    def test_model_absent_from_release_reuses_live_copy(self):
+        (self.root / "models").mkdir()
+        (self.root / "models" / "random_forest_1s.joblib").write_text("live-model")
+        (self.release / "server" / "models" / "random_forest_1s.joblib").unlink()
+        activate(self.release, "d" * 40, self.root, self.system, self.command, lambda: None)
+        self.assertEqual((self.root / ".deployed-sha").read_text().strip(), "d" * 40)
+        # 现网模型未被触碰
+        self.assertEqual((self.root / "models" / "random_forest_1s.joblib").read_text(), "live-model")
+        # 根目录没有现网模型时（全新机器），缺模型的包必须报错而不是静默部署
+        (self.root / "models" / "random_forest_1s.joblib").unlink()
+        with self.assertRaises(FileNotFoundError):
+            activate(self.release, "e" * 40, self.root, self.system, self.command, lambda: None)
+
     def test_receiver_rejects_traversal_and_symlinks(self):
         for name, link in (("server/../../escape", False), ("server/link", True)):
             stream = io.BytesIO()

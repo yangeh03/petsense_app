@@ -21,6 +21,8 @@ MANAGED_FILES = (
     "action-dashboard/index.html",
     "requirements.txt", "requirements.lock",
 )
+# 29MB 的动作模型不随发布包传输（跨境带宽扛不住）；发布包缺失时复用现网文件。
+OPTIONAL_FILES = {"models/random_forest_1s.joblib"}
 ROOT = Path("/home/ubuntu/petsense-server")
 SYSTEM = Path("/etc/systemd/system/petsense.service.d")
 
@@ -80,12 +82,17 @@ def activate(release, sha, root=ROOT, system=SYSTEM, run=subprocess.run, health=
     source = release / "server"
     for name in MANAGED_FILES:
         path = source / name
-        if not path.exists() or path.is_symlink():
-            raise FileNotFoundError(f"missing regular release file: {name}")
+        if path.exists() and not path.is_symlink():
+            continue
+        # 可选文件（动作模型）不随包传输时，复用现网已有的一份
+        if name in OPTIONAL_FILES and (root / name).exists():
+            continue
+        raise FileNotFoundError(f"missing regular release file: {name}")
+    deployed = [name for name in MANAGED_FILES if (source / name).exists()]
     backup = release / "previous"
     backup.mkdir()
     existing = []
-    for name in MANAGED_FILES:
+    for name in deployed:
         if (root / name).exists():
             existing.append(name)
             atomic_copy(root / name, backup / name)
@@ -97,7 +104,7 @@ def activate(release, sha, root=ROOT, system=SYSTEM, run=subprocess.run, health=
     old_sha = previous_sha.read_bytes() if previous_sha.exists() else None
     # Every operation that can change the live service is inside the rollback scope.
     try:
-        for name in MANAGED_FILES:
+        for name in deployed:
             atomic_copy(source / name, root / name)
         candidate = release / "systemd.conf"
         candidate.write_text(
@@ -112,7 +119,7 @@ def activate(release, sha, root=ROOT, system=SYSTEM, run=subprocess.run, health=
         marker.write_text(sha + "\n")
         atomic_copy(marker, previous_sha)
     except BaseException:
-        for name in MANAGED_FILES:
+        for name in deployed:
             if name in existing:
                 atomic_copy(backup / name, root / name)
             else:
@@ -153,8 +160,14 @@ def main():
                         "-r", str(release / "server/requirements.lock")], check=True)
         subprocess.run([python, "-m", "unittest", "discover", "-s", "server/tests", "-v"],
                        cwd=release, check=True)
+        # 模型优先用发布包内的；包不含模型（常态）时用现网文件校验加载
+        model = release / "server" / "models" / "random_forest_1s.joblib"
+        if not model.exists():
+            model = ROOT / "models" / "random_forest_1s.joblib"
+            if not model.exists():
+                raise FileNotFoundError("action model missing from both release and live root")
         subprocess.run([python, "-c", "from petsense.actions.classifier import ActionClassifier; "
-                        "ActionClassifier('models/random_forest_1s.joblib')"],
+                        f"ActionClassifier({str(model)!r})"],
                        cwd=release / "server", check=True)
         activate(release, sha)
         print(f"Deployed {sha}", flush=True)
