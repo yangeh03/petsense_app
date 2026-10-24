@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """PetSense 服务端入口（systemd ExecStart 指向这里）。"""
 
-from petsense import config, create_app
+from petsense import config
+from petsense.app import create_app
 
 app = create_app()
 
