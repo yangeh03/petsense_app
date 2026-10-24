@@ -147,7 +147,9 @@ def main():
             raise RuntimeError("collection credential is empty")
         subprocess.run(["python3.12", "-m", "venv", str(release / ".venv")], check=True)
         python = str(release / ".venv/bin/python")
+        # 腾讯云机器默认走 PyPI 官源很慢，固定用腾讯内网镜像安装锁定依赖
         subprocess.run([python, "-m", "pip", "install", "--disable-pip-version-check",
+                        "-i", "https://mirrors.cloud.tencent.com/pypi/simple",
                         "-r", str(release / "server/requirements.lock")], check=True)
         subprocess.run([python, "-m", "unittest", "discover", "-s", "server/tests", "-v"],
                        cwd=release, check=True)
