@@ -842,6 +842,16 @@ fwd = Forwarder()
 
 mqtt_client = mqtt.Client(client_id='petsense-server')
 mqtt_client.username_pw_set(MQTT_USER, MQTT_PASS)
+from collection_api import CollectionStore
+
+def publish_collection_command(device, payload):
+    result = mqtt_client.publish(f'petsense/device/{device}/command', json.dumps(payload, separators=(',', ':')), qos=1, retain=False)
+    return result.rc == mqtt.MQTT_ERR_SUCCESS
+
+_collection_token_file = os.path.join(os.path.expanduser('~'), '.petsense-collection-token')
+collection_store = CollectionStore(os.path.join(APP_DIR, 'collection_data'),
+    open(_collection_token_file).read().strip() if os.path.isfile(_collection_token_file) else '',
+    publish_collection_command)
 ws_clients = set()
 
 def ws_ping_loop():
@@ -876,6 +886,12 @@ def on_connect(client, userdata, flags, rc):
     client.subscribe(MQTT_TOPIC)
 
 def on_message(client, userdata, msg):
+    if msg.topic in ('petsense/sensor/clock_v2', 'petsense/sensor/collection_v2', 'petsense/sensor/collection_status'):
+        try:
+            collection_store.ingest(msg.topic, json.loads(msg.payload))
+        except Exception as error:
+            print(f'[COLLECTION] rejected without ACK: {error}')
+        return
     if msg.topic == 'petsense/sensor/audio_wav':
         summary = json.dumps({'binary_bytes': len(msg.payload), 'kind': 'audio_wav'})
         store(msg.topic, summary)
@@ -1258,6 +1274,7 @@ def save_upload_image(file_storage, prefix):
 
 from flask_sock import Sock
 app = Flask(__name__)
+app.register_blueprint(collection_store.blueprint())
 sock = Sock(app)
 
 @app.route('/api/stream')

@@ -1,0 +1,87 @@
+# PetSense server
+
+Python 3.12. Production service: `petsense.service`, running as `ubuntu` in
+`/home/ubuntu/petsense-server` on Tencent Cloud. The collection module and export
+tool were recovered from that deployment on 2026-10-24 without changing their
+behavior. `requirements.lock` snapshots its virtualenv, while `requirements.txt`
+lists direct dependencies. FFmpeg/FFprobe are required system packages (cloud:
+FFmpeg 6.1.1).
+
+## Collection API
+
+`collection_api.py` handles `clock_v2`, `collection_v2` and `collection_status`
+MQTT topics. It provides `/api/collection/v1` endpoints for sessions, device
+control, data quality, resumable video uploads and manual video/IMU alignment.
+Sensor batches are committed before ACK. Existing `server.py` owns MQTT and
+registers this module as a Flask blueprint.
+
+- Credentials remain outside Git: `~/.petsense-collection-token`,
+  `~/.petsense-mqtt-password`, and the existing PetGIF key.
+- Runtime data stays in `collection_data/collection.sqlite3` and session folders.
+- `export_session.py --session ID --output NEW_DIRECTORY` exports samples and
+  annotations without inventing missing values. Run it from the server directory.
+- Do not treat quality checks as proof of sensor accuracy or visual alignment.
+
+## Local verification
+
+```sh
+python3.12 -m venv /tmp/petsense-server-venv
+/tmp/petsense-server-venv/bin/pip install -r server/requirements.lock
+/tmp/petsense-server-venv/bin/python -m unittest discover -s server/tests -v
+```
+
+Tests use temporary databases and fake MQTT callbacks, never live device commands.
+
+## Automatic deployment
+
+Push to `main`: existing App CI and backend tests run first. If `server/` or the
+CI workflow changed, Actions deploys the exact commit via SSH. App-only changes
+do not restart the server. The CI workflow also supports **Run workflow** on
+`main` to redeploy. Pull requests run checks without deploying.
+
+The `production` environment stores two secrets:
+
+- `TENCENT_DEPLOY_SSH_KEY`: dedicated Ed25519 private key.
+- `TENCENT_DEPLOY_KNOWN_HOSTS`: pinned server host public keys.
+
+The corresponding authorized key has `restrict` and a forced command pointing
+to `/home/ubuntu/.local/lib/petsense-deploy/receive.py`. This key cannot request
+an interactive shell, forwarding, or arbitrary SSH commands. Server bootstrap
+must install that receiver and create `/home/ubuntu/petsense-releases` and the
+ubuntu-writable `/etc/systemd/system/petsense.service.d` directory. Receiver
+changes require explicitly updating the installed copy through an admin session.
+
+The deployment key is still a production code-deployment credential: uploaded
+Python code executes as ubuntu. The forced command limits the SSH interface;
+it is not a sandbox for untrusted code. Only trusted main commits receive it.
+
+Each deployment:
+
+1. Validates and extracts a bounded archive into a unique release directory.
+2. Runs under a transient systemd unit, with a server-side file lock.
+3. Builds an independent virtualenv, runs tests and loads the model before activation.
+4. Backs up only files listed in `deploy/deploy_server.py:MANAGED_FILES`.
+5. Replaces those files in the existing directory and switches the Python
+   interpreter via `90-petsense-deploy.conf`, preserving other unit settings.
+6. Restarts `petsense` and checks stats, classifier availability and collection
+   authentication, including a request using the existing collection token.
+   Records the commit in `.deployed-sha` only on success.
+7. Restores previous managed files and the interpreter if activation fails.
+
+Database, upload, collection, audio, static/dashboard and credential files are
+outside the deployment allowlist. No demo seeding occurs. Rollback restores code
+and interpreter; it does not undo database migrations or data written by a
+running service. Review migrations separately before adding them.
+
+Inspect with an admin SSH session:
+
+```sh
+systemctl status petsense
+cat /home/ubuntu/petsense-server/.deployed-sha
+journalctl -u petsense -n 50
+```
+
+Release directories contain the previous managed files under `previous/` and
+the new virtualenv. Retain the active and prior interpreter directories; do not
+delete them while referenced by the systemd drop-in or rollback backup. This
+pipeline does not yet automatically prune releases or back up runtime databases.

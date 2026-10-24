@@ -1,0 +1,8 @@
+# Direct runtime dependencies; requirements.lock snapshots the recovered cloud environment.
+Flask==3.1.3
+flask-sock==0.7.0
+paho-mqtt==2.1.0
+requests==2.34.2
+numpy==2.5.3
+scikit-learn==1.9.1
+joblib==1.6.0

@@ -5,3 +5,5 @@ ios
 android
 package-lock.json
 firmware/**/build
+# Local-only SSH skill (ignored by Git; contains machine-specific credentials).
+.agents/skills/cloud-ssh/
