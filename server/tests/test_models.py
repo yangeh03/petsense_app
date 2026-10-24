@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 
 from petsense import db
 from petsense.db.models import DailyStat, Pet, Post, PostLike, Reading, User
-from tests.helpers import fresh_db
+from helpers import fresh_db
 
 
 def make_user(session, username='mike'):
