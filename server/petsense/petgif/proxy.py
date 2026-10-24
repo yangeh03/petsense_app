@@ -3,13 +3,15 @@
 import os
 import secrets
 import time
-from datetime import datetime, timezone
 
 import requests
 from flask import Blueprint, request
+from sqlalchemy import select
 
-from petsense import config, db
+from petsense import config
 from petsense.auth.routes import require_app_user
+from petsense.db import session_scope, utc_now
+from petsense.db.models import Pet, Post
 
 bp = Blueprint('petgif', __name__, url_prefix='/api/app/petgif')
 
@@ -266,17 +268,18 @@ def app_petgif_diary_post():
     filename = f'diary_{secrets.token_hex(6)}_{int(time.time())}.png'
     with open(os.path.join(config.UPLOADS_DIR, filename), 'wb') as handle:
         handle.write(response.content)
-    if pet_id:
-        with db.app_connect() as database:
-            owned = database.execute('SELECT 1 FROM pets WHERE id=? AND user_id=?', (pet_id, user['id'])).fetchone()
-        if not owned:
-            pet_id = None
-    created_at = datetime.now(timezone.utc).isoformat()
-    with db.app_connect() as database:
-        post_id = database.execute(
-            'INSERT INTO posts(user_id,pet_id,image_path,caption,location_text,created_at) VALUES(?,?,?,?,?,?)',
-            (user['id'], pet_id, filename, caption or '今天的运动日记 🏃', location, created_at),
-        ).lastrowid
+    with session_scope() as s:
+        if pet_id:
+            owned = s.execute(select(Pet.id).where(Pet.id == pet_id,
+                                                   Pet.user_id == user['id'])).scalar_one_or_none()
+            if not owned:
+                pet_id = None
+        post = Post(user_id=user['id'], pet_id=pet_id, image_path=filename,
+                    caption=caption or '今天的运动日记 🏃', location_text=location,
+                    created_at=utc_now())
+        s.add(post)
+        s.flush()
+        post_id = post.id
     return {'success': True, 'postId': post_id}, 201
 
 

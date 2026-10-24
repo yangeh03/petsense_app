@@ -7,8 +7,10 @@ import time
 from datetime import datetime, timezone, timedelta
 
 from flask import Blueprint, request
+from sqlalchemy import select
 
-from petsense import config, db
+from petsense.db import session_scope, utc_now
+from petsense.db.models import Reading
 from petsense.common import shanghai_now
 
 bp = Blueprint('trends', __name__, url_prefix='/api/app')
@@ -90,19 +92,20 @@ def _daily_trend_buckets(days):
 
 def _hourly_trend_buckets():
     """最近 24 小时逐小时均值（来自 readings 环形缓冲，北京时间）。"""
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-    db.cur.execute(
-        'SELECT payload, received_at FROM readings WHERE topic=? AND received_at>=? ORDER BY id ASC',
-        ('petsense/sensor/esp32-001', cutoff),
-    )
+    cutoff = utc_now() - timedelta(hours=24)
+    with session_scope() as s:
+        rows = s.execute(select(Reading.payload, Reading.received_at)
+                         .where(Reading.topic == 'petsense/sensor/esp32-001',
+                                Reading.received_at >= cutoff)
+                         .order_by(Reading.id.asc())).fetchall()
     per_hour = {}
-    for payload_text, received_at in db.cur.fetchall():
+    for payload_text, received_at in rows:
         try:
             payload = json.loads(payload_text)
             health = payload.get('health') or {}
             if not health.get('valid'):
                 continue
-            dt = datetime.fromisoformat(received_at.replace('Z', '+00:00')) + timedelta(hours=8)
+            dt = received_at + timedelta(hours=8)
             key = dt.strftime('%Y-%m-%d')
             hour_label = dt.strftime('%H时')
             bucket = per_hour.setdefault((key, hour_label), {'hr': [], 'spo2': [], 'temp': []})
