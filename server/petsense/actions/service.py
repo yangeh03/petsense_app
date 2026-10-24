@@ -9,6 +9,7 @@ from sqlalchemy import insert, select
 
 from petsense import config
 from petsense.actions.classifier import ActionClassifier
+from petsense.auth.routes import require_app_user
 from petsense.db import iso_z, session_scope
 from petsense.db.models import ActionPrediction
 
@@ -70,10 +71,14 @@ def enrich_frame_with_action(frame):
     return frame
 
 
-def action_rows(limit=100, device_id=None):
+def action_rows(limit=100, device_id=None, device_ids=None):
     stmt = select(ActionPrediction).order_by(ActionPrediction.id.desc()).limit(limit)
     if device_id:
         stmt = stmt.where(ActionPrediction.device_id == device_id)
+    elif device_ids is not None:
+        if not device_ids:
+            return []
+        stmt = stmt.where(ActionPrediction.device_id.in_(device_ids))
     with session_scope() as s:
         rows = s.execute(stmt).scalars().all()
     return [{
@@ -87,27 +92,39 @@ def action_rows(limit=100, device_id=None):
 
 @bp.route('/status')
 def api_action_status():
-    payload = action_status_payload()
-    payload['latest'] = action_classifier.latest() if action_classifier else None
-    return payload
+    # 部署健康检查依赖本接口（enabled 字段），保持匿名；不再暴露 latest 数据帧
+    return action_status_payload()
 
 
 @bp.route('/latest')
 def api_action_latest():
+    user, error = require_app_user()
+    if error:
+        return error
+    from petsense.telemetry.realtime import device_ids_for_user
+    devices = device_ids_for_user(user['id'])
     device_id = request.args.get('device_id')
+    if device_id and device_id not in devices:
+        return {'data': None}
     latest = action_classifier.latest(device_id) if action_classifier else None
     if not latest:
-        rows = action_rows(1, device_id)
+        rows = action_rows(1, device_id, device_ids=None if device_id else devices)
         latest = rows[0] if rows else None
     return {'data': latest}
 
 
 @bp.route('/history')
 def api_action_history():
+    user, error = require_app_user()
+    if error:
+        return error
+    from petsense.telemetry.realtime import device_ids_for_user
+    devices = device_ids_for_user(user['id'])
     try:
         limit = max(1, min(1000, int(request.args.get('limit', 300))))
     except (TypeError, ValueError):
         limit = 300
-    rows = action_rows(limit, request.args.get('device_id'))
+    rows = action_rows(limit, request.args.get('device_id'),
+                       device_ids=None if request.args.get('device_id') else devices)
     rows.reverse()
     return {'count': len(rows), 'data': rows}

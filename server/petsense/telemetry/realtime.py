@@ -1,4 +1,8 @@
-"""实时分发：WS 客户端集合 + SSE 队列 + 心跳线程 + 查询路由。"""
+"""实时分发：WS 客户端作用域 + SSE 队列 + 心跳线程 + 查询路由。
+
+/ws 鉴权：握手 query 带 token；连接按用户设备集合订阅（认领/解绑即时刷新）。
+SSE 面向内部工具，不做归属过滤（后续任务收口）。
+"""
 
 import json
 import queue
@@ -10,12 +14,26 @@ from flask_sock import Sock
 from sqlalchemy import func, select
 
 from petsense import config
+from petsense.auth.routes import require_app_user, user_for_token
 from petsense.db import iso_z, session_scope
-from petsense.db.models import Reading
+from petsense.db.models import Device, Reading
 
 sock = Sock()
 bp = Blueprint('realtime', __name__)
-ws_clients = set()
+# 连接注册表：ws -> (user_id, 允许设备集合)；设备集合在认领/解绑时重算
+ws_clients = {}
+
+
+def device_ids_for_user(user_id):
+    """用户名下设备集合（归属链：devices.owner → 用户）。"""
+    with session_scope() as s:
+        return set(s.execute(select(Device.device_id)
+                             .where(Device.owner_id == user_id)).scalars().all())
+
+
+def packet_visible(devices, device_id):
+    """设备帧只发归属内连接；system 帧（device_id=None）发全体。"""
+    return device_id is None or device_id in devices
 
 
 class Forwarder:
@@ -51,20 +69,25 @@ fwd = Forwarder()
 def broadcast_packet(packet_str, device_id=None):
     """同一份报文发 SSE 队列与 WS 客户端，清理发送失败的僵尸连接。
 
-    device_id 标记报文归属设备（WS 按连接作用域过滤，T4 实装；None=系统帧发全体）。
-    SSE 面向内部工具，始终全量。
+    device_id 标记报文归属设备，WS 按连接作用域过滤；None=系统帧发全体。
     """
     fwd.broadcast(packet_str)
-    for client in ws_clients.copy():
+    for client, (_, devices) in list(ws_clients.items()):
+        if not packet_visible(devices, device_id):
+            continue
         try:
             client.send(packet_str)
         except Exception:
-            ws_clients.discard(client)
+            ws_clients.pop(client, None)
 
 
 def refresh_scopes():
-    """认领/解绑设备后刷新在线连接的订阅作用域（ws 过滤实装前的占位）。"""
-    return None
+    """认领/解绑设备后为在线连接重算设备作用域（连接个位数，开销可忽略）。"""
+    for client, (user_id, _) in list(ws_clients.items()):
+        try:
+            ws_clients[client] = (user_id, frozenset(device_ids_for_user(user_id)))
+        except Exception:
+            ws_clients.pop(client, None)
 
 
 def start_ws_ping_loop():
@@ -79,7 +102,7 @@ def start_ws_ping_loop():
                 try:
                     client.send(ping)
                 except Exception:
-                    ws_clients.discard(client)
+                    ws_clients.pop(client, None)
     threading.Thread(target=loop, daemon=True, name='ws-ping').start()
 
 
@@ -110,9 +133,18 @@ def sse_stream():
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no', 'Access-Control-Allow-Origin': '*'})
 
 
-@sock.route('/ws')
-def ws_route(ws):
-    ws_clients.add(ws)
+def ws_handler(ws):
+    """WS 会话处理：鉴权 → 注册设备作用域 → 保持接收（flask_sock 装饰后的入口在下方）。"""
+    token = request.args.get('token', '')
+    user = user_for_token(token)
+    if not user:
+        try:
+            ws.send(json.dumps({'type': 'unauthorized'}))
+        except Exception:
+            pass
+        ws.close(status=4401)
+        return
+    ws_clients[ws] = (user['id'], frozenset(device_ids_for_user(user['id'])))
     try:
         while True:
             if ws.receive() is None:
@@ -120,13 +152,23 @@ def ws_route(ws):
     except Exception:
         pass
     finally:
-        ws_clients.discard(ws)
+        ws_clients.pop(ws, None)
+
+
+sock.route('/ws')(ws_handler)  # 装饰器以副作用注册路由（返回 None），保留原函数供测试直调
 
 
 @bp.route('/api/latest-full')
 def api_latest_full():
+    user, error = require_app_user()
+    if error:
+        return error
+    devices = device_ids_for_user(user['id'])
+    if not devices:
+        return {'count': 0, 'data': []}
     with session_scope() as s:
         rows = s.execute(select(Reading.topic, Reading.payload, Reading.received_at)
+                         .where(Reading.device_id.in_(devices))
                          .order_by(Reading.id.desc()).limit(200)).fetchall()
     data = []
     for topic, payload_text, received_at in rows:

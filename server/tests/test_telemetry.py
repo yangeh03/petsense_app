@@ -86,11 +86,20 @@ class TelemetryTests(unittest.TestCase):
         self.assertLessEqual(count, 10)
 
     def test_latest_full_shape_unchanged(self):
-        mqtt_ingest.store('petsense/sensor/x', '{"heartRate": 88}')
-        payload = make_realtime_app().get('/api/latest-full').get_json()
+        from petsense.db.models import AuthSession
+        import hashlib, secrets
+        from datetime import timedelta
+        uid = seed_user_with_device('viewer', 'x-dev')
+        token = secrets.token_urlsafe(16)
+        with db.session_scope() as s:
+            s.add(AuthSession(token_hash=hashlib.sha256(token.encode()).hexdigest(),
+                              user_id=uid, expires_at=db.utc_now() + timedelta(days=1)))
+        mqtt_ingest.store('petsense/sensor/x-dev', '{"heartRate": 88}', 'x-dev')
+        payload = make_realtime_app().get('/api/latest-full',
+                                          headers={'X-Petsense-Session': token}).get_json()
         self.assertEqual(payload['count'], 1)
         row = payload['data'][0]
-        self.assertEqual(row['topic'], 'petsense/sensor/x')
+        self.assertEqual(row['topic'], 'petsense/sensor/x-dev')
         self.assertEqual(row['payload'], {'heartRate': 88})
         self.assertRegex(row['received_at'], r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$')
 

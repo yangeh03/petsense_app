@@ -21,8 +21,8 @@ def password_digest(password, salt_hex):
     return hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), bytes.fromhex(salt_hex), 180000).hex()
 
 
-def app_user_from_request():
-    token = request.headers.get(config.APP_TOKEN_HEADER, '')
+def user_for_token(token):
+    """会话 token → 用户（id/username/display_name/avatar_emoji）；无效或过期返回 None。"""
     if not token:
         return None
     token_hash = hashlib.sha256(token.encode()).hexdigest()
@@ -34,6 +34,10 @@ def app_user_from_request():
         ).fetchone()
         return {'id': row.id, 'username': row.username,
                 'display_name': row.display_name, 'avatar_emoji': row.avatar_emoji} if row else None
+
+
+def app_user_from_request():
+    return user_for_token(request.headers.get(config.APP_TOKEN_HEADER, ''))
 
 
 def require_app_user():
