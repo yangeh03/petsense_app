@@ -68,7 +68,7 @@ App 连 /ws?token → 服务器：token→用户→其设备集合 → 只推该
 - `readings`：`+ device_id String(64) NULL` + 复合索引 `(device_id, received_at)`；存量回填 `substr(topic, 17)`（双方言通用）；`topic` 列保留（广播原样转发）
 - `pets`：部分唯一索引 `uq_pets_device_id ON pets(device_id) WHERE device_id != ''`（DB 级兜底一设备一宠物）
 - **一人一宠物**：API 层强制（`POST /pets` 已有宠物 → 409"每个账号支持一只宠物档案"），不加 DB 约束（避免存量多宠物卡死迁移）
-- **认领回填**：`INSERT INTO devices SELECT DISTINCT device_id, user_id FROM pets WHERE device_id != ''`；若多用户绑过同一 device_id，**user_id 最小者赢**，败者的 `pets.device_id` 置空并打印日志（确定性，不炸迁移）
+- **存量回填：不做**（生产库已知为空）。如存在少量历史 readings，其 `device_id` 为 NULL，归属查询自然排除；设备归属由用户在 App 内认领建立
 - 新实验 manifest 记录 `device_id` 字段（旧 manifest 从 `device_topic` 尾段解析）
 
 ## 5. 设备 API（`/api/app`，全部 `require_app_user`）
@@ -143,7 +143,7 @@ App 连 /ws?token → 服务器：token→用户→其设备集合 → 只推该
 **新增测试**：
 
 - 设备域：认领/幂等/409/释放级联清绑定/一人一宠物 409/带 deviceId 建宠自动认领
-- 迁移：0002 空库升降级；回填正确性（含"两用户绑同设备最小 user_id 赢 + 败者清空"）
+- 迁移：0002 空库升降级；0001→0002 升级链路正确
 - WS：`user_for_token`、作用域计算、帧可见性（抽纯函数）；握手 4401
 - 管道：双设备帧各自入库 device_id 正确、stats 各归各的宠物、控制命令发到各自 topic
 - 命令端点：未登录 401、未绑设备 400、per-device 状态隔离
@@ -155,7 +155,7 @@ App 连 /ws?token → 服务器：token→用户→其设备集合 → 只推该
 2. 认领/解绑后已连接页面订阅范围即时变化
 3. 命令接口未登录 401；App 端配对/解绑/空态交互可用
 4. `grep -rn 'esp32-001' server/petsense/` 零命中（firmware/ 不计）
-5. 生产部署后 esp32-001 自动归属现有绑定用户（迁移回填）
+5. 生产部署后用户在 App 内认领 esp32-001 即恢复实时数据
 6. 服务端单测全绿 + App 三门禁（lint/typecheck/format）全绿
 7. 部署健康检查不受影响（`/api/stats`、`/api/action/status` 保持匿名可用）
 
