@@ -56,10 +56,10 @@ class PetsTests(unittest.TestCase):
         headers = self.register_and_header()
         bad = self.client.post('/api/app/pets', headers=headers, json={'name': ''})
         self.assertEqual(bad.status_code, 400)
-        good = self.client.post('/api/app/pets', headers=headers,
-                                json={'name': 'Nick', 'species': 'cat', 'deviceId': 'esp32-002'})
-        self.assertEqual(good.status_code, 201)
-        self.assertEqual(good.get_json()['pet']['name'], 'Nick')
+        # 一户一宠：setUp 已为该用户建过宠物，第二只被拒
+        second = self.client.post('/api/app/pets', headers=headers,
+                                  json={'name': 'Nick', 'species': 'cat', 'deviceId': 'esp32-002'})
+        self.assertEqual(second.status_code, 409)
 
     def test_dashboard_merges_telemetry(self):
         headers = self.register_and_header()

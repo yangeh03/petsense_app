@@ -58,6 +58,11 @@ def broadcast_packet(packet_str):
             ws_clients.discard(client)
 
 
+def refresh_scopes():
+    """认领/解绑设备后刷新在线连接的订阅作用域（ws 过滤实装前的占位）。"""
+    return None
+
+
 def start_ws_ping_loop():
     """应用层心跳：让客户端能检测半死连接，同时清理发送失败的僵尸 socket。"""
     def loop():

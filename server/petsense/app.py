@@ -12,6 +12,7 @@ from flask import Flask, request
 from petsense import config, db
 from petsense.actions import service as actions_service
 from petsense.auth import routes as auth_routes
+from petsense.devices import routes as devices_routes
 from petsense.experiments import recorder as experiments_recorder
 from petsense.petgif import proxy as petgif_proxy
 from petsense.pets import routes as pets_routes
@@ -44,6 +45,7 @@ def create_app(start_background=True):
     app.register_blueprint(experiments_recorder.bp)
     app.register_blueprint(auth_routes.bp)
     app.register_blueprint(pets_routes.bp)
+    app.register_blueprint(devices_routes.bp)
     app.register_blueprint(social_routes.bp)
     app.register_blueprint(petgif_proxy.bp)
     app.register_blueprint(trends_routes.bp)

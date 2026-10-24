@@ -10,8 +10,10 @@ class Reading(Base):
     topic = Column(String(255), nullable=False)
     payload = Column(Text, nullable=False)
     received_at = Column(UTCDatetime, nullable=False)
+    device_id = Column(String(64), nullable=True)
     __table_args__ = (
         Index('ix_readings_topic_received', 'topic', 'received_at'),
+        Index('ix_readings_device_received', 'device_id', 'received_at'),
     )
 
 

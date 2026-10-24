@@ -1,6 +1,5 @@
 """宠物档案 / 仪表盘聚合 / UWB 快照路由。"""
 
-import json
 import time
 
 import requests
@@ -11,46 +10,17 @@ from petsense import config, stats
 from petsense.auth.routes import require_app_user
 from petsense.common import shanghai_now
 from petsense.db import iso_z, session_scope, utc_now
-from petsense.db.models import DailyStat, Pet, Reading
+from petsense.db.models import DailyStat, Pet
+from petsense.devices.routes import DEVICE_ID_PATTERN, claim_device
 from petsense.petgif.proxy import app_petgif_pet
+from petsense.telemetry.status import latest_telemetry
 
 bp = Blueprint('pets', __name__, url_prefix='/api/app')
 
 
 def pet_latest_telemetry(device_id):
-    if not device_id:
-        return None
-    with session_scope() as s:
-        rows = s.execute(select(Reading.payload, Reading.received_at)
-                         .where(Reading.topic == f'petsense/sensor/{device_id}')
-                         .order_by(Reading.id.desc()).limit(5)).fetchall()
-    for payload_text, received_at in rows:
-        try:
-            payload = json.loads(payload_text)
-        except (TypeError, ValueError):
-            continue
-        if not isinstance(payload, dict):
-            continue
-        health = payload.get('health') or {}
-        battery = payload.get('battery') or {}
-        age = time.time() - received_at.timestamp()
-        return {
-            'heartRate': health.get('heartRate') or 0,
-            'spo2': health.get('spo2') or 0,
-            'bodyTemp': health.get('bodyTemp') or 0,
-            'envTemp': health.get('envTemp') or 0,
-            'respiration': health.get('respiration') or 0,
-            'hrvSdnn': health.get('hrvSdnn') or 0,
-            'microCir': health.get('microCir') or 0,
-            'fatigue': health.get('fatigue') or 0,
-            'systolic': health.get('systolic') or 0,
-            'diastolic': health.get('diastolic') or 0,
-            'valid': bool(health.get('valid')),
-            'batteryPercent': round(battery.get('percent') or 0),
-            'online': age < config.DEVICE_ONLINE_TIMEOUT_S,
-            'receivedAt': iso_z(received_at),
-        }
-    return None
+    # social/user 页依赖此名；实现迁至 telemetry.status（多设备管道共用）
+    return latest_telemetry(device_id)
 
 
 def pet_today_stats(pet_id):
@@ -120,12 +90,23 @@ def app_pets():
         return {'success': False, 'message': '请给宠物起个 20 字以内的名字'}, 400
     if species not in ('dog', 'cat', 'rabbit'):
         return {'success': False, 'message': '物种仅支持 dog / cat / rabbit'}, 400
+    if device_id and not DEVICE_ID_PATTERN.fullmatch(device_id):
+        return {'success': False, 'message': '设备 ID 需为 1—40 位字母、数字、下划线或连字符'}, 400
     with session_scope() as s:
+        if s.execute(select(Pet.id).where(Pet.user_id == user['id'])).scalar_one_or_none():
+            return {'success': False, 'message': '每个账号支持一只宠物档案'}, 409
+        if device_id:
+            _, _, claim_error = claim_device(s, user['id'], device_id)
+            if claim_error:
+                return {'success': False, 'message': claim_error[0]}, claim_error[1]
         pet = Pet(user_id=user['id'], name=name, species=species, breed=breed,
                   avatar_emoji=avatar_emoji, device_id=device_id, created_at=utc_now())
         s.add(pet)
         s.flush()
         pet_id = pet.id
+    if device_id:
+        from petsense.telemetry import realtime
+        realtime.refresh_scopes()
     return {'success': True, 'pet': {'id': pet_id, 'name': name}}, 201
 
 
