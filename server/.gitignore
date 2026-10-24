@@ -8,7 +8,6 @@ audio_files/
 cloud_data/
 dashboard.html
 static/
-anzuo-static/
 collection_data/
 *.sqlite3
 *.sqlite3-wal

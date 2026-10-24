@@ -1,18 +1,29 @@
 # PetSense server
 
 Python 3.12. Production service: `petsense.service`, running as `ubuntu` in
-`/home/ubuntu/petsense-server` on Tencent Cloud. The collection module and export
-tool were recovered from that deployment on 2026-10-24 without changing their
-behavior. `requirements.lock` snapshots its virtualenv, while `requirements.txt`
-lists direct dependencies. FFmpeg/FFprobe are required system packages (cloud:
-FFmpeg 6.1.1).
+`/home/ubuntu/petsense-server` on Tencent Cloud. The code lives in the
+`petsense/` package (entry point `wsgi.py`); runtime data (databases,
+uploads, audio, experiment folders) stays at the install root, unchanged from
+the previous single-file layout. `requirements.lock` snapshots its virtualenv,
+while `requirements.txt` lists direct dependencies. FFmpeg/FFprobe are
+required system packages (cloud: FFmpeg 6.1.1).
+
+## Package layout
+
+- `petsense/telemetry/` — MQTT ingest, WS/SSE fanout, WAV reassembly, device control routes
+- `petsense/actions/` — random-forest action classifier and its routes
+- `petsense/collection/` — versioned collection storage (moved verbatim from `collection_api.py`)
+- `petsense/experiments/` — cloud_data experiment recording
+- `petsense/auth/`, `petsense/pets/`, `petsense/social/`, `petsense/petgif/`, `petsense/trends/` — App REST API by domain
+- `petsense/web/` — internal dashboard static pages and `/uploads` serving
 
 ## Collection API
 
-`collection_api.py` handles `clock_v2`, `collection_v2` and `collection_status`
-MQTT topics. It provides `/api/collection/v1` endpoints for sessions, device
-control, data quality, resumable video uploads and manual video/IMU alignment.
-Sensor batches are committed before ACK. Existing `server.py` owns MQTT and
+`petsense/collection/api.py` handles `clock_v2`, `collection_v2` and
+`collection_status` MQTT topics. It provides `/api/collection/v1` endpoints
+for sessions, device control, data quality, resumable video uploads and manual
+video/IMU alignment. Sensor batches are committed before ACK. The MQTT client
+module (`petsense/telemetry/mqtt_ingest.py`) owns the shared client and
 registers this module as a Flask blueprint.
 
 - Credentials remain outside Git: `~/.petsense-collection-token`,

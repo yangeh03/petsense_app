@@ -9,7 +9,7 @@ from unittest.mock import patch
 from flask import Flask
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from collection_api import CollectionStore
+from petsense.collection.api import CollectionStore
 
 
 class CollectionTests(unittest.TestCase):

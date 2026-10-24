@@ -70,7 +70,7 @@ jobs:
           python -m unittest discover -s server/tests -v
       - name: 验证动作模型可加载
         working-directory: server
-        run: python -c "from action_classifier import ActionClassifier; ActionClassifier('models/random_forest_1s.joblib')"
+        run: python -c "from petsense.actions.classifier import ActionClassifier; ActionClassifier('models/random_forest_1s.joblib')"
       - name: 检测服务端变更
         id: changes
         env:

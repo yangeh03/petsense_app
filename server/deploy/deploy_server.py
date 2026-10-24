@@ -1,4 +1,9 @@
-"""Deploy an allowlisted release without replacing production data directories."""
+"""Deploy an allowlisted release without replacing production data directories.
+
+Managed paths may be files or directories (the petsense/ package). Directory
+swaps are staged as ``.deploy-pending`` siblings and renamed into place; the
+previous tree is captured under ``previous/`` for rollback.
+"""
 import fcntl
 import json
 import os
@@ -11,8 +16,9 @@ import urllib.error
 import urllib.request
 
 MANAGED_FILES = (
-    "server.py", "collection_api.py", "export_session.py", "action_classifier.py",
-    "action-dashboard/index.html", "models/random_forest_1s.joblib",
+    "petsense", "wsgi.py",
+    "models/random_forest_1s.joblib",
+    "action-dashboard/index.html",
     "requirements.txt", "requirements.lock",
 )
 ROOT = Path("/home/ubuntu/petsense-server")
@@ -21,6 +27,15 @@ SYSTEM = Path("/etc/systemd/system/petsense.service.d")
 
 def atomic_copy(source, target):
     target.parent.mkdir(parents=True, exist_ok=True)
+    if source.is_dir():
+        temporary = target.with_name(target.name + ".deploy-pending")
+        if temporary.exists():
+            shutil.rmtree(temporary)
+        shutil.copytree(source, temporary)
+        if target.exists():
+            shutil.rmtree(target)
+        os.replace(temporary, target)
+        return
     temporary = target.with_name(target.name + ".deploy-pending")
     shutil.copy2(source, temporary)
     os.replace(temporary, target)
@@ -65,7 +80,7 @@ def activate(release, sha, root=ROOT, system=SYSTEM, run=subprocess.run, health=
     source = release / "server"
     for name in MANAGED_FILES:
         path = source / name
-        if not path.is_file() or path.is_symlink():
+        if not path.exists() or path.is_symlink():
             raise FileNotFoundError(f"missing regular release file: {name}")
     backup = release / "previous"
     backup.mkdir()
@@ -87,7 +102,7 @@ def activate(release, sha, root=ROOT, system=SYSTEM, run=subprocess.run, health=
         candidate = release / "systemd.conf"
         candidate.write_text(
             "[Service]\nExecStart=\n"
-            f"ExecStart={release}/.venv/bin/python {root}/server.py\n"
+            f"ExecStart={release}/.venv/bin/python {root}/wsgi.py\n"
         )
         atomic_copy(candidate, dropin)
         run(["sudo", "systemctl", "daemon-reload"], check=True)
@@ -101,7 +116,11 @@ def activate(release, sha, root=ROOT, system=SYSTEM, run=subprocess.run, health=
             if name in existing:
                 atomic_copy(backup / name, root / name)
             else:
-                (root / name).unlink(missing_ok=True)
+                target = root / name
+                if target.is_dir():
+                    shutil.rmtree(target, ignore_errors=True)
+                else:
+                    target.unlink(missing_ok=True)
         if had_dropin:
             atomic_copy(backup / "systemd.conf", dropin)
         else:
@@ -132,7 +151,7 @@ def main():
                         "-r", str(release / "server/requirements.lock")], check=True)
         subprocess.run([python, "-m", "unittest", "discover", "-s", "server/tests", "-v"],
                        cwd=release, check=True)
-        subprocess.run([python, "-c", "from action_classifier import ActionClassifier; "
+        subprocess.run([python, "-c", "from petsense.actions.classifier import ActionClassifier; "
                         "ActionClassifier('models/random_forest_1s.joblib')"],
                        cwd=release / "server", check=True)
         activate(release, sha)
