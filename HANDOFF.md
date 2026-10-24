@@ -52,11 +52,10 @@ ESP32 项圈 ──MQTT──▶ 腾讯云 Mosquitto(81.71.71.31:1883)
 │   ├── petgif.ts              # AI 形象服务（同步生成/日记/绑定，走 buildUploadForm）
 │   ├── form-upload.ts         # ★ 跨端上传组装（Web=Blob / 原生={uri}，全部上传必须走它）
 │   └── uwb-position.ts        # 三边定位（高斯-牛顿，当前无真实数据源）
-├── src/hooks/  use-telemetry / use-alerts(共享单例) / use-auth(含DEV自动登录) / use-pet-action(行为推断) / use-uwb
+├── src/hooks/  use-telemetry / use-alerts(共享单例) / use-auth / use-pet-action(行为推断) / use-uwb
 ├── server/
-│   ├── server.py              # ★ 后端全量（腾讯云部署版，2300+ 行）
-│   ├── seed-demo.py           # 演示数据种子（幂等，主账号 petsense/123456）
-│   └── .gitignore             # *.db/uploads/cloud_data 等运行时产物不入库
+│   ├── petsense/               # ★ 后端按域分包（入口 wsgi.py，CI 自动部署腾讯云）
+│   └── .gitignore              # *.db/uploads/cloud_data 等运行时产物不入库
 ├── firmware/petsense_esp32/   # ESP32 固件源码 + secrets 模板
 ├── tools/telemetry-check.cjs  # ★ 自检：解析器+告警状态机+UWB定位+Form上传 四组用例
 └── doc/                       # 论文/proposal（gitignore，本地文档）
@@ -66,11 +65,9 @@ ESP32 项圈 ──MQTT──▶ 腾讯云 Mosquitto(81.71.71.31:1883)
 
 | 项             | 值                                                                                           |
 | -------------- | -------------------------------------------------------------------------------------------- |
-| **演示主账号** | `petsense / 123456`（Max 爸爸，全套内容，App 自动登录用）                                    |
-| 管理员（空）   | `petadmin / petsense`                                                                        |
-| 配角（发帖用） | `seed_doudou` / `seed_niangao` / `seed_xueqiu`，均 `demo123`                                 |
+| 预置账号       | 无（App 注册创建；演示数据种子脚本已移除）                                                   |
 | 腾讯云         | `ssh ubuntu@81.71.71.31`（密码在 ~/.zcode/skills/cloud-ssh；sudo 提权）                      |
-| 后端目录       | `/home/ubuntu/petsense-server/`（server.py + 两个 sqlite 库 + uploads/）                     |
+| 后端目录       | `/home/ubuntu/petsense-server/`（petsense/ 包 + petsense.db + uploads/）                     |
 | MQTT           | 同机 Mosquitto:1883，账号 `petsense-device`，密码文件 `/home/ubuntu/.petsense-mqtt-password` |
 | PetGIF key     | `/home/ubuntu/.petgif-api-key`（本地 `~/.petgif-api-key`，勿入库）                           |
 | App 遥测 WS    | `ws://81.71.71.31/ws`（`src/config.ts`）                                                     |
@@ -84,7 +81,7 @@ cd server && PYTHONPATH=/tmp/petsense-backend/stubs PETSENSE_MQTT_DISABLED=1 pyt
 # 桩文件 /tmp/petsense-backend/stubs/flask_sock.py 是空实现（REST 调试不需要真 WS）——tmp 会丢，必要时报错重建
 
 # Metro（App 端 env 是打包期注入，改 env 必须重启 Metro）
-EXPO_PUBLIC_API_BASE_URL=http://81.71.71.31 EXPO_PUBLIC_DEV_AUTOLOGIN=1 npx expo start
+EXPO_PUBLIC_API_BASE_URL=http://81.71.71.31 npx expo start
 #   回放模式加 EXPO_PUBLIC_TELEMETRY_MODE=replay（离线演示真实实验数据集）
 #   指向本地后端用 http://192.168.1.5:8080（查本机 IP：ipconfig getifaddr en0）
 
@@ -120,8 +117,7 @@ npx expo export --platform web        # 构建验证
 sshpass -p '...' ssh ubuntu@81.71.71.31 'cp /home/ubuntu/petsense-server/server.py /home/ubuntu/petsense-server/server.py.backup-$(date +%m%d%H%M)'
 sshpass -p '...' scp server/server.py ubuntu@81.71.71.31:/tmp/s.py && \
 sshpass -p '...' ssh ubuntu@81.71.71.31 'mv /tmp/s.py /home/ubuntu/petsense-server/server.py && sudo systemctl restart petsense && systemctl is-active petsense'
-curl -s http://81.71.71.31/api/stats   # 冒烟
-# 2. 演示数据（幂等）：python3 server/seed-demo.py http://81.71.71.31
+curl -s http://81.71.71.31/api/stats   # 冒烟（部署已由 CI 自动完成）
 ```
 
 ## 七、踩坑记录（下个 session 必读，勿重蹈覆辙）

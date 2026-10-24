@@ -42,18 +42,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     fetchMe()
-      .then(async (me) => {
+      .then((me) => {
         if (cancelled) return;
         if (me) {
           setUser(me);
-        } else if (__DEV__ && process.env.EXPO_PUBLIC_DEV_AUTOLOGIN === '1') {
-          // 开发联调便利：env 开启时用演示账号自动登录（生产打包不含该 env）
-          try {
-            const data = await apiLogin({ username: 'petsense', password: '123456' });
-            if (!cancelled) setUser(data.user);
-          } catch {
-            // 演示账号不存在或后端不可达时保持未登录
-          }
         }
       })
       .catch(() => {
