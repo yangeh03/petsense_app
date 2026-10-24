@@ -18,7 +18,6 @@ MQTT_PASS = ('' if os.environ.get('PETSENSE_MQTT_DISABLED') == '1'
              else open(os.environ.get('PETSENSE_MQTT_PASSWORD_FILE',
                                       os.path.expanduser('~/.petsense-mqtt-password'))).read().strip())
 MQTT_TOPIC = 'petsense/sensor/#'
-CONTROL_TOPIC = 'petsense/device/esp32-001/command'
 HTTP_PORT = 8080
 
 STATIC_DIR = str(RUNTIME_ROOT / 'static')

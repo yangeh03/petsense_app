@@ -204,15 +204,17 @@ collection_store = CollectionStore(config.COLLECTION_ROOT,
     publish_collection_command)
 
 
-def publish_control_command(command):
+def publish_control_command(device_id, command):
+    """发布设备控制命令到 petsense/device/<device_id>/command（qos1，失败重连一次）。"""
+    topic = f'petsense/device/{device_id}/command'
     payload = json.dumps(command, separators=(',', ':'))
-    info = mqtt_client.publish(config.CONTROL_TOPIC, payload, qos=1, retain=False)
+    info = mqtt_client.publish(topic, payload, qos=1, retain=False)
     if info.rc != mqtt.MQTT_ERR_SUCCESS:
         try:
             mqtt_client.reconnect()
             import time
             time.sleep(0.2)
-            info = mqtt_client.publish(config.CONTROL_TOPIC, payload, qos=1, retain=False)
+            info = mqtt_client.publish(topic, payload, qos=1, retain=False)
         except Exception as e:
             print(f'[MQTT] control publish reconnect failed: {e}')
     return payload, info.rc == mqtt.MQTT_ERR_SUCCESS

@@ -12,8 +12,43 @@ from petsense import config
 
 bp = Blueprint('experiments', __name__)
 
-experiment_state = {'active': False, 'experimentId': None, 'started_at': None, 'stopped_at': None, 'folder': None}
-event_state = {'active': False, 'eventId': None, 'label': None, 'segmentId': None, 'started_at': None, 'stopped_at': None, 'folder': None}
+# 实验状态 per-device（一人一设备；无活跃实验时惰性建默认槽）
+experiment_states = {}
+event_states = {}
+
+
+def experiment_state_for(device_id):
+    return experiment_states.setdefault(device_id, {
+        'active': False, 'experimentId': None, 'started_at': None, 'stopped_at': None, 'folder': None})
+
+
+def event_state_for(device_id):
+    return event_states.setdefault(device_id, {
+        'active': False, 'eventId': None, 'label': None, 'segmentId': None,
+        'started_at': None, 'stopped_at': None, 'folder': None})
+
+
+def manifest_device(folder):
+    """从实验目录的 manifest 提取设备 ID（新 manifest 记 device_id，旧从 topic 解析）。"""
+    for name in ('server_manifest.json', 'manifest.json'):
+        path = os.path.join(folder, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding='utf-8') as handle:
+                data = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        if data.get('device_id'):
+            return data['device_id']
+        for key in ('control_topic', 'device_topic'):
+            value = data.get(key)
+            if not isinstance(value, str):
+                continue
+            for prefix in ('petsense/device/', 'petsense/sensor/'):
+                if value.startswith(prefix):
+                    return value[len(prefix):].split('/')[0]
+    return None
 
 EVENT_LABELS = [
     ('01_standing', '站立'),
@@ -73,6 +108,8 @@ def append_cloud_experiment_frame(topic, payload_dict, received_at, device_id=No
     if not device_id or not isinstance(payload_dict, dict):
         return
 
+    experiment_state = experiment_state_for(device_id)
+    event_state = event_state_for(device_id)
     exp = payload_dict.get('experiment') or {}
     exp_id = exp.get('id') or experiment_state.get('experimentId')
     active = bool(exp.get('active')) or bool(experiment_state.get('active'))
@@ -155,11 +192,20 @@ def append_cloud_experiment_frame(topic, payload_dict, received_at, device_id=No
 
 @bp.route('/api/experiment-files')
 def api_experiment_files():
+    from flask import request
+    from petsense.auth.routes import require_app_user
+    from petsense.telemetry.realtime import device_ids_for_user
+    user, error = require_app_user()
+    if error:
+        return error
+    devices = device_ids_for_user(user['id'])
     experiments = []
     if os.path.isdir(config.CLOUD_DATA_DIR):
         for exp_id in sorted(os.listdir(config.CLOUD_DATA_DIR), reverse=True):
             folder = os.path.join(config.CLOUD_DATA_DIR, exp_id)
             if not os.path.isdir(folder):
+                continue
+            if manifest_device(folder) not in devices:
                 continue
             files = []
             for root, _, names in os.walk(folder):
