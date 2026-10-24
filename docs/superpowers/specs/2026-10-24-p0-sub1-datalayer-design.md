@@ -135,7 +135,7 @@ server/
 - `0001_initial` 一次建全部表：`alembic revision --autogenerate` 生成 + 人工对照本 spec §5 校对
 - 旧库文件（`data.db`、`petsense_app.db`、`collection_data/collection.sqlite3`）**原地保留不动**（天然备份），稳定一个发布周期后手动清理
 - 部署管道零变化：`create_app` 启动幂等升级；deploy 脚本不改
-- `seed-demo.py` 重写为 ORM 写入（dev 工具，生产不执行）
+- `seed-demo.py` 经 HTTP API 写入（不直接访问 DB），无需改动（dev 工具，生产不执行）
 - `requirements.txt`：+`SQLAlchemy>=2.0`、`alembic`
 - CI：现有 server 测试 job 不变；**新增 postgres service job**——同一套 unittest 以 `PETSENSE_DATABASE_URL=postgresql://...` 再跑一遍
 
