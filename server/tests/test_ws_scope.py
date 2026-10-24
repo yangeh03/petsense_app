@@ -74,12 +74,13 @@ class WsScopeTests(unittest.TestCase):
         fake = FakeWS()
         with self.app.test_request_context('/ws'):
             realtime.ws_handler(fake)
-        self.assertEqual(fake.closed, 4401)
+        self.assertEqual(fake.closed, 1000)  # 无参 close（本版不支持自定义码）
+        self.assertIn('unauthorized', fake.sent[0])  # 客户端以此帧识别未登录
         self.assertEqual(len(realtime.ws_clients), 0)
         fake2 = FakeWS()
         with self.app.test_request_context('/ws?token=not-a-token'):
             realtime.ws_handler(fake2)
-        self.assertEqual(fake2.closed, 4401)
+        self.assertEqual(fake2.closed, 1000)
 
     def test_handshake_registers_scope_and_broadcast_filters(self):
         alice_token = seed_user_with_device('alice', 'dev-a')

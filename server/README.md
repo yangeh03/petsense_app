@@ -17,6 +17,19 @@ required system packages (cloud: FFmpeg 6.1.1).
 - `petsense/auth/`, `petsense/pets/`, `petsense/social/`, `petsense/petgif/`, `petsense/trends/` — App REST API by domain
 - `petsense/web/` — internal dashboard static pages and `/uploads` serving
 
+## Device ownership
+
+`devices` table maps each collar to its owner (one user = one device = one pet;
+enforced by a unique owner index plus API rules). Users claim a device by its
+ID (`POST /api/app/device/claim`, printed on the collar/packaging) — claiming
+auto-binds the device to the user's pet; releasing frees it for another
+account. MQTT topics stay per-device (`petsense/sensor/<id>`); ingest stores
+`readings.device_id` and `/ws` only forwards frames for devices owned by the
+connecting user. Device control commands require login and target the caller's
+own device (`petsense/device/<id>/command`). Note: `/api/stats` and
+`/api/action/status` (enabled only) stay anonymous — the deploy health check
+depends on them.
+
 ## Collection API
 
 `petsense/collection/api.py` handles `clock_v2`, `collection_v2` and

@@ -139,10 +139,11 @@ def ws_handler(ws):
     user = user_for_token(token)
     if not user:
         try:
+            # 客户端以此帧识别未登录态；本版 simple_websocket 的 close() 不接受自定义码
             ws.send(json.dumps({'type': 'unauthorized'}))
         except Exception:
             pass
-        ws.close(status=4401)
+        ws.close()
         return
     ws_clients[ws] = (user['id'], frozenset(device_ids_for_user(user['id'])))
     try:
