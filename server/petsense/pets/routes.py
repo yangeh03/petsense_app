@@ -203,5 +203,9 @@ def app_uwb_latest():
     if not stats.last_uwb_frame:
         return {'success': True, 'frame': None}
     payload = stats.last_uwb_frame['payload']
+    received_at = stats.last_uwb_frame['received_at']
+    if not isinstance(received_at, str):
+        from petsense.db import iso_z
+        received_at = iso_z(received_at)
     return {'success': True, 'frame': {'deviceId': payload.get('deviceId'), 'tsMs': payload.get('ts_ms'),
-            'uwb': payload.get('uwb'), 'receivedAt': stats.last_uwb_frame['received_at']}}
+            'uwb': payload.get('uwb'), 'receivedAt': received_at}}

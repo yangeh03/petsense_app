@@ -9,25 +9,35 @@ import os
 from datetime import datetime, timezone
 
 import paho.mqtt.client as mqtt
+from sqlalchemy import delete, func, insert, select
 
-from petsense import config, db, stats
+from petsense import config, stats
 from petsense.actions import service as actions_service
 from petsense.collection.api import CollectionStore
+from petsense.db import iso_z, session_scope, utc_now
+from petsense.db.models import Reading
 from petsense.experiments import recorder
 from petsense.telemetry import audio as audio_module
 from petsense.telemetry.realtime import broadcast_packet
 
+_trim_counter = 0
+
 
 def store(topic, payload):
-    ts = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
-    db.cur.execute('INSERT INTO readings (topic, payload, received_at) VALUES (?,?,?)', (topic, payload, ts))
-    db.conn.commit()
-    db.cur.execute('SELECT COUNT(*) FROM readings')
-    cnt = db.cur.fetchone()[0]
-    if cnt > config.MAX_HISTORY:
-        db.cur.execute('DELETE FROM readings WHERE id IN (SELECT id FROM readings ORDER BY id ASC LIMIT ?)', (cnt - config.MAX_HISTORY,))
-        db.conn.commit()
-    return ts
+    """落库一条原始帧，返回 aware UTC 时间（调用方用 iso_z() 序列化）。"""
+    received = utc_now()
+    with session_scope() as s:
+        s.execute(insert(Reading).values(topic=topic, payload=payload, received_at=received))
+    global _trim_counter
+    _trim_counter += 1
+    if _trim_counter >= 500:
+        # 水位裁剪：均摊 O(1)，语义等价于"保留最近 MAX_HISTORY 条"（容差 ≤500）
+        _trim_counter = 0
+        with session_scope() as s:
+            max_id = s.execute(select(func.max(Reading.id))).scalar_one()
+            if max_id is not None:
+                s.execute(delete(Reading).where(Reading.id <= max_id - config.MAX_HISTORY))
+    return received
 
 
 def list_at(value, index, default=None):
@@ -212,14 +222,14 @@ def on_message(client, userdata, msg):
                 actions_service.enrich_frame_with_action(frame)
                 frame_payload = json.dumps(frame, ensure_ascii=False, separators=(',', ':'))
                 ts = store(msg.topic, frame_payload)
-                packet = json.dumps({'topic': msg.topic, 'payload': frame_payload, 'received_at': ts})
+                packet = json.dumps({'topic': msg.topic, 'payload': frame_payload, 'received_at': iso_z(ts)})
                 try:
-                    recorder.append_cloud_experiment_frame(msg.topic, frame, ts)
+                    recorder.append_cloud_experiment_frame(msg.topic, frame, iso_z(ts))
                 except Exception as e:
                     print(f'[EXPERIMENT] Cloud batch frame write error: {e}')
                 try:
                     stats.update_daily_stats(frame.get('deviceId'), frame, ts)
-                    stats.remember_uwb(frame, ts)
+                    stats.remember_uwb(frame, iso_z(ts))
                 except Exception as e:
                     print(f'[APP-STATS] batch hook error: {e}')
                 broadcast_packet(packet)
@@ -230,15 +240,15 @@ def on_message(client, userdata, msg):
         payload_str = json.dumps(payload_dict, ensure_ascii=False, separators=(',', ':'))
 
     ts = store(msg.topic, payload_str)
-    packet = json.dumps({'topic': msg.topic, 'payload': payload_str, 'received_at': ts})
+    packet = json.dumps({'topic': msg.topic, 'payload': payload_str, 'received_at': iso_z(ts)})
     if msg.topic == 'petsense/sensor/esp32-001' and isinstance(payload_dict, dict):
         try:
-            recorder.append_cloud_experiment_frame(msg.topic, payload_dict, ts)
+            recorder.append_cloud_experiment_frame(msg.topic, payload_dict, iso_z(ts))
         except Exception as e:
             print(f'[EXPERIMENT] Cloud frame write error: {e}')
         try:
             stats.update_daily_stats(payload_dict.get('deviceId'), payload_dict, ts)
-            stats.remember_uwb(payload_dict, ts)
+            stats.remember_uwb(payload_dict, iso_z(ts))
         except Exception as e:
             print(f'[APP-STATS] frame hook error: {e}')
 

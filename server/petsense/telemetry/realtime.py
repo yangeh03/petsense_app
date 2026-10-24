@@ -7,8 +7,11 @@ import time
 
 from flask import Blueprint, Response, request
 from flask_sock import Sock
+from sqlalchemy import func, select
 
-from petsense import config, db
+from petsense import config
+from petsense.db import iso_z, session_scope
+from petsense.db.models import Reading
 
 sock = Sock()
 bp = Blueprint('realtime', __name__)
@@ -74,13 +77,14 @@ def start_ws_ping_loop():
 @bp.route('/api/stream')
 def sse_stream():
     q = fwd.add_sse()
+    with session_scope() as s:
+        row = s.execute(select(Reading.topic, Reading.payload, Reading.received_at)
+                        .order_by(Reading.id.desc()).limit(1)).fetchone()
 
     def generate():
         try:
-            db.cur.execute('SELECT topic, payload, received_at FROM readings ORDER BY id DESC LIMIT 1')
-            row = db.cur.fetchone()
             if row:
-                yield f'data: {json.dumps({"topic": row[0], "payload": row[1], "received_at": row[2]})}\n\n'
+                yield f'data: {json.dumps({"topic": row.topic, "payload": row.payload, "received_at": iso_z(row.received_at)})}\n\n'
             else:
                 yield ': waiting\n\n'
             while True:
@@ -112,20 +116,22 @@ def ws_route(ws):
 
 @bp.route('/api/latest-full')
 def api_latest_full():
-    db.cur.execute('SELECT topic, payload, received_at FROM readings ORDER BY id DESC LIMIT 200')
-    rows = []
-    for r in db.cur.fetchall():
+    with session_scope() as s:
+        rows = s.execute(select(Reading.topic, Reading.payload, Reading.received_at)
+                         .order_by(Reading.id.desc()).limit(200)).fetchall()
+    data = []
+    for topic, payload_text, received_at in rows:
         try:
-            p = json.loads(r[1])
+            payload = json.loads(payload_text)
         except Exception:
-            p = {'_raw': r[1]}
-        rows.append({'topic': r[0], 'payload': p, 'received_at': r[2]})
-    return {'count': len(rows), 'data': rows}
+            payload = {'_raw': payload_text}
+        data.append({'topic': topic, 'payload': payload, 'received_at': iso_z(received_at)})
+    return {'count': len(data), 'data': data}
 
 
 @bp.route('/api/stats')
 def api_stats():
-    db.cur.execute('SELECT COUNT(*), MAX(received_at) FROM readings')
-    cnt, latest = db.cur.fetchone()
-    return {'total': cnt, 'latest': latest,
+    with session_scope() as s:
+        total, latest = s.execute(select(func.count(), func.max(Reading.received_at))).fetchone()
+    return {'total': total, 'latest': iso_z(latest) if latest else None,
             'sse_clients': len(fwd.sse_queues), 'ws_clients': len(ws_clients)}

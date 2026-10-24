@@ -2,12 +2,15 @@
 
 import json
 import os
-import sqlite3
+from datetime import datetime
 
 from flask import Blueprint, request
+from sqlalchemy import insert, select
 
-from petsense import config, db
+from petsense import config
 from petsense.actions.classifier import ActionClassifier
+from petsense.db import iso_z, session_scope
+from petsense.db.models import ActionPrediction
 
 bp = Blueprint('actions', __name__, url_prefix='/api/action')
 
@@ -37,15 +40,20 @@ def action_status_payload():
 
 
 def persist_action_prediction(prediction):
-    db.cur.execute('''INSERT INTO action_predictions (
-        device_id, event_id, label, action_key, confidence, scores_json, sample_count,
-        window_start_ts_ms, window_end_ts_ms, model_version, predicted_at
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)''', (
-        prediction['deviceId'], prediction['eventId'], prediction['label'], prediction['actionKey'],
-        prediction['confidence'], json.dumps(prediction['scores'], ensure_ascii=False), prediction['sampleCount'],
-        prediction['windowStartTsMs'], prediction['windowEndTsMs'], prediction['modelVersion'], prediction['predictedAt'],
-    ))
-    db.conn.commit()
+    predicted_at = prediction['predictedAt']
+    if isinstance(predicted_at, str):
+        predicted_at = datetime.fromisoformat(predicted_at.replace('Z', '+00:00'))
+    with session_scope() as s:
+        s.execute(insert(ActionPrediction).values(
+            device_id=prediction['deviceId'], event_id=prediction['eventId'],
+            label=prediction['label'], action_key=prediction['actionKey'],
+            confidence=prediction['confidence'],
+            scores_json=json.dumps(prediction['scores'], ensure_ascii=False),
+            sample_count=prediction['sampleCount'],
+            window_start_ts_ms=prediction['windowStartTsMs'],
+            window_end_ts_ms=prediction['windowEndTsMs'],
+            model_version=prediction['modelVersion'], predicted_at=predicted_at,
+        ))
 
 
 def enrich_frame_with_action(frame):
@@ -63,22 +71,17 @@ def enrich_frame_with_action(frame):
 
 
 def action_rows(limit=100, device_id=None):
-    query = '''SELECT device_id, event_id, label, action_key, confidence, scores_json,
-        sample_count, window_start_ts_ms, window_end_ts_ms, model_version, predicted_at
-        FROM action_predictions'''
-    params = []
+    stmt = select(ActionPrediction).order_by(ActionPrediction.id.desc()).limit(limit)
     if device_id:
-        query += ' WHERE device_id=?'
-        params.append(device_id)
-    query += ' ORDER BY id DESC LIMIT ?'
-    params.append(limit)
-    with sqlite3.connect(config.DB_PATH) as action_db:
-        rows = action_db.execute(query, params).fetchall()
+        stmt = stmt.where(ActionPrediction.device_id == device_id)
+    with session_scope() as s:
+        rows = s.execute(stmt).scalars().all()
     return [{
-        'deviceId': row[0], 'eventId': row[1], 'label': row[2], 'actionKey': row[3],
-        'confidence': row[4], 'scores': json.loads(row[5]), 'sampleCount': row[6],
-        'windowStartTsMs': row[7], 'windowEndTsMs': row[8], 'modelVersion': row[9],
-        'predictedAt': row[10], 'source': 'random_forest_1s',
+        'deviceId': row.device_id, 'eventId': row.event_id, 'label': row.label, 'actionKey': row.action_key,
+        'confidence': row.confidence, 'scores': json.loads(row.scores_json), 'sampleCount': row.sample_count,
+        'windowStartTsMs': row.window_start_ts_ms, 'windowEndTsMs': row.window_end_ts_ms,
+        'modelVersion': row.model_version, 'predictedAt': iso_z(row.predicted_at),
+        'source': 'random_forest_1s',
     } for row in rows]
 
 
