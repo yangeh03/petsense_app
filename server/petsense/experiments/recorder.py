@@ -69,8 +69,8 @@ def append_csv_row(path, header, row):
         writer.writerow(row)
 
 
-def append_cloud_experiment_frame(topic, payload_dict, received_at):
-    if topic != 'petsense/sensor/esp32-001' or not isinstance(payload_dict, dict):
+def append_cloud_experiment_frame(topic, payload_dict, received_at, device_id=None):
+    if not device_id or not isinstance(payload_dict, dict):
         return
 
     exp = payload_dict.get('experiment') or {}

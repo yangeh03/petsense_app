@@ -9,25 +9,57 @@ import os
 from datetime import datetime, timezone
 
 import paho.mqtt.client as mqtt
-from sqlalchemy import delete, func, insert, select
+from sqlalchemy import delete, func, insert, select, update
 
 from petsense import config, stats
 from petsense.actions import service as actions_service
 from petsense.collection.api import CollectionStore
 from petsense.db import iso_z, session_scope, utc_now
-from petsense.db.models import Reading
+from petsense.db.models import Device, Reading
 from petsense.experiments import recorder
 from petsense.telemetry import audio as audio_module
 from petsense.telemetry.realtime import broadcast_packet
 
 _trim_counter = 0
+_last_seen_updates = {}
+
+SENSOR_PREFIX = 'petsense/sensor/'
+# sensor/ 前缀下不属于"设备遥测"的专用 topic（其余尾段即设备 ID）
+SENSOR_RESERVED_TAILS = {'clock_v2', 'collection_v2', 'collection_status', 'audio_wav', 'audio_file'}
 
 
-def store(topic, payload):
+def sensor_device(topic):
+    """从 topic 提取设备 ID；非设备遥测 topic 返回 None。"""
+    if not topic.startswith(SENSOR_PREFIX):
+        return None
+    tail = topic[len(SENSOR_PREFIX):]
+    if not tail or '/' in tail or tail in SENSOR_RESERVED_TAILS:
+        return None
+    return tail
+
+
+def _touch_device_last_seen(device_id):
+    """每设备 60 秒节流更新 devices.last_seen_at（在线判定数据源）。"""
+    if not device_id:
+        return
+    now = utc_now()
+    last = _last_seen_updates.get(device_id)
+    if last is not None and (now - last).total_seconds() < 60:
+        return
+    _last_seen_updates[device_id] = now
+    try:
+        with session_scope() as s:
+            s.execute(update(Device).where(Device.device_id == device_id).values(last_seen_at=now))
+    except Exception as error:
+        print(f'[DEVICE] last_seen update failed: {error}')
+
+
+def store(topic, payload, device_id=None):
     """落库一条原始帧，返回 aware UTC 时间（调用方用 iso_z() 序列化）。"""
     received = utc_now()
     with session_scope() as s:
-        s.execute(insert(Reading).values(topic=topic, payload=payload, received_at=received))
+        s.execute(insert(Reading).values(topic=topic, payload=payload,
+                                         received_at=received, device_id=device_id))
     global _trim_counter
     _trim_counter += 1
     if _trim_counter >= 500:
@@ -215,40 +247,42 @@ def on_message(client, userdata, msg):
     except Exception:
         payload_dict = None
 
-    if msg.topic == 'petsense/sensor/esp32-001' and isinstance(payload_dict, dict):
+    device_id = sensor_device(msg.topic)
+
+    if device_id and isinstance(payload_dict, dict):
         frames = expand_sensor_batch(payload_dict)
         if frames:
             for frame in frames:
                 actions_service.enrich_frame_with_action(frame)
                 frame_payload = json.dumps(frame, ensure_ascii=False, separators=(',', ':'))
-                ts = store(msg.topic, frame_payload)
+                ts = store(msg.topic, frame_payload, device_id)
                 packet = json.dumps({'topic': msg.topic, 'payload': frame_payload, 'received_at': iso_z(ts)})
                 try:
-                    recorder.append_cloud_experiment_frame(msg.topic, frame, iso_z(ts))
+                    recorder.append_cloud_experiment_frame(msg.topic, frame, iso_z(ts), device_id)
                 except Exception as e:
                     print(f'[EXPERIMENT] Cloud batch frame write error: {e}')
                 try:
-                    stats.update_daily_stats(frame.get('deviceId'), frame, ts)
-                    stats.remember_uwb(frame, iso_z(ts))
+                    stats.update_daily_stats(device_id, frame, ts)
+                    stats.remember_uwb(frame, iso_z(ts), device_id)
                 except Exception as e:
                     print(f'[APP-STATS] batch hook error: {e}')
-                broadcast_packet(packet)
+                broadcast_packet(packet, device_id)
             return
 
-    if msg.topic == 'petsense/sensor/esp32-001' and isinstance(payload_dict, dict):
+    if device_id and isinstance(payload_dict, dict):
         actions_service.enrich_frame_with_action(payload_dict)
         payload_str = json.dumps(payload_dict, ensure_ascii=False, separators=(',', ':'))
 
-    ts = store(msg.topic, payload_str)
+    ts = store(msg.topic, payload_str, device_id)
     packet = json.dumps({'topic': msg.topic, 'payload': payload_str, 'received_at': iso_z(ts)})
-    if msg.topic == 'petsense/sensor/esp32-001' and isinstance(payload_dict, dict):
+    if device_id and isinstance(payload_dict, dict):
         try:
-            recorder.append_cloud_experiment_frame(msg.topic, payload_dict, iso_z(ts))
+            recorder.append_cloud_experiment_frame(msg.topic, payload_dict, iso_z(ts), device_id)
         except Exception as e:
             print(f'[EXPERIMENT] Cloud frame write error: {e}')
         try:
-            stats.update_daily_stats(payload_dict.get('deviceId'), payload_dict, ts)
-            stats.remember_uwb(payload_dict, iso_z(ts))
+            stats.update_daily_stats(device_id, payload_dict, ts)
+            stats.remember_uwb(payload_dict, iso_z(ts), device_id)
         except Exception as e:
             print(f'[APP-STATS] frame hook error: {e}')
 
@@ -262,8 +296,9 @@ def on_message(client, userdata, msg):
             print(f'[AUDIO] Parse error: {e}')
         return
 
-    # 所有消息都广播原始数据（传感器 + 音频原始分片）
-    broadcast_packet(packet)
+    _touch_device_last_seen(device_id)
+    # 所有消息都广播原始数据（传感器 + 音频原始分片）；WS 侧按设备归属过滤
+    broadcast_packet(packet, device_id)
 
 
 mqtt_client.on_connect = on_connect

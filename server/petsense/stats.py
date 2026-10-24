@@ -8,14 +8,18 @@ from sqlalchemy import select
 from petsense import config, db
 from petsense.common import shanghai_now
 from petsense.db import session_scope
-from petsense.db.models import DailyStat, Pet
+from petsense.db.models import DailyStat, Device, Pet
 
 stats_last_ts = {}
-last_uwb_frame = None
+last_uwb_frame = None       # 兼容：最近一帧 UWB（T6 移除）
+last_uwb_frames = {}        # per-device UWB 快照
 
 
 def update_daily_stats(device_id, frame, received_at):
-    '''按帧累加今日睡眠/活跃秒数与平均心率（received_at 为 aware UTC）。'''
+    '''按帧累加今日睡眠/活跃秒数与平均心率（received_at 为 aware UTC）。
+
+    归属链：device → devices.owner → 该用户的宠物；未认领设备跳过。
+    '''
     try:
         if not device_id:
             return
@@ -41,8 +45,9 @@ def update_daily_stats(device_id, frame, received_at):
         hr_sum = float(hr) if isinstance(hr, (int, float)) and hr > 0 else 0.0
         hr_count = 1 if hr_sum > 0 else 0
         with session_scope() as s:
-            pet_id = s.execute(select(Pet.id).where(Pet.device_id == device_id)
-                               .order_by(Pet.id).limit(1)).scalar_one_or_none()
+            pet_id = s.execute(select(Pet.id)
+                               .join(Device, Device.owner_id == Pet.user_id)
+                               .where(Device.device_id == device_id)).scalar_one_or_none()
             if pet_id is None:
                 return
             stmt = db.dialect_insert(s, DailyStat).values(
@@ -61,8 +66,11 @@ def update_daily_stats(device_id, frame, received_at):
         print(f'[APP-STATS] {exc}')
 
 
-def remember_uwb(frame, received_at):
+def remember_uwb(frame, received_at, device_id=None):
     global last_uwb_frame
     uwb = frame.get('uwb')
     if isinstance(uwb, dict) and 'valid' in uwb:
-        last_uwb_frame = {'payload': frame, 'received_at': received_at}
+        entry = {'payload': frame, 'received_at': received_at}
+        if device_id:
+            last_uwb_frames[device_id] = entry
+        last_uwb_frame = entry

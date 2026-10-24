@@ -48,8 +48,12 @@ class Forwarder:
 fwd = Forwarder()
 
 
-def broadcast_packet(packet_str):
-    """同一份报文发 SSE 队列与全部 WS 客户端，清理发送失败的僵尸连接。"""
+def broadcast_packet(packet_str, device_id=None):
+    """同一份报文发 SSE 队列与 WS 客户端，清理发送失败的僵尸连接。
+
+    device_id 标记报文归属设备（WS 按连接作用域过滤，T4 实装；None=系统帧发全体）。
+    SSE 面向内部工具，始终全量。
+    """
     fwd.broadcast(packet_str)
     for client in ws_clients.copy():
         try:
