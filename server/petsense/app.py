@@ -32,7 +32,7 @@ def create_app(start_background=True):
     os.makedirs(config.AUDIO_DIR, exist_ok=True)
     os.makedirs(config.CLOUD_DATA_DIR, exist_ok=True)
     os.makedirs(config.UPLOADS_DIR, exist_ok=True)
-    db.init_app_db()
+    db.init_db()
 
     app = Flask('petsense')
     app.register_blueprint(mqtt_ingest.collection_store.blueprint())
@@ -60,6 +60,10 @@ def create_app(start_background=True):
             response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
             response.headers['Vary'] = 'Origin'
         return response
+
+    @app.teardown_appcontext
+    def _close_db_session(_exception):
+        db.Session.remove()
 
     if start_background:
         telemetry_realtime.start_ws_ping_loop()

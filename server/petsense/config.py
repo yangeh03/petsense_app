@@ -22,11 +22,11 @@ CONTROL_TOPIC = 'petsense/device/esp32-001/command'
 HTTP_PORT = 8080
 
 STATIC_DIR = str(RUNTIME_ROOT / 'static')
-DB_PATH = str(RUNTIME_ROOT / 'data.db')
+DATABASE_URL = os.environ.get('PETSENSE_DATABASE_URL',
+                              f'sqlite:///{RUNTIME_ROOT / "petsense.db"}')
 AUDIO_DIR = str(RUNTIME_ROOT / 'audio_files')
 CLOUD_DATA_DIR = str(RUNTIME_ROOT / 'cloud_data')
 ACTION_DASHBOARD_DIR = str(RUNTIME_ROOT / 'action-dashboard')
-APP_DB = str(RUNTIME_ROOT / 'petsense_app.db')
 UPLOADS_DIR = str(RUNTIME_ROOT / 'uploads')
 COLLECTION_ROOT = str(RUNTIME_ROOT / 'collection_data')
 ACTION_MODEL_PATH = os.environ.get('PETSENSE_ACTION_MODEL',

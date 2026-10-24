@@ -5,7 +5,6 @@
 schema 唯一入口是 alembic（``init_db`` 幂等执行 upgrade head）。
 """
 
-import os
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,7 +15,7 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 
 def _default_url():
     from petsense import config
-    return f'sqlite:///{config.RUNTIME_ROOT / "petsense.db"}'
+    return config.DATABASE_URL
 
 
 _engine = None
@@ -42,7 +41,7 @@ def configure(url=None):
     """（重）构建 engine 与 session 工厂：测试与未来切 PG 用。"""
     global _engine, _session_factory
     Session.remove()
-    _engine = _build_engine(url or os.environ.get('PETSENSE_DATABASE_URL') or _default_url())
+    _engine = _build_engine(url or _default_url())
     _session_factory = sessionmaker(bind=_engine, expire_on_commit=False)
     return _engine
 
@@ -105,7 +104,3 @@ def reset_schema():
 
 # 模型注册（导入即挂到 Base.metadata）
 from petsense.db.base import Base  # noqa: F401,E402
-import petsense.db.models  # noqa: F401,E402
-
-# 过渡垫片：旧 db.py 的符号，未迁移域仍在用（Task 11 整体删除）
-from petsense.db._legacy import app_connect, conn, cur, init_app_db, sqlite3  # noqa: F401,E402
