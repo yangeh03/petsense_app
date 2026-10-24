@@ -3,12 +3,14 @@
 import os
 import secrets
 import time
-from datetime import datetime, timezone
 
 from flask import Blueprint, request
+from sqlalchemy import delete, func, literal, select
 
-from petsense import config, db
+from petsense import config
 from petsense.auth.routes import app_user_from_request, require_app_user
+from petsense.db import dialect_insert, iso_z, session_scope, utc_now
+from petsense.db.models import Comment, Follow, Pet, Post, PostLike, User
 from petsense.pets.routes import pet_latest_telemetry
 
 bp = Blueprint('social', __name__, url_prefix='/api/app')
@@ -32,17 +34,25 @@ def save_upload_image(file_storage, prefix):
     return filename, content_type
 
 
-def post_rows(viewer_id, where_clause='', params=()):
-    query = f'''SELECT p.id,p.caption,p.location_text,p.image_path,p.created_at,p.media_url,p.media_kind,
-        u.id AS user_id,u.display_name,u.avatar_emoji,
-        pet.id AS pet_id,pet.name AS pet_name,pet.avatar_emoji AS pet_emoji,
-        (SELECT COUNT(*) FROM post_likes l WHERE l.post_id=p.id) AS likes,
-        (SELECT COUNT(*) FROM comments c WHERE c.post_id=p.id) AS comments_count,
-        EXISTS(SELECT 1 FROM post_likes l2 WHERE l2.post_id=p.id AND l2.user_id=?) AS liked_by_me
-        FROM posts p JOIN users u ON u.id=p.user_id LEFT JOIN pets pet ON pet.id=p.pet_id
-        {where_clause} ORDER BY p.id DESC LIMIT 60'''
-    with db.app_connect() as database:
-        rows = database.execute(query, (viewer_id, *params)).fetchall()
+def post_rows(viewer_id, user_id=None):
+    likes_count = select(func.count()).select_from(PostLike).where(PostLike.post_id == Post.id).scalar_subquery()
+    comments_count = select(func.count()).select_from(Comment).where(Comment.post_id == Post.id).scalar_subquery()
+    liked_by_me = select(literal(1)).where(PostLike.post_id == Post.id,
+                                           PostLike.user_id == viewer_id).exists()
+    stmt = (
+        select(Post.id, Post.caption, Post.location_text, Post.image_path, Post.created_at,
+               Post.media_url, Post.media_kind,
+               User.id.label('user_id'), User.display_name, User.avatar_emoji,
+               Pet.id.label('pet_id'), Pet.name.label('pet_name'), Pet.avatar_emoji.label('pet_emoji'),
+               likes_count.label('likes'), comments_count.label('comments_count'),
+               liked_by_me.label('liked_by_me'))
+        .join(User, User.id == Post.user_id)
+        .outerjoin(Pet, Pet.id == Post.pet_id)
+        .order_by(Post.id.desc()).limit(60))
+    if user_id is not None:
+        stmt = stmt.where(Post.user_id == user_id)
+    with session_scope() as s:
+        rows = s.execute(stmt).mappings().fetchall()
     items = []
     for row in rows:
         item = dict(row)
@@ -50,6 +60,7 @@ def post_rows(viewer_id, where_clause='', params=()):
         item['imageUrl'] = f'/uploads/{image_path}' if image_path else ''
         item['mediaUrl'] = item.pop('media_url')
         item['mediaKind'] = item.pop('media_kind')
+        item['created_at'] = iso_z(item['created_at'])
         item['isMine'] = item['user_id'] == viewer_id
         items.append(item)
     return items
@@ -59,10 +70,7 @@ def post_rows(viewer_id, where_clause='', params=()):
 def app_feed():
     viewer = app_user_from_request()
     user_id = request.args.get('user_id', type=int)
-    if user_id:
-        items = post_rows(viewer['id'] if viewer else -1, 'WHERE p.user_id=?', (user_id,))
-    else:
-        items = post_rows(viewer['id'] if viewer else -1)
+    items = post_rows(viewer['id'] if viewer else -1, user_id)
     return {'success': True, 'posts': items}
 
 
@@ -92,15 +100,18 @@ def app_create_post():
             filename, _ = save_upload_image(image, 'post')
         except ValueError as exc:
             return {'success': False, 'message': str(exc)}, 400
-    if pet_id:
-        with db.app_connect() as database:
-            owned = database.execute('SELECT 1 FROM pets WHERE id=? AND user_id=?', (pet_id, user['id'])).fetchone()
-        if not owned:
-            pet_id = None
-    created_at = datetime.now(timezone.utc).isoformat()
-    with db.app_connect() as database:
-        post_id = database.execute('INSERT INTO posts(user_id,pet_id,image_path,caption,location_text,created_at,media_url,media_kind) VALUES(?,?,?,?,?,?,?,?)',
-                                   (user['id'], pet_id, filename or '', caption, location, created_at, media_url or None, media_kind or None)).lastrowid
+    with session_scope() as s:
+        if pet_id:
+            owned = s.execute(select(Pet.id).where(Pet.id == pet_id,
+                                                   Pet.user_id == user['id'])).scalar_one_or_none()
+            if not owned:
+                pet_id = None
+        post = Post(user_id=user['id'], pet_id=pet_id, image_path=filename or '',
+                    caption=caption, location_text=location,
+                    media_url=media_url or None, media_kind=media_kind, created_at=utc_now())
+        s.add(post)
+        s.flush()
+        post_id = post.id
     return {'success': True, 'postId': post_id}, 201
 
 
@@ -109,17 +120,18 @@ def app_delete_post(post_id):
     user, error = require_app_user()
     if error:
         return error
-    with db.app_connect() as database:
-        row = database.execute('SELECT user_id, image_path FROM posts WHERE id=?', (post_id,)).fetchone()
-        if not row:
+    with session_scope() as s:
+        post = s.get(Post, post_id)
+        if not post:
             return {'success': False, 'message': '帖子不存在'}, 404
-        if row['user_id'] != user['id']:
+        if post.user_id != user['id']:
             return {'success': False, 'message': '只能删除自己的帖子'}, 403
-        database.execute('DELETE FROM comments WHERE post_id=?', (post_id,))
-        database.execute('DELETE FROM post_likes WHERE post_id=?', (post_id,))
-        database.execute('DELETE FROM posts WHERE id=?', (post_id,))
+        s.execute(delete(Comment).where(Comment.post_id == post_id))
+        s.execute(delete(PostLike).where(PostLike.post_id == post_id))
+        s.execute(delete(Post).where(Post.id == post_id))
+        image_path = post.image_path
     try:
-        os.remove(os.path.join(config.UPLOADS_DIR, row['image_path']))
+        os.remove(os.path.join(config.UPLOADS_DIR, image_path))
     except OSError:
         pass
     return {'success': True}
@@ -130,74 +142,101 @@ def app_like_post(post_id):
     user, error = require_app_user()
     if error:
         return error
-    created_at = datetime.now(timezone.utc).isoformat()
-    with db.app_connect() as database:
-        if database.execute('SELECT 1 FROM post_likes WHERE post_id=? AND user_id=?', (post_id, user['id'])).fetchone():
-            database.execute('DELETE FROM post_likes WHERE post_id=? AND user_id=?', (post_id, user['id']))
+    with session_scope() as s:
+        existing = s.execute(select(PostLike).where(PostLike.post_id == post_id,
+                                                    PostLike.user_id == user['id'])).scalar_one_or_none()
+        if existing:
+            s.execute(delete(PostLike).where(PostLike.post_id == post_id,
+                                             PostLike.user_id == user['id']))
             liked = False
         else:
-            database.execute('INSERT OR IGNORE INTO post_likes(post_id,user_id,created_at) VALUES(?,?,?)',
-                             (post_id, user['id'], created_at))
+            stmt = dialect_insert(s, PostLike).values(post_id=post_id, user_id=user['id'],
+                                                      created_at=utc_now())
+            s.execute(stmt.on_conflict_do_nothing(index_elements=['post_id', 'user_id']))
             liked = True
-        likes = database.execute('SELECT COUNT(*) FROM post_likes WHERE post_id=?', (post_id,)).fetchone()[0]
+        likes = s.execute(select(func.count()).select_from(PostLike)
+                          .where(PostLike.post_id == post_id)).scalar_one()
     return {'success': True, 'liked': liked, 'likes': likes}
 
 
 @bp.route('/posts/<int:post_id>/comments', methods=['GET', 'POST'])
 def app_post_comments(post_id):
     if request.method == 'GET':
-        with db.app_connect() as database:
-            rows = database.execute('''SELECT c.id,c.body,c.created_at,u.id AS user_id,u.display_name,u.avatar_emoji
-                FROM comments c JOIN users u ON u.id=c.user_id WHERE c.post_id=? ORDER BY c.id LIMIT 200''',
-                                    (post_id,)).fetchall()
-        return {'success': True, 'comments': [dict(row) for row in rows]}
+        with session_scope() as s:
+            rows = s.execute(
+                select(Comment.id, Comment.body, Comment.created_at,
+                       User.id.label('user_id'), User.display_name, User.avatar_emoji)
+                .join(User, User.id == Comment.user_id)
+                .where(Comment.post_id == post_id)
+                .order_by(Comment.id).limit(200)).mappings().fetchall()
+        return {'success': True, 'comments': [
+            {'id': row['id'], 'body': row['body'], 'created_at': iso_z(row['created_at']),
+             'user_id': row['user_id'], 'display_name': row['display_name'],
+             'avatar_emoji': row['avatar_emoji']} for row in rows]}
     user, error = require_app_user()
     if error:
         return error
     body = str((request.get_json(silent=True) or {}).get('body', '')).strip()
     if not body or len(body) > 300:
         return {'success': False, 'message': '评论需为 1—300 字'}, 400
-    with db.app_connect() as database:
-        if not database.execute('SELECT 1 FROM posts WHERE id=?', (post_id,)).fetchone():
+    with session_scope() as s:
+        if not s.get(Post, post_id):
             return {'success': False, 'message': '帖子不存在'}, 404
-        database.execute('INSERT INTO comments(post_id,user_id,body,created_at) VALUES(?,?,?,?)',
-                         (post_id, user['id'], body, datetime.now(timezone.utc).isoformat()))
+        s.add(Comment(post_id=post_id, user_id=user['id'], body=body, created_at=utc_now()))
     return {'success': True}, 201
 
 
 @bp.route('/users/<int:user_id>')
 def app_user_profile(user_id):
     viewer = app_user_from_request()
-    with db.app_connect() as database:
-        row = database.execute('SELECT id,username,display_name,avatar_emoji,bio,created_at FROM users WHERE id=?', (user_id,)).fetchone()
+    with session_scope() as s:
+        row = s.execute(select(User.id, User.username, User.display_name, User.avatar_emoji,
+                               User.bio, User.created_at).where(User.id == user_id)).fetchone()
         if not row:
             return {'success': False, 'message': '用户不存在'}, 404
-        profile = dict(row)
-        profile['posts_count'] = database.execute('SELECT COUNT(*) FROM posts WHERE user_id=?', (user_id,)).fetchone()[0]
-        profile['followers'] = database.execute('SELECT COUNT(*) FROM follows WHERE followee_id=?', (user_id,)).fetchone()[0]
-        profile['following'] = database.execute('SELECT COUNT(*) FROM follows WHERE follower_id=?', (user_id,)).fetchone()[0]
-        profile['is_following'] = bool(viewer) and bool(database.execute(
-            'SELECT 1 FROM follows WHERE follower_id=? AND followee_id=?', (viewer['id'], user_id)).fetchone())
-        pets = [dict(r) for r in database.execute('SELECT id,name,species,breed,avatar_emoji,device_id FROM pets WHERE user_id=? ORDER BY id', (user_id,)).fetchall()]
-    for pet in pets:
+        profile = {'id': row.id, 'username': row.username, 'display_name': row.display_name,
+                   'avatar_emoji': row.avatar_emoji, 'bio': row.bio,
+                   'created_at': iso_z(row.created_at)}
+        profile['posts_count'] = s.execute(select(func.count()).select_from(Post)
+                                           .where(Post.user_id == user_id)).scalar_one()
+        profile['followers'] = s.execute(select(func.count()).select_from(Follow)
+                                         .where(Follow.followee_id == user_id)).scalar_one()
+        profile['following'] = s.execute(select(func.count()).select_from(Follow)
+                                         .where(Follow.follower_id == user_id)).scalar_one()
+        profile['is_following'] = bool(viewer) and bool(s.execute(
+            select(Follow).where(Follow.follower_id == viewer['id'],
+                                 Follow.followee_id == user_id)).scalar_one_or_none())
+        pets = s.execute(select(Pet).where(Pet.user_id == user_id)
+                         .order_by(Pet.id)).scalars().all()
+    profile['pets'] = [{'id': pet.id, 'name': pet.name, 'species': pet.species,
+                        'breed': pet.breed, 'avatar_emoji': pet.avatar_emoji,
+                        'device_id': pet.device_id} for pet in pets]
+    for pet in profile['pets']:
         telemetry = pet_latest_telemetry(pet['device_id'])
         pet['batteryPercent'] = telemetry.get('batteryPercent') if telemetry else None
         pet['online'] = telemetry.get('online') if telemetry else False
-    profile['pets'] = pets
     profile['displayName'] = profile.pop('display_name')
     profile['avatarEmoji'] = profile.pop('avatar_emoji')
     return {'success': True, 'profile': profile}
+
+
+def _follow_user_rows(stmt):
+    with session_scope() as s:
+        return s.execute(stmt).mappings().fetchall()
 
 
 @bp.route('/users/<int:user_id>/followers')
 def app_user_followers(user_id):
     viewer = app_user_from_request()
     viewer_id = viewer['id'] if viewer else -1
-    with db.app_connect() as database:
-        rows = database.execute('''SELECT u.id,u.display_name,u.avatar_emoji,
-            EXISTS(SELECT 1 FROM follows f2 WHERE f2.follower_id=? AND f2.followee_id=u.id) AS is_following
-            FROM follows f JOIN users u ON u.id=f.follower_id WHERE f.followee_id=? ORDER BY f.created_at DESC LIMIT 200''',
-                                (viewer_id, user_id)).fetchall()
+    is_following = (select(literal(1)).select_from(Follow)
+                    .where(Follow.follower_id == viewer_id, Follow.followee_id == User.id)
+                    .correlate(User.__table__).exists())
+    rows = _follow_user_rows(
+        select(User.id, User.display_name, User.avatar_emoji, is_following.label('is_following'))
+        .join(Follow, Follow.follower_id == User.id)
+        .where(Follow.followee_id == user_id)
+        .order_by(Follow.created_at.desc()).limit(200))
     return {'success': True, 'users': [dict(row) for row in rows]}
 
 
@@ -205,11 +244,14 @@ def app_user_followers(user_id):
 def app_user_following(user_id):
     viewer = app_user_from_request()
     viewer_id = viewer['id'] if viewer else -1
-    with db.app_connect() as database:
-        rows = database.execute('''SELECT u.id,u.display_name,u.avatar_emoji,
-            EXISTS(SELECT 1 FROM follows f2 WHERE f2.follower_id=? AND f2.followee_id=u.id) AS is_following
-            FROM follows f JOIN users u ON u.id=f.followee_id WHERE f.follower_id=? ORDER BY f.created_at DESC LIMIT 200''',
-                                (viewer_id, user_id)).fetchall()
+    is_following = (select(literal(1)).select_from(Follow)
+                    .where(Follow.follower_id == viewer_id, Follow.followee_id == User.id)
+                    .correlate(User.__table__).exists())
+    rows = _follow_user_rows(
+        select(User.id, User.display_name, User.avatar_emoji, is_following.label('is_following'))
+        .join(Follow, Follow.followee_id == User.id)
+        .where(Follow.follower_id == user_id)
+        .order_by(Follow.created_at.desc()).limit(200))
     return {'success': True, 'users': [dict(row) for row in rows]}
 
 
@@ -220,14 +262,18 @@ def app_follow_user(user_id):
         return error
     if user['id'] == user_id:
         return {'success': False, 'message': '不能关注自己'}, 400
-    with db.app_connect() as database:
-        if not database.execute('SELECT 1 FROM users WHERE id=?', (user_id,)).fetchone():
+    with session_scope() as s:
+        if not s.get(User, user_id):
             return {'success': False, 'message': '用户不存在'}, 404
-        if database.execute('SELECT 1 FROM follows WHERE follower_id=? AND followee_id=?', (user['id'], user_id)).fetchone():
-            database.execute('DELETE FROM follows WHERE follower_id=? AND followee_id=?', (user['id'], user_id))
+        existing = s.execute(select(Follow).where(Follow.follower_id == user['id'],
+                                                  Follow.followee_id == user_id)).scalar_one_or_none()
+        if existing:
+            s.execute(delete(Follow).where(Follow.follower_id == user['id'],
+                                           Follow.followee_id == user_id))
             following = False
         else:
-            database.execute('INSERT OR IGNORE INTO follows(follower_id,followee_id,created_at) VALUES(?,?,?)',
-                             (user['id'], user_id, datetime.now(timezone.utc).isoformat()))
+            stmt = dialect_insert(s, Follow).values(follower_id=user['id'], followee_id=user_id,
+                                                    created_at=utc_now())
+            s.execute(stmt.on_conflict_do_nothing(index_elements=['follower_id', 'followee_id']))
             following = True
     return {'success': True, 'following': following}
