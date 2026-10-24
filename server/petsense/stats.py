@@ -11,7 +11,6 @@ from petsense.db import session_scope
 from petsense.db.models import DailyStat, Device, Pet
 
 stats_last_ts = {}
-last_uwb_frame = None       # 兼容：最近一帧 UWB（T6 移除）
 last_uwb_frames = {}        # per-device UWB 快照
 
 
@@ -67,10 +66,7 @@ def update_daily_stats(device_id, frame, received_at):
 
 
 def remember_uwb(frame, received_at, device_id=None):
-    global last_uwb_frame
     uwb = frame.get('uwb')
-    if isinstance(uwb, dict) and 'valid' in uwb:
-        entry = {'payload': frame, 'received_at': received_at}
-        if device_id:
-            last_uwb_frames[device_id] = entry
-        last_uwb_frame = entry
+    if isinstance(uwb, dict) and 'valid' in uwb and device_id:
+        last_uwb_frames[device_id] = {'payload': frame, 'received_at': received_at,
+                                      'deviceId': device_id}

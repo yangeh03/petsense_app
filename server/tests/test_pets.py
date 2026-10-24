@@ -16,6 +16,7 @@ from helpers import fresh_db
 
 
 def seed_user_with_pet(device_id='esp32-001'):
+    from petsense.db.models import Device
     with db.session_scope() as s:
         user = User(username='u1', display_name='u1', password_hash='x', salt='s',
                     avatar_emoji='🙂', bio='', created_at=db.utc_now())
@@ -23,6 +24,9 @@ def seed_user_with_pet(device_id='esp32-001'):
         s.flush()
         s.add(Pet(user_id=user.id, name='Max', species='dog', breed='', avatar_emoji='🐾',
                   device_id=device_id, created_at=db.utc_now()))
+        if device_id:
+            s.add(Device(device_id=device_id, owner_id=user.id, name='',
+                         claimed_at=db.utc_now()))
         return user.id
 
 
@@ -73,10 +77,21 @@ class PetsTests(unittest.TestCase):
         self.assertRegex(reply['latest']['receivedAt'], r'Z$')
         self.assertEqual(reply['pet']['name'], 'Max')
 
-    def test_uwb_latest_without_frame(self):
+    def test_uwb_latest_scoped_to_my_device(self):
         from petsense import stats as stats_module
-        stats_module.last_uwb_frame = None
-        self.assertIsNone(self.client.get('/api/app/uwb/latest').get_json()['frame'])
+        headers = self.register_and_header()
+        stats_module.last_uwb_frames.clear()
+        self.assertIsNone(self.client.get('/api/app/uwb/latest',
+                                          headers=headers).get_json()['frame'])
+        stats_module.last_uwb_frames['esp32-001'] = {
+            'payload': {'ts_ms': 1, 'uwb': {'valid': True}},
+            'received_at': '2026-10-25T00:00:00.000Z', 'deviceId': 'esp32-001'}
+        stats_module.last_uwb_frames['other-dev'] = {
+            'payload': {'ts_ms': 9, 'uwb': {'valid': True}},
+            'received_at': '2026-10-25T00:00:09.000Z', 'deviceId': 'other-dev'}
+        frame = self.client.get('/api/app/uwb/latest', headers=headers).get_json()['frame']
+        self.assertEqual(frame['deviceId'], 'esp32-001')
+        self.assertEqual(self.client.get('/api/app/uwb/latest').status_code, 401)
 
 
 if __name__ == '__main__':

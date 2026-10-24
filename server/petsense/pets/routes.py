@@ -194,11 +194,21 @@ def app_dashboard():
 
 @bp.route('/uwb/latest')
 def app_uwb_latest():
-    if not stats.last_uwb_frame:
+    user, error = require_app_user()
+    if error:
+        return error
+    from petsense.telemetry.realtime import device_ids_for_user
+    devices = device_ids_for_user(user['id'])
+    best = None
+    for device_id in devices:
+        entry = stats.last_uwb_frames.get(device_id)
+        if entry and (best is None or str(entry['received_at']) > str(best['received_at'])):
+            best = entry
+    if not best:
         return {'success': True, 'frame': None}
-    payload = stats.last_uwb_frame['payload']
-    received_at = stats.last_uwb_frame['received_at']
+    payload = best['payload']
+    received_at = best['received_at']
     if not isinstance(received_at, str):
         received_at = iso_z(received_at)
-    return {'success': True, 'frame': {'deviceId': payload.get('deviceId'), 'tsMs': payload.get('ts_ms'),
-            'uwb': payload.get('uwb'), 'receivedAt': received_at}}
+    return {'success': True, 'frame': {'deviceId': best.get('deviceId') or payload.get('deviceId'),
+            'tsMs': payload.get('ts_ms'), 'uwb': payload.get('uwb'), 'receivedAt': received_at}}

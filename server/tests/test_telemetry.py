@@ -72,8 +72,8 @@ class TelemetryTests(unittest.TestCase):
         stats.remember_uwb(frame, '2026-10-25T00:00:00.000Z', 'dev-a')
         stats.remember_uwb({'uwb': {'valid': True}}, '2026-10-25T00:01:00.000Z', 'dev-b')
         self.assertEqual(stats.last_uwb_frames['dev-a']['payload']['deviceId'], 'dev-a')
+        self.assertEqual(stats.last_uwb_frames['dev-a']['deviceId'], 'dev-a')
         self.assertIn('dev-b', stats.last_uwb_frames)
-        self.assertIsNotNone(stats.last_uwb_frame)
 
     def test_store_returns_aware_and_trims_by_watermark(self):
         moment = mqtt_ingest.store('petsense/sensor/esp32-001', '{"a":1}')
