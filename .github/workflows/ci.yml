@@ -106,10 +106,9 @@ jobs:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_PASSWORD: postgres
           POSTGRES_DB: petsense_test
-        # 宿主端口用 5433：ubuntu-24.04 runner 预装系统 PostgreSQL 占着 127.0.0.1:5432，
-        # 回环连接会打到系统实例（无密码必然认证失败）而非本容器
+          # CI 一次性容器直接用 trust 认证（无需密码握手），排除 runner 环境的密码认证干扰
+          POSTGRES_HOST_AUTH_METHOD: trust
         ports: ['5433:5432']
         options: >-
           --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
