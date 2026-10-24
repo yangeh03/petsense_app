@@ -33,7 +33,7 @@ and to GitHub, then configure the previously discussed SSH deployment pipeline.
 - [x] Extend CI with backend checks, changed-path detection and deployment.
 - [x] Install receiver and restricted deployment key; configure Actions secrets.
 - [x] Run required local checks, review, commit and push main.
-- [ ] Watch first pipeline, resolve failures, verify remote hashes and deployed SHA.
+- [x] Watch first pipeline, resolve failures, verify remote hashes and deployed SHA.
 
 ## Execution record
 
@@ -46,3 +46,10 @@ and to GitHub, then configure the previously discussed SSH deployment pipeline.
   collection checks and a regression test. Local checks and 11 Python tests pass.
 - Production receiver, restricted key, pinned host key and GitHub production
   secrets are installed. A transient deployment unit was verified as ubuntu.
+
+- First push deployed commit `491387057a968170225d8ecdaf7d29d396919142`.
+  [CI run 40093407371](https://github.com/yangeh03/petsense_app/actions/runs/40093407371)
+  passed all three jobs. All eight managed file hashes match local Git content.
+- Deployment environment is restricted to main. The original runtime paths and
+  original virtualenv remain available; the running unit selects the new release
+  virtualenv through its deployment drop-in.
