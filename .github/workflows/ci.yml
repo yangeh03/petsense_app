@@ -25,26 +25,32 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version-file: '.nvmrc'
+          node-version-file: 'app/.nvmrc'
           cache: npm
+          cache-dependency-path: app/package-lock.json
 
       - name: 安装依赖
+        working-directory: app
         run: npm ci
 
       # expo-env.d.ts 不入库（Expo 官方约定），CI 中生成以供 tsc 使用
       - name: 生成 Expo 类型声明
-        run: echo '/// <reference types="expo/types" />' > expo-env.d.ts
+        run: echo '/// <reference types="expo/types" />' > app/expo-env.d.ts
 
       - name: Prettier 格式检查
+        working-directory: app
         run: npm run format:check
 
       - name: ESLint
+        working-directory: app
         run: npm run lint
 
       - name: TypeScript 类型检查
+        working-directory: app
         run: npm run typecheck
 
       - name: Web 构建验证
+        working-directory: app
         run: npx expo export --platform web
 
   server:

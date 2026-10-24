@@ -1,6 +1,6 @@
 # PetSense 🐾
 
-宠物健康管理 App（Demo），使用 **React Native + Expo** 构建，一套代码同时支持 **iOS / Android / Web**。
+宠物健康管理 App：`app/`（React Native + Expo 客户端，支持 iOS / Android / Web）+ `server/`（Python 服务端），单仓库双端。
 
 ESP32 板端源码、接线、Arduino CLI 下载、编译和烧录说明见 [firmware/README.md](firmware/README.md)。仅使用固件不需要安装 App 依赖。
 
@@ -21,22 +21,22 @@ ESP32 硬件 ──MQTT──▶ 腾讯云 Mosquitto ──▶ petsense-server(F
  (任意网络)            81.71.71.31:1883      :8080                /ws            (任意网络)
 ```
 
-- 服务端（`server.py`）部署在腾讯云 `/home/ubuntu/petsense-server`，订阅 `petsense/sensor/#` 并向 `/ws` 广播
-- APP 端实时层在 `src/services/telemetry-service.ts`（自动重连），页面通过 `useTelemetry()` 订阅
-- 连接地址在 `src/config.ts` 配置，默认线上地址，可用环境变量 `EXPO_PUBLIC_TELEMETRY_URL` 覆盖
+- 服务端（`server/petsense/` 包，入口 `wsgi.py`）部署在腾讯云 `/home/ubuntu/petsense-server`，订阅 `petsense/sensor/#` 并向 `/ws` 广播
+- APP 端实时层在 `app/src/services/telemetry-service.ts`（自动重连），页面通过 `useTelemetry()` 订阅
+- 连接地址在 `app/src/config.ts` 配置，默认线上地址，可用环境变量 `EXPO_PUBLIC_TELEMETRY_URL` 覆盖
 - 服务端 HTTP 接口：`/api/latest-full`（最近 200 帧）、`/api/stats`（统计）、`/ws`（实时推送）
 
 ### 遥测双模式（实时 / 回放）
 
-`src/config.ts` 的 `TELEMETRY_MODE` 控制数据源，改模式需重启 Metro（打包期注入）：
+`app/src/config.ts` 的 `TELEMETRY_MODE` 控制数据源；npm 命令均在 `app/` 目录下执行，改模式需重启 Metro（打包期注入）：
 
 ```bash
 npm start                    # live：默认，连云端收硬件实时数据
 npm run start:replay         # replay：离线循环回放实验数据集片段（无需服务器/设备）
 ```
 
-- 回放数据在 `src/data/replay-dataset.ts`：截取自腾讯云真实实验数据集（2026-08-12 佩戴实验，
-  已剔除设备离身段，约 24 分钟按原始 2s 节奏循环），由 `tools/gen-replay-dataset.cjs` 生成
+- 回放数据在 `app/src/data/replay-dataset.ts`：截取自腾讯云真实实验数据集（2026-08-12 佩戴实验，
+  已剔除设备离身段，约 24 分钟按原始 2s 节奏循环），由 `app/tools/gen-replay-dataset.cjs` 生成
 - 回放时状态点显示蓝色「回放」，与实时（绿色「已连接云端」）明确区分
 
 ### 本地联调（不依赖云端）
@@ -62,7 +62,7 @@ EXPO_PUBLIC_TELEMETRY_URL=ws://localhost:8090/ws npm run web
 
 ### 1. Node.js（必需）
 
-推荐用 [nvm](https://github.com/nvm-sh/nvm) 管理版本，仓库已提供 `.nvmrc`：
+推荐用 [nvm](https://github.com/nvm-sh/nvm) 管理版本，仓库已提供 `app/.nvmrc`：
 
 ```bash
 # 安装 nvm（已安装可跳过）
@@ -130,7 +130,8 @@ adb devices   # 能执行即配置成功
 git clone https://github.com/yangeh03/petsense_app.git
 cd petsense_app
 
-# 2. 切换 Node 版本并安装依赖
+# 2. 切换 Node 版本并安装依赖（客户端在 app/ 子目录）
+cd app
 nvm use
 npm install
 
@@ -167,28 +168,28 @@ npm start
 
 ```
 petsense_app/
-├── .github/
-│   ├── workflows/ci.yml          # CI：lint + typecheck + web 构建
-│   ├── PULL_REQUEST_TEMPLATE.md  # PR 模板
-│   └── ISSUE_TEMPLATE/           # Issue 模板（Bug / 功能建议）
-├── assets/                       # 图标、启动图等静态资源
-├── scripts/
-│   ├── icons/                    # 品牌图标 SVG 源文件
-│   └── generate-icons.sh         # 图标生成脚本（macOS 自带工具，无需装依赖）
-├── tools/
-│   ├── mock-server.js            # 本地遥测模拟服务（零依赖 WebSocket）
-│   └── gen-replay-dataset.cjs    # 从云端实验数据集生成回放数据（一次性工具）
-└── src/
-    ├── app/                      # 页面（expo-router 文件式路由，单屏应用）
-    │   ├── _layout.tsx           # 根布局：Stack + 主题 + 启动动画
-    │   └── index.tsx             # 实时监测主屏（唯一页面）
-    ├── components/               # 通用组件（live/ 为实时监测组件）
-    ├── config.ts                 # 运行时配置（遥测模式与地址）
-    ├── constants/theme.ts        # 颜色 / 字体 / 间距（明暗双主题）
-    ├── data/                     # 回放数据集（真实实验数据）
-    ├── hooks/                    # 自定义 Hooks（use-telemetry 实时数据流）
-    ├── services/                 # WebSocket 遥测客户端（自动重连）
-    └── types/                    # 遥测数据帧类型定义
+├── app/                          # 客户端（React Native + Expo）
+│   ├── src/
+│   │   ├── app/                  # 页面（expo-router：(tabs) 四 tab + 弹层页）
+│   │   ├── components/           # 组件（live/ social/ alerts/ dashboard/）
+│   │   ├── config.ts             # 运行时配置（遥测模式与地址）
+│   │   ├── constants/theme.ts    # 颜色 / 字体 / 间距（明暗双主题）
+│   │   ├── data/                 # 回放数据集（真实实验数据）
+│   │   ├── hooks/                # 自定义 Hooks（use-telemetry / use-auth / use-alerts…）
+│   │   ├── services/             # WebSocket 遥测客户端、REST API、告警引擎
+│   │   └── types/                # 遥测 / 社区 / 告警类型定义
+│   ├── assets/                   # 图标、启动图、户型图
+│   ├── scripts/                  # 图标生成脚本
+│   └── tools/                    # mock server、回放数据生成工具
+├── server/                       # 服务端（Python 3.12 Flask）
+│   ├── petsense/                 # 按域分包：telemetry/ actions/ collection/
+│   │                             # experiments/ auth/ pets/ social/ petgif/ trends/ web/
+│   ├── wsgi.py                   # 入口（systemd ExecStart）
+│   ├── deploy/                   # 部署脚本（SSH 强制命令 + 健康检查 + 回滚）
+│   └── tests/                    # 服务端测试
+├── firmware/                     # ESP32 板端源码与烧录说明
+├── docs/                         # 部署与交接文档
+└── .github/workflows/ci.yml      # CI：客户端检查 + 服务端测试 + 自动部署
 ```
 
 ## 团队协作
@@ -196,8 +197,8 @@ petsense_app/
 - 分支命名、Commit 规范、PR 流程见 [CONTRIBUTING.md](./CONTRIBUTING.md)
 - 代码提交前请确保本地通过：`npm run lint && npm run typecheck && npm run format:check`
 - CI（GitHub Actions）会在每个 PR 上自动执行同样检查，未通过无法合并
-- 修改品牌色 / 主题请统一改 `src/constants/theme.ts`，不要在页面写死颜色
-- App 图标源文件在 `scripts/icons/`，修改后运行 `npm run generate-icons` 重新生成
+- 修改品牌色 / 主题请统一改 `app/src/constants/theme.ts`，不要在页面写死颜色
+- App 图标源文件在 `app/scripts/icons/`，修改后运行 `npm run generate-icons` 重新生成
 
 ## 常见问题
 

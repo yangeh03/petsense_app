@@ -27,8 +27,8 @@ npm run web
 ## 验证
 
 ```sh
-node tools/telemetry-check.cjs
-node tools/telemetry-check.cjs --live
+cd app && node tools/telemetry-check.cjs
+cd app && node tools/telemetry-check.cjs --live
 npm run lint
 npm run typecheck
 npm run format:check

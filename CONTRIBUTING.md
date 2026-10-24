@@ -74,11 +74,11 @@ UI 变更请在模拟器 / Expo Go 中手动验证，并确认**深色模式**�
 ## 代码约定
 
 - **语言**：TypeScript，禁止提交 `.js` 页面代码；注释与文档使用中文
-- **颜色与主题**：统一使用 `src/constants/theme.ts` 中的定义，通过 `useTheme()` 获取，禁止页面内写死颜色（保证明暗模式一致）
-- **组件**：可复用组件放 `src/components/`，一个文件一个组件，`PascalCase` 命名
-- **页面**：放 `src/app/`，由 expo-router 文件式路由自动注册
+- **颜色与主题**：统一使用 `app/src/constants/theme.ts` 中的定义，通过 `useTheme()` 获取，禁止页面内写死颜色（保证明暗模式一致）
+- **组件**：可复用组件放 `app/src/components/`，一个文件一个组件，`PascalCase` 命名
+- **页面**：放 `app/src/app/`，由 expo-router 文件式路由自动注册
 - **图标**：使用 `expo-symbols` 的 `SymbolView`，`name` 必须提供 `{ ios, android, web }` 三端映射
-- **Mock 数据**：统一放 `src/data/`，导出类型定义；接入真实 API 时只改这一层
+- **Mock 数据**：统一放 `app/src/data/`，导出类型定义；接入真实 API 时只改这一层
 - **路径别名**：使用 `@/` 前缀（`@/components/...`），禁止 `../../` 相对路径跨层级引用
 - **格式化**：Prettier 已配置保存自动格式化（见 `.vscode/settings.json`），不要手动调整格式
 
