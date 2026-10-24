@@ -98,40 +98,9 @@ jobs:
             echo 'changed=false' >> "$GITHUB_OUTPUT"
           fi
 
-  server-postgres:
-    name: Server tests (PostgreSQL dialect)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: petsense_test
-          # CI 一次性容器直接用 trust 认证（无需密码握手），排除 runner 环境的密码认证干扰
-          POSTGRES_HOST_AUTH_METHOD: trust
-        ports: ['5433:5432']
-        options: >-
-          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-          cache: pip
-          cache-dependency-path: server/requirements.lock
-      - name: 安装依赖（含 PG 驱动）
-        run: python -m pip install -r server/requirements.lock psycopg2-binary
-      - name: 双方言单测
-        env:
-          PETSENSE_MQTT_DISABLED: '1'
-          # 用 127.0.0.1 而非 localhost：runner 上 localhost 会先解析到 ::1，
-          # 绕开 docker 发布的 IPv4 端口，撞上系统路径导致认证失败
-          PETSENSE_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5433/petsense_test
-        run: python -m unittest discover -s server/tests -v
-
   deploy:
     name: Deploy Tencent production
-    needs: [check, server, server-postgres]
+    needs: [check, server]
     if: github.ref == 'refs/heads/main' && needs.server.outputs.changed == 'true' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment: production

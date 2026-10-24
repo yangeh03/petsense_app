@@ -42,12 +42,14 @@ versioned by Alembic (`alembic/` + `alembic.ini` ship with the package;
 source of truth (`petsense/db/models/`); never hand-write DDL — add a migration
 (`cd server && python3 -m alembic -c alembic.ini revision --autogenerate`).
 
-SQLite and PostgreSQL are both supported dialects (CI runs the whole test suite
-against PostgreSQL on every push). Switching the cloud instance is a config
-change: set `PETSENSE_DATABASE_URL=postgresql://...` and restart — no code
-changes. The legacy pre-migration files (`data.db`, `petsense_app.db`,
-`collection_data/collection.sqlite3`) are kept untouched at the install root as
-a natural backup; delete them manually after a stabilization period.
+SQLite and PostgreSQL are both supported dialects. The test suite takes a
+`PETSENSE_TEST_DATABASE_URL` override (see `tests/helpers.py`) to run against a
+PostgreSQL instance — verify once with it when cutting over the cloud database.
+Switching is a config change: set `PETSENSE_DATABASE_URL=postgresql://...` and
+restart — no code changes. The legacy pre-migration files (`data.db`,
+`petsense_app.db`, `collection_data/collection.sqlite3`) are kept untouched at
+the install root as a natural backup; delete them manually after a
+stabilization period.
 
 ## Local verification
 
