@@ -6,6 +6,7 @@ from petsense.db.models.collection import (
     CollectionVideo,
     JournalCrc,
 )
+from petsense.db.models.devices import Device
 from petsense.db.models.pets import DailyStat, HomeLayout, Pet
 from petsense.db.models.social import Comment, Follow, Post, PostLike
 from petsense.db.models.telemetry import ActionPrediction, Reading
@@ -13,6 +14,6 @@ from petsense.db.models.telemetry import ActionPrediction, Reading
 __all__ = [
     'User', 'AuthSession', 'Pet', 'DailyStat', 'HomeLayout',
     'Post', 'PostLike', 'Comment', 'Follow',
-    'Reading', 'ActionPrediction',
+    'Reading', 'ActionPrediction', 'Device',
     'CollectionSession', 'CollectionFrame', 'CollectionVideo', 'JournalCrc',
 ]
