@@ -103,8 +103,9 @@ def reset_schema():
     command.upgrade(_alembic_config(), 'head')
 
 
-# 模型注册（导入即挂到 Base.metadata；Task 2 提供后启用）
+# 模型注册（导入即挂到 Base.metadata）
 from petsense.db.base import Base  # noqa: F401,E402
+import petsense.db.models  # noqa: F401,E402
 
 # 过渡垫片：旧 db.py 的符号，未迁移域仍在用（Task 11 整体删除）
 from petsense.db._legacy import app_connect, conn, cur, init_app_db, sqlite3  # noqa: F401,E402
