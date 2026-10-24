@@ -2,14 +2,16 @@
 
 import json
 import time
-from datetime import datetime, timezone
 
 import requests
 from flask import Blueprint, request
+from sqlalchemy import select, update
 
-from petsense import config, db, stats
+from petsense import config, stats
 from petsense.auth.routes import require_app_user
 from petsense.common import shanghai_now
+from petsense.db import iso_z, session_scope, utc_now
+from petsense.db.models import DailyStat, Pet, Reading
 from petsense.petgif.proxy import app_petgif_pet
 
 bp = Blueprint('pets', __name__, url_prefix='/api/app')
@@ -18,9 +20,11 @@ bp = Blueprint('pets', __name__, url_prefix='/api/app')
 def pet_latest_telemetry(device_id):
     if not device_id:
         return None
-    db.cur.execute('SELECT payload, received_at FROM readings WHERE topic=? ORDER BY id DESC LIMIT 5',
-                   (f'petsense/sensor/{device_id}',))
-    for payload_text, received_at in db.cur.fetchall():
+    with session_scope() as s:
+        rows = s.execute(select(Reading.payload, Reading.received_at)
+                         .where(Reading.topic == f'petsense/sensor/{device_id}')
+                         .order_by(Reading.id.desc()).limit(5)).fetchall()
+    for payload_text, received_at in rows:
         try:
             payload = json.loads(payload_text)
         except (TypeError, ValueError):
@@ -29,10 +33,7 @@ def pet_latest_telemetry(device_id):
             continue
         health = payload.get('health') or {}
         battery = payload.get('battery') or {}
-        try:
-            age = time.time() - datetime.fromisoformat(received_at.replace('Z', '+00:00')).timestamp()
-        except ValueError:
-            age = 9e9
+        age = time.time() - received_at.timestamp()
         return {
             'heartRate': health.get('heartRate') or 0,
             'spo2': health.get('spo2') or 0,
@@ -47,21 +48,23 @@ def pet_latest_telemetry(device_id):
             'valid': bool(health.get('valid')),
             'batteryPercent': round(battery.get('percent') or 0),
             'online': age < config.DEVICE_ONLINE_TIMEOUT_S,
-            'receivedAt': received_at,
+            'receivedAt': iso_z(received_at),
         }
     return None
 
 
 def pet_today_stats(pet_id):
-    with db.app_connect() as database:
-        row = database.execute('SELECT sleep_seconds, active_seconds, hr_sum, hr_count FROM daily_stats WHERE pet_id=? AND date=?',
-                               (pet_id, shanghai_now().date().isoformat())).fetchone()
+    with session_scope() as s:
+        row = s.execute(select(DailyStat.sleep_seconds, DailyStat.active_seconds,
+                               DailyStat.hr_sum, DailyStat.hr_count)
+                        .where(DailyStat.pet_id == pet_id,
+                               DailyStat.date == shanghai_now().date())).fetchone()
     if not row:
         return {'sleepMinutes': 0, 'activeMinutes': 0, 'avgHeartRate': 0}
     return {
-        'sleepMinutes': round(row['sleep_seconds'] / 60),
-        'activeMinutes': round(row['active_seconds'] / 60),
-        'avgHeartRate': round(row['hr_sum'] / row['hr_count']) if row['hr_count'] else 0,
+        'sleepMinutes': round(row.sleep_seconds / 60),
+        'activeMinutes': round(row.active_seconds / 60),
+        'avgHeartRate': round(row.hr_sum / row.hr_count) if row.hr_count else 0,
     }
 
 
@@ -83,23 +86,29 @@ def build_insight(pet, telemetry, today):
     return {'icon': '🐾', 'text': f'{name} 状态平稳，陪你度过平常又安心的一天'}
 
 
+def pet_dict(pet):
+    """pets 列表 / dashboard 共用的行序列化（键与旧 dict(row) 一致）。"""
+    item = {'id': pet.id, 'user_id': pet.user_id, 'name': pet.name, 'species': pet.species,
+            'breed': pet.breed, 'avatar_emoji': pet.avatar_emoji, 'device_id': pet.device_id,
+            'petgif_id': pet.petgif_id, 'avatar_image': pet.avatar_image,
+            'created_at': iso_z(pet.created_at)}
+    telemetry = pet_latest_telemetry(pet.device_id)
+    item['batteryPercent'] = telemetry.get('batteryPercent') if telemetry else None
+    item['online'] = telemetry.get('online') if telemetry else False
+    item['avatarImageUrl'] = '/uploads/' + pet.avatar_image if pet.avatar_image else None
+    return item
+
+
 @bp.route('/pets', methods=['GET', 'POST'])
 def app_pets():
     user, error = require_app_user()
     if error:
         return error
     if request.method == 'GET':
-        with db.app_connect() as database:
-            rows = database.execute('SELECT * FROM pets WHERE user_id=? ORDER BY id', (user['id'],)).fetchall()
-        pets = []
-        for row in rows:
-            item = dict(row)
-            telemetry = pet_latest_telemetry(item['device_id'])
-            item['batteryPercent'] = telemetry.get('batteryPercent') if telemetry else None
-            item['online'] = telemetry.get('online') if telemetry else False
-            item['avatarImageUrl'] = '/uploads/' + item['avatar_image'] if item.get('avatar_image') else None
-            pets.append(item)
-        return {'success': True, 'pets': pets}
+        with session_scope() as s:
+            pets = s.execute(select(Pet).where(Pet.user_id == user['id'])
+                             .order_by(Pet.id)).scalars().all()
+        return {'success': True, 'pets': [pet_dict(pet) for pet in pets]}
 
     data = request.get_json(silent=True) or {}
     name = str(data.get('name', '')).strip()
@@ -111,11 +120,12 @@ def app_pets():
         return {'success': False, 'message': '请给宠物起个 20 字以内的名字'}, 400
     if species not in ('dog', 'cat', 'rabbit'):
         return {'success': False, 'message': '物种仅支持 dog / cat / rabbit'}, 400
-    created_at = datetime.now(timezone.utc).isoformat()
-    with db.app_connect() as database:
-        pet_id = database.execute(
-            'INSERT INTO pets(user_id,name,species,breed,avatar_emoji,device_id,created_at) VALUES(?,?,?,?,?,?,?)',
-            (user['id'], name, species, breed, avatar_emoji, device_id, created_at)).lastrowid
+    with session_scope() as s:
+        pet = Pet(user_id=user['id'], name=name, species=species, breed=breed,
+                  avatar_emoji=avatar_emoji, device_id=device_id, created_at=utc_now())
+        s.add(pet)
+        s.flush()
+        pet_id = pet.id
     return {'success': True, 'pet': {'id': pet_id, 'name': name}}, 201
 
 
@@ -139,11 +149,12 @@ def app_pet_avatar_image(pet_id):
     filename = f'avatar_{secrets.token_hex(6)}_{int(time.time())}.png'
     with open(os.path.join(config.UPLOADS_DIR, filename), 'wb') as handle:
         handle.write(response.content)
-    with db.app_connect() as database:
-        owned = database.execute('SELECT 1 FROM pets WHERE id=? AND user_id=?', (pet_id, user['id'])).fetchone()
+    with session_scope() as s:
+        owned = s.execute(select(Pet.id).where(Pet.id == pet_id,
+                                               Pet.user_id == user['id'])).scalar_one_or_none()
         if not owned:
             return {'success': False, 'message': '宠物不存在'}, 404
-        database.execute('UPDATE pets SET avatar_image=? WHERE id=?', (filename, pet_id))
+        s.execute(update(Pet).where(Pet.id == pet_id).values(avatar_image=filename))
     return {'success': True, 'avatarImageUrl': '/uploads/' + filename}
 
 
@@ -156,11 +167,12 @@ def app_pet_bind_petgif(pet_id):
     petgif_id = str((request.get_json(silent=True) or {}).get('petgifId', '')).strip()[:40]
     if not petgif_id:
         return {'success': False, 'message': '缺少 petgifId'}, 400
-    with db.app_connect() as database:
-        owned = database.execute('SELECT 1 FROM pets WHERE id=? AND user_id=?', (pet_id, user['id'])).fetchone()
+    with session_scope() as s:
+        owned = s.execute(select(Pet.id).where(Pet.id == pet_id,
+                                               Pet.user_id == user['id'])).scalar_one_or_none()
         if not owned:
             return {'success': False, 'message': '宠物不存在'}, 404
-        database.execute('UPDATE pets SET petgif_id=? WHERE id=?', (petgif_id, pet_id))
+        s.execute(update(Pet).where(Pet.id == pet_id).values(petgif_id=petgif_id))
     return {'success': True}
 
 
@@ -170,14 +182,15 @@ def app_dashboard():
     if error:
         return error
     pet_id = request.args.get('pet_id', type=int)
-    with db.app_connect() as database:
+    with session_scope() as s:
+        stmt = select(Pet).where(Pet.user_id == user['id'])
         if pet_id:
-            pet = database.execute('SELECT * FROM pets WHERE id=? AND user_id=?', (pet_id, user['id'])).fetchone()
+            pet = s.execute(stmt.where(Pet.id == pet_id)).scalar_one_or_none()
         else:
-            pet = database.execute('SELECT * FROM pets WHERE user_id=? ORDER BY id LIMIT 1', (user['id'],)).fetchone()
+            pet = s.execute(stmt.order_by(Pet.id).limit(1)).scalar_one_or_none()
     if not pet:
         return {'success': True, 'pet': None}
-    pet = dict(pet)
+    pet = pet_dict(pet)
     if pet.get('avatar_image'):
         pet['avatarImageUrl'] = '/uploads/' + pet['avatar_image']
     telemetry = pet_latest_telemetry(pet['device_id'])
@@ -205,7 +218,6 @@ def app_uwb_latest():
     payload = stats.last_uwb_frame['payload']
     received_at = stats.last_uwb_frame['received_at']
     if not isinstance(received_at, str):
-        from petsense.db import iso_z
         received_at = iso_z(received_at)
     return {'success': True, 'frame': {'deviceId': payload.get('deviceId'), 'tsMs': payload.get('ts_ms'),
             'uwb': payload.get('uwb'), 'receivedAt': received_at}}
