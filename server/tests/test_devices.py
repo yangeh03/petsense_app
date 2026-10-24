@@ -41,9 +41,9 @@ class DeviceSchemaTests(unittest.TestCase):
             s.add(Device(device_id='esp32-x', owner_id=users[0].id, name='', claimed_at=db.utc_now()))
         with self.assertRaises(IntegrityError):
             with db.session_scope() as s:
-                s.add(Device(device_id='esp32-y', owner_id=2, name='', claimed_at=db.utc_now()))
+                s.add(Device(device_id='esp32-y', owner_id=1, name='', claimed_at=db.utc_now()))
         with db.session_scope() as s:
-            s.add(Device(device_id='esp32-z', owner_id=1, name='', claimed_at=db.utc_now()))
+            s.add(Device(device_id='esp32-z', owner_id=2, name='', claimed_at=db.utc_now()))
 
 
 if __name__ == '__main__':
