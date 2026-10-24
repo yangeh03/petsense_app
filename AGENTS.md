@@ -7,7 +7,7 @@
 - `app/`：Expo SDK 57、React Native 0.86、TypeScript（strict）、expo-router、Reanimated、react-native-svg。所有 npm 命令在 `app/` 下执行
 - `server/`：Python 3.12 Flask。代码在 `server/petsense/` 包（入口 `wsgi.py`），按域分包：`telemetry/`（MQTT ingest、WS/SSE 分发、音频重组、设备控制）、`actions/`（动作识别）、`collection/`（数据采集 API）、`experiments/`（实验录制）、`auth/`、`pets/`、`social/`、`petgif/`、`trends/`、`web/`
 - 运行时数据（DB、uploads、cloud_data 等）在服务端安装根目录（包上一级），与代码分离；本地跑 `PETSENSE_MQTT_DISABLED=1 python3 wsgi.py`
-- 部署：push main 触发 CI（Lint/Typecheck/Web 构建 + 服务端测试 + 模型校验），server/ 有变更时自动部署腾讯云
+- 部署：push main 触发 CI，按变更路径执行——`app/` 有变才跑客户端链（Lint/Typecheck/Web 构建），`server/`（含 ci.yml）有变才跑服务端测试+模型校验并自动部署腾讯云；无关变更两侧检查秒级跳过。手动重部署用 Actions 的 Run workflow
 
 ## 客户端要点
 
