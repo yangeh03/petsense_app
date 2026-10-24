@@ -1,23 +1,27 @@
 import copy
 import hashlib
+import json
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from flask import Flask
+from sqlalchemy import func, select
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from helpers import fresh_db
+from petsense import db
 from petsense.collection.api import CollectionStore
+from petsense.db import session_scope
+from petsense.db.models import CollectionFrame
 
 
 class CollectionTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temporary.cleanup)
+        fresh_db(self)
         self.sent = []
-        self.store = CollectionStore(self.temporary.name, "test-token", self.publish)
+        self.store = CollectionStore(self.root_dir(), "test-token", self.publish)
         app = Flask(__name__)
         app.register_blueprint(self.store.blueprint())
         self.client = app.test_client()
@@ -25,13 +29,24 @@ class CollectionTests(unittest.TestCase):
         self.frame = dict(boot_id="boot-1", seq=1, mono_us=100000, utc_us=1000000,
                           session_id="session-1", imu={"ok": True, "accel": [0, 0, 1]})
 
+    def root_dir(self):
+        import tempfile
+        holder = tempfile.TemporaryDirectory()
+        self.addCleanup(holder.cleanup)
+        return holder.name
+
     def publish(self, device, message):
         if message.get("type") == "collection_ack":
             # The publishing callback uses a new connection: ACK must follow commit.
-            with self.store.db() as db:
-                self.assertGreater(db.execute("SELECT count(*) FROM frames").fetchone()[0], 0)
+            with session_scope() as s:
+                self.assertGreater(
+                    s.execute(select(func.count()).select_from(CollectionFrame)).scalar_one(), 0)
         self.sent.append((device, message))
         return True
+
+    def frame_count(self):
+        with session_scope() as s:
+            return s.execute(select(func.count()).select_from(CollectionFrame)).scalar_one()
 
     def batch(self, frames=None, **extra):
         return dict(device="device-1", batch="batch-1",
@@ -44,8 +59,7 @@ class CollectionTests(unittest.TestCase):
     def test_commit_before_ack_and_repeated_batches_are_idempotent(self):
         for _ in range(2):
             self.store.ingest("petsense/sensor/collection_v2", self.batch(crcs=[123]))
-        with self.store.db() as db:
-            self.assertEqual(db.execute("SELECT count(*) FROM frames").fetchone()[0], 1)
+        self.assertEqual(self.frame_count(), 1)
         self.assertEqual(len(self.sent), 2)
 
     def test_conflicting_sequence_has_no_ack(self):
@@ -59,9 +73,10 @@ class CollectionTests(unittest.TestCase):
     def test_delta_batch_reconstructs_nested_fields(self):
         self.store.ingest("petsense/sensor/collection_v2", self.batch(
             [self.frame, dict(seq=2, mono_us=200000, imu={"ok": False})], delta=True))
-        with self.store.db() as db:
-            import json
-            frame = json.loads(db.execute("SELECT document FROM frames WHERE seq=2").fetchone()[0])
+        with session_scope() as s:
+            document = s.execute(
+                select(CollectionFrame.document).where(CollectionFrame.seq == 2)).scalar_one()
+        frame = json.loads(document)
         self.assertEqual(frame["imu"], {"ok": False, "accel": [0, 0, 1]})
 
     def test_clock_reply_and_start_requires_fresh_synchronized_status(self):

@@ -1,20 +1,23 @@
 """Versioned collection storage. Only acknowledge sensor batches after a durable commit."""
 import functools
 import copy
-from contextlib import contextmanager
+from datetime import datetime, timezone, timedelta
 import hashlib
 import hmac
 import json
 import os
 from pathlib import Path
 import re
-import sqlite3
 import subprocess
 import threading
 import time
-from datetime import datetime, timezone, timedelta
 
 from flask import Blueprint, request, abort, send_file
+from sqlalchemy import func, select, update
+
+from petsense import db
+from petsense.db import session_scope
+from petsense.db.models import CollectionFrame, CollectionSession, CollectionVideo, JournalCrc
 
 EVENTS = ['01_standing', '02_sitting', '03_resting', '04_sleeping', '05_walking',
           '06_running', '07_eating', '08_rolling', '09_toilet', '10_jumping', 'calibration']
@@ -33,29 +36,6 @@ class CollectionStore:
         self.lock = threading.RLock()
         self.latest = {}
         self.media_locks = {}
-        with self.db() as db:
-            db.executescript('''
-                CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY, document TEXT NOT NULL);
-                CREATE TABLE IF NOT EXISTS frames(device TEXT,boot TEXT,seq INTEGER,session TEXT,
-                    mono_us INTEGER,utc_us INTEGER,received_us INTEGER,document TEXT NOT NULL,
-                    PRIMARY KEY(device,boot,seq));
-                CREATE INDEX IF NOT EXISTS frames_session ON frames(session,boot,seq);
-                CREATE TABLE IF NOT EXISTS videos(id TEXT PRIMARY KEY,session TEXT NOT NULL,
-                    document TEXT NOT NULL,complete INTEGER NOT NULL DEFAULT 0);
-                CREATE TABLE IF NOT EXISTS journal_crc(device TEXT,boot TEXT,seq INTEGER,crc INTEGER,
-                    PRIMARY KEY(device,boot,seq));
-            ''')
-
-    @contextmanager
-    def db(self):
-        db = sqlite3.connect(self.root / 'collection.sqlite3', timeout=20)
-        db.execute('PRAGMA journal_mode=WAL')
-        db.execute('PRAGMA synchronous=FULL')
-        try:
-            with db:
-                yield db
-        finally:
-            db.close()
 
     @staticmethod
     def ident(value):
@@ -130,23 +110,30 @@ class CollectionStore:
         if crcs is not None and (len(crcs) != len(frames) or any(type(c) is not int or not 0 <= c <= 0xffffffff for c in crcs)):
             raise ValueError('invalid journal CRC list')
         received = time.time_ns() // 1000
-        with self.lock, self.db() as db:
+        # 整批一个事务：只有提交落盘后才 publish ACK（持久化契约保持）
+        with self.lock, session_scope() as s:
             for index, frame in enumerate(frames):
                 boot = self.ident(frame['boot_id'])
                 seq = frame['seq']
                 if type(seq) is not int or seq < 0 or not isinstance(frame.get('mono_us'), int):
                     raise ValueError('invalid sequence/monotonic timestamp')
                 doc = json.dumps(frame, separators=(',', ':'), allow_nan=False)
-                existing = db.execute('SELECT document FROM frames WHERE device=? AND boot=? AND seq=?',
-                                      (device, boot, seq)).fetchone()
-                if existing and json.loads(existing[0]) != frame:
+                existing = s.execute(select(CollectionFrame.document)
+                                     .where(CollectionFrame.device == device,
+                                            CollectionFrame.boot == boot,
+                                            CollectionFrame.seq == seq)).scalar_one_or_none()
+                if existing is not None and json.loads(existing) != frame:
                     raise ValueError('sequence reused with different payload')
-                db.execute('INSERT OR IGNORE INTO frames VALUES(?,?,?,?,?,?,?,?)',
-                           (device, boot, seq, frame.get('session_id', ''), frame['mono_us'],
-                            frame.get('utc_us'), received, doc))
+                stmt = db.dialect_insert(s, CollectionFrame).values(
+                    device=device, boot=boot, seq=seq, session=frame.get('session_id', ''),
+                    mono_us=frame['mono_us'], utc_us=frame.get('utc_us'),
+                    received_us=received, document=doc)
+                s.execute(stmt.on_conflict_do_nothing(index_elements=['device', 'boot', 'seq']))
                 if crcs is not None:
-                    db.execute('INSERT OR REPLACE INTO journal_crc VALUES(?,?,?,?)', (device, boot, seq, crcs[index]))
-            db.commit()
+                    stmt = db.dialect_insert(s, JournalCrc).values(
+                        device=device, boot=boot, seq=seq, crc=crcs[index])
+                    s.execute(stmt.on_conflict_do_update(
+                        index_elements=['device', 'boot', 'seq'], set_={'crc': stmt.excluded.crc}))
             if device not in self.latest or 'audit' not in self.latest[device]:
                 self.latest[device] = {'received_us': received, 'frame': frames[-1]}
         self.publish(device, {'type': 'collection_ack', 'batch': body['batch']})
@@ -193,14 +180,15 @@ class CollectionStore:
             device = self.ident(body['device'])
             doc = dict(schema_version=2, id=sid, device=device, state='created',
                        created_utc_ms=time.time_ns() // 1000000, clock=body.get('clock'))
-            with self.lock, self.db() as db:
-                previous = db.execute('SELECT document FROM sessions WHERE id=?', (sid,)).fetchone()
+            with self.lock, session_scope() as s:
+                previous = s.execute(select(CollectionSession.document)
+                                     .where(CollectionSession.id == sid)).scalar_one_or_none()
                 if previous:
-                    existing = json.loads(previous[0])
+                    existing = json.loads(previous)
                     if existing['device'] != device:
                         return {'error': 'session device mismatch'}, 409
                     return existing
-                db.execute('INSERT INTO sessions VALUES(?,?)', (sid, json.dumps(doc)))
+                s.add(CollectionSession(id=sid, document=json.dumps(doc)))
                 (self.root / sid).mkdir(exist_ok=True)
                 self.atomic_json(self.root / sid / 'session.json', doc)
             return doc, 201
@@ -213,11 +201,12 @@ class CollectionStore:
             action = body['action']
             if action not in ('start', 'stop', 'arm', 'audit', 'pause_transport'):
                 raise ValueError('invalid action')
-            with self.db() as db:
-                row = db.execute('SELECT document FROM sessions WHERE id=?', (sid,)).fetchone()
+            with session_scope() as s:
+                row = s.execute(select(CollectionSession.document)
+                                .where(CollectionSession.id == sid)).scalar_one_or_none()
             if not row:
                 abort(404)
-            session = json.loads(row[0])
+            session = json.loads(row)
             if action == 'start':
                 state = self.latest.get(session['device'], {})
                 frame = state.get('frame') or {}
@@ -240,8 +229,11 @@ class CollectionStore:
         @protected
         def quality(sid):
             self.ident(sid)
-            with self.db() as db:
-                rows = db.execute('SELECT boot,seq,mono_us,document FROM frames WHERE session=? ORDER BY boot,seq', (sid,)).fetchall()
+            with session_scope() as s:
+                rows = s.execute(select(CollectionFrame.boot, CollectionFrame.seq,
+                                        CollectionFrame.mono_us, CollectionFrame.document)
+                                 .where(CollectionFrame.session == sid)
+                                 .order_by(CollectionFrame.boot, CollectionFrame.seq)).fetchall()
             gaps = []
             previous = None
             markers = []
@@ -261,15 +253,17 @@ class CollectionStore:
             reconciled = []
             with self.lock:
                 statuses = copy.deepcopy(list(self.latest.items()))
-            with self.db() as db:
+            with session_scope() as s:
                 for device, status in statuses:
                     for file in (status.get('audit') or {}).get('files', []):
                         name = Path(file['path']).name
                         if not name.startswith(sid + '_'):
                             continue
                         boot = name.removesuffix('.psj').rsplit('_', 1)[-1]
-                        count, checksum = db.execute('SELECT count(*),sum(crc) FROM journal_crc WHERE device=? AND boot=? AND seq BETWEEN ? AND ?',
-                            (device, boot, file['first'], file['last'])).fetchone()
+                        count, checksum = s.execute(
+                            select(func.count(), func.sum(JournalCrc.crc))
+                            .where(JournalCrc.device == device, JournalCrc.boot == boot,
+                                   JournalCrc.seq.between(file['first'], file['last']))).fetchone()
                         matched = (count == file['rows'] and ((checksum or 0) & 0xffffffff) == file['crc_sum']
                                    and file['errors'] == 0 and file['gaps'] == 0 and file['valid_bytes'] == file['bytes'])
                         reconciled.append({**file, 'cloud_crc_rows': count, 'matched': matched})
@@ -290,31 +284,34 @@ class CollectionStore:
                 raise ValueError('invalid event')
             if not isinstance(body.get('start_utc_ms'), (int, float)):
                 raise ValueError('missing video timestamp')
-            with self.lock, self.db() as db:
-                if not db.execute('SELECT id FROM sessions WHERE id=?', (sid,)).fetchone():
+            with self.lock, session_scope() as s:
+                if not s.get(CollectionSession, sid):
                     abort(404)
-                row = db.execute('SELECT session,document FROM videos WHERE id=?', (vid,)).fetchone()
+                row = s.execute(select(CollectionVideo.session, CollectionVideo.document)
+                                .where(CollectionVideo.id == vid)).fetchone()
                 if row:
-                    if row[0] != sid:
+                    if row.session != sid:
                         return {'error': 'video belongs to another session'}, 409
-                    return json.loads(row[1])
+                    return json.loads(row.document)
                 doc = {**body, 'schema_version': 2, 'session_id': sid,
                        'start_beijing': beijing(body['start_utc_ms']), 'complete': False,
                        'time_alignment': 'estimated_until_visual_marker_confirmed'}
                 folder = self.root / sid / vid
                 folder.mkdir(exist_ok=True)
                 self.atomic_json(folder / 'annotation.json', doc)
-                db.execute('INSERT INTO videos VALUES(?,?,?,0)', (vid, sid, json.dumps(doc)))
+                s.add(CollectionVideo(id=vid, session=sid, document=json.dumps(doc), complete=0))
             return doc, 201
 
         def video_folder(sid, vid):
             self.ident(sid)
             self.ident(vid)
-            with self.db() as db:
-                row = db.execute('SELECT document,complete FROM videos WHERE id=? AND session=?', (vid, sid)).fetchone()
+            with session_scope() as s:
+                row = s.execute(select(CollectionVideo.document, CollectionVideo.complete)
+                                .where(CollectionVideo.id == vid,
+                                       CollectionVideo.session == sid)).fetchone()
             if not row:
                 abort(404)
-            return self.root / sid / vid, json.loads(row[0]), row[1]
+            return self.root / sid / vid, json.loads(row.document), row.complete
 
         @bp.route('/sessions/<sid>/videos/<vid>/upload', methods=['GET', 'PUT'])
         @protected
@@ -374,8 +371,9 @@ class CollectionStore:
                            interrupted=bool(body.get('interrupted')), labels=body.get('labels', []),
                            clock=body.get('clock'), start_call_bounds=body.get('start_call_bounds'))
                 self.atomic_json(folder / 'annotation.json', doc)
-                with self.db() as db:
-                    db.execute('UPDATE videos SET complete=1,document=? WHERE id=?', (json.dumps(doc), vid))
+                with session_scope() as s:
+                    s.execute(update(CollectionVideo).where(CollectionVideo.id == vid)
+                              .values(complete=1, document=json.dumps(doc)))
                 return doc
 
         @bp.post('/sessions/<sid>/videos/<vid>/alignment')
@@ -387,12 +385,14 @@ class CollectionStore:
                 position = float(body['video_ms'])
                 if not complete or position < 0 or position > (doc.get('duration_ms') or 0):
                     raise ValueError('invalid video position')
-                with self.db() as db:
-                    row = db.execute('SELECT document FROM frames WHERE session=? AND boot=? AND seq=?',
-                                     (sid, body['boot'], int(body['seq']))).fetchone()
+                with session_scope() as s:
+                    row = s.execute(select(CollectionFrame.document)
+                                    .where(CollectionFrame.session == sid,
+                                           CollectionFrame.boot == body['boot'],
+                                           CollectionFrame.seq == int(body['seq']))).scalar_one_or_none()
                     if not row:
                         raise ValueError('sensor marker missing')
-                    frame = json.loads(row[0])
+                    frame = json.loads(row)
                     if not frame.get('marker_id') or not frame.get('utc_us'):
                         raise ValueError('marker has no synchronized UTC')
                     doc['alignment'] = dict(method='manual_visual_imu_marker', sensor_boot=body['boot'],
@@ -401,7 +401,8 @@ class CollectionStore:
                         sensor_clock_uncertainty_us=frame.get('clock_uncertainty_us'),
                         sample_quantization_ms=100, visual_error_ms='not_measured')
                     doc['time_alignment'] = 'manual_marker_confirmed'
-                    db.execute('UPDATE videos SET document=? WHERE id=?', (json.dumps(doc), vid))
+                    s.execute(update(CollectionVideo).where(CollectionVideo.id == vid)
+                              .values(document=json.dumps(doc)))
                 self.atomic_json(folder / 'annotation.json', doc)
             return doc
 
