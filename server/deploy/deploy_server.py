@@ -17,6 +17,7 @@ import urllib.request
 
 MANAGED_FILES = (
     "petsense", "wsgi.py",
+    "alembic", "alembic.ini",
     "models/random_forest_1s.joblib",
     "action-dashboard/index.html",
     "requirements.txt", "requirements.lock",

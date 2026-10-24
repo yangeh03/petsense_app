@@ -28,10 +28,26 @@ registers this module as a Flask blueprint.
 
 - Credentials remain outside Git: `~/.petsense-collection-token`,
   `~/.petsense-mqtt-password`, and the existing PetGIF key.
-- Runtime data stays in `collection_data/collection.sqlite3` and session folders.
+- Session/video files stay in `collection_data/` folders; their metadata now
+  lives in the unified database (see Database below).
 - `export_session.py --session ID --output NEW_DIRECTORY` exports samples and
   annotations without inventing missing values. Run it from the server directory.
 - Do not treat quality checks as proof of sensor accuracy or visual alignment.
+
+## Database
+
+Single logical database `petsense.db` at the install root, created and
+versioned by Alembic (`alembic/` + `alembic.ini` ship with the package;
+`create_app` runs `upgrade head` idempotently on boot). Models are the schema
+source of truth (`petsense/db/models/`); never hand-write DDL — add a migration
+(`cd server && python3 -m alembic -c alembic.ini revision --autogenerate`).
+
+SQLite and PostgreSQL are both supported dialects (CI runs the whole test suite
+against PostgreSQL on every push). Switching the cloud instance is a config
+change: set `PETSENSE_DATABASE_URL=postgresql://...` and restart — no code
+changes. The legacy pre-migration files (`data.db`, `petsense_app.db`,
+`collection_data/collection.sqlite3`) are kept untouched at the install root as
+a natural backup; delete them manually after a stabilization period.
 
 ## Local verification
 
@@ -81,8 +97,12 @@ Each deployment:
 
 Database, upload, collection, audio, static/dashboard and credential files are
 outside the deployment allowlist. No demo seeding occurs. Rollback restores code
-and interpreter; it does not undo database migrations or data written by a
-running service. Review migrations separately before adding them.
+and interpreter; it does not undo database migrations. The initial schema
+migration (`alembic/versions/0001_initial.py`) is safe to roll back over: if the
+service is reverted to a pre-migration revision, the old code resumes reading
+its legacy SQLite files (`data.db`, `petsense_app.db`), which are never touched
+by the new code path, while `petsense.db` stays in place for a later re-upgrade.
+Review migrations separately before adding them.
 
 Inspect with an admin SSH session:
 
