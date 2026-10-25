@@ -54,7 +54,7 @@ export default function CreateScreen() {
               <Pressable
                 key={item}
                 onPress={() => {
-                  if (item === 'pet') router.replace('/setup');
+                  if (item === 'pet') router.replace('/pet-profile');
                 }}
                 style={styles.segmentItemWrap}
               >
@@ -65,7 +65,7 @@ export default function CreateScreen() {
                   ]}
                 >
                   <ThemedText type="smallBold" style={selected ? { color: theme.tint } : undefined}>
-                    {item === 'post' ? '新帖子' : '添加宠物'}
+                    {item === 'post' ? '新帖子' : '宠物与项圈'}
                   </ThemedText>
                 </View>
               </Pressable>

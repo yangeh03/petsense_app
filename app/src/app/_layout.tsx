@@ -20,6 +20,7 @@ export default function RootLayout() {
           <Stack.Screen name="login" options={{ presentation: 'modal' }} />
           <Stack.Screen name="user" />
           <Stack.Screen name="monitor" />
+          <Stack.Screen name="pet-profile" />
         </Stack>
       </AuthProvider>
     </ThemeProvider>

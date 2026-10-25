@@ -130,7 +130,13 @@ export default function ProfileScreen() {
           )}
         </View>
         {(profile?.pets ?? []).map((pet) => (
-          <ThemedView key={pet.id} type="backgroundElement" style={styles.petCard}>
+          <Pressable
+            key={pet.id}
+            accessibilityRole="button"
+            accessibilityLabel={`编辑${pet.name}的档案`}
+            onPress={() => router.push('/pet-profile')}
+            style={[styles.petCard, { backgroundColor: theme.backgroundElement }]}
+          >
             <View style={[styles.petAvatar, { backgroundColor: theme.tintBackground }]}>
               {pet.avatarImageUrl ? (
                 <Image
@@ -163,7 +169,7 @@ export default function ProfileScreen() {
                 </ThemedText>
               </View>
             ) : null}
-          </ThemedView>
+          </Pressable>
         ))}
 
         <FollowListModal

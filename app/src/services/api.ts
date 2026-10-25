@@ -258,3 +258,10 @@ export function fetchFollowList(
 export function fetchTrends(period: TrendPeriod): Promise<TrendsResponse> {
   return request(`/trends?period=${period}`);
 }
+
+export function updatePet(
+  petId: number,
+  input: { name: string; species: string; breed: string },
+): Promise<{ pet: SocialPet }> {
+  return request(`/pets/${petId}`, { method: 'PATCH', body: input });
+}

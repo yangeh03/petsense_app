@@ -77,6 +77,35 @@ class PetsTests(unittest.TestCase):
         self.assertRegex(reply['latest']['receivedAt'], r'Z$')
         self.assertEqual(reply['pet']['name'], 'Max')
 
+    def test_patch_profile_persists_name_without_changing_device(self):
+        headers = self.register_and_header()
+        pet_id = self.client.get('/api/app/pets', headers=headers).json['pets'][0]['id']
+        result = self.client.patch(f'/api/app/pets/{pet_id}', headers=headers,
+                                   json={'name': ' 小满 ', 'breed': '中华田园犬'})
+        self.assertEqual(result.status_code, 200)
+        dashboard = self.client.get('/api/app/dashboard', headers=headers).json
+        self.assertEqual(dashboard['pet']['name'], '小满')
+        self.assertEqual(dashboard['pet']['breed'], '中华田园犬')
+        self.assertEqual(dashboard['pet']['device_id'], 'esp32-001')
+
+    def test_patch_rejects_empty_names_and_device_reassignment(self):
+        headers = self.register_and_header()
+        pet_id = self.client.get('/api/app/pets', headers=headers).json['pets'][0]['id']
+        for body in ({'name': ''}, {'name': 'n' * 21}, {'species': 'lion'},
+                     {'name': 123}, {'deviceId': 'other'}, []):
+            with self.subTest(body=body):
+                self.assertEqual(self.client.patch(f'/api/app/pets/{pet_id}',
+                                 headers=headers, json=body).status_code, 400)
+
+    def test_patch_requires_owner_and_login(self):
+        from test_devices import seed_user, make_session_token
+        headers = self.register_and_header()
+        pet_id = self.client.get('/api/app/pets', headers=headers).json['pets'][0]['id']
+        self.assertEqual(self.client.patch(f'/api/app/pets/{pet_id}', json={'name': 'x'}).status_code, 401)
+        other = {'X-Petsense-Session': make_session_token(seed_user('pet-other'))}
+        self.assertEqual(self.client.patch(f'/api/app/pets/{pet_id}', headers=other,
+                                          json={'name': 'x'}).status_code, 404)
+
     def test_uwb_latest_scoped_to_my_device(self):
         from petsense import stats as stats_module
         headers = self.register_and_header()

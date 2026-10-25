@@ -115,6 +115,33 @@ def app_pets():
     return {'success': True, 'pet': {'id': pet_id, 'name': name}}, 201
 
 
+@bp.patch('/pets/<int:pet_id>')
+def update_pet_profile(pet_id):
+    user, error = require_app_user()
+    if error:
+        return error
+    body = request.get_json(silent=True)
+    allowed = {'name': 'name', 'species': 'species', 'breed': 'breed', 'avatarEmoji': 'avatar_emoji'}
+    if not isinstance(body, dict) or not body or set(body) - set(allowed):
+        return {'message': '请只修改名字、物种、品种或头像'}, 400
+    if any(not isinstance(value, str) for value in body.values()):
+        return {'message': '资料格式不正确'}, 400
+    values = {allowed[key]: value.strip() for key, value in body.items()}
+    if 'name' in values and not 1 <= len(values['name']) <= 20:
+        return {'message': '名字需为1—20字'}, 400
+    if 'species' in values and values['species'] not in ('dog', 'cat', 'rabbit'):
+        return {'message': '物种仅支持狗、猫或兔子'}, 400
+    if len(values.get('breed', '')) > 40 or ('avatar_emoji' in values and not 1 <= len(values['avatar_emoji']) <= 16):
+        return {'message': '品种或头像内容过长'}, 400
+    with session_scope() as session:
+        pet = session.execute(select(Pet).where(Pet.id == pet_id, Pet.user_id == user['id'])).scalar_one_or_none()
+        if pet is None:
+            return {'message': '宠物不存在'}, 404
+        for key, value in values.items():
+            setattr(pet, key, value)
+    return {'pet': pet_dict(pet)}
+
+
 @bp.route('/pets/<int:pet_id>/avatar-image', methods=['POST'])
 def app_pet_avatar_image(pet_id):
     """把 PetGIF 生成的角色卡/媒体下载为宠物头像图。"""
