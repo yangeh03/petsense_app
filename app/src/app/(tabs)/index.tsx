@@ -1,7 +1,7 @@
 import { Image } from 'expo-image';
 import { SymbolView } from 'expo-symbols';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
+import { useCallback, useMemo, useRef, useState, type ComponentProps } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -16,7 +16,8 @@ import { DeviceStatusCard } from '@/components/dashboard/device-status-card';
 import { selectDashboardReadings } from '@/services/dashboard-readings';
 import { DiaryModal } from '@/components/dashboard/diary-modal';
 import { NotificationBell } from '@/components/alerts/notification-bell';
-import { LineChart } from '@/components/live/line-chart';
+import { TrendCard } from '@/components/dashboard/trend-card';
+import { useTrends } from '@/hooks/use-trends';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { BottomTabInset, Fonts, MaxContentWidth, Shadows, Spacing } from '@/constants/theme';
@@ -25,9 +26,8 @@ import { useAuth } from '@/hooks/use-auth';
 import { useTelemetry } from '@/hooks/use-telemetry';
 import { usePetAction } from '@/hooks/use-pet-action';
 import { useTheme } from '@/hooks/use-theme';
-import { absoluteUrl, fetchDashboard, fetchTrends } from '@/services/api';
-import type { DashboardData, TrendBucket, TrendPeriod } from '@/types/social';
-import type { SeriesKey } from '@/types/telemetry';
+import { absoluteUrl, fetchDashboard } from '@/services/api';
+import type { DashboardData, TrendMetric, TrendPeriod } from '@/types/social';
 
 type SymbolName = ComponentProps<typeof SymbolView>['name'];
 
@@ -70,12 +70,10 @@ export default function DashboardScreen() {
   const [diaryVisible, setDiaryVisible] = useState(false);
   // 板块主要体征始终可见，更多指标与历史趋势按需展开
   const [vitalsOpen, setVitalsOpen] = useState(false);
-  const [trendOpen, setTrendOpen] = useState(false);
-  const [trendMetric, setTrendMetric] = useState<SeriesKey>('heartRate');
+  const [trendOpen, setTrendOpen] = useState(true);
+  const [trendMetric, setTrendMetric] = useState<TrendMetric>('heartRate');
   const [trendPeriod, setTrendPeriod] = useState<TrendPeriod>('day');
-  const [trendBuckets, setTrendBuckets] = useState<TrendBucket[]>([]);
-  const [trendLoading, setTrendLoading] = useState(false);
-  const [trendWidth, setTrendWidth] = useState(0);
+  const trends = useTrends(user?.id, dashboard?.pet?.device_id, trendPeriod, trendOpen);
   const loadSequence = useRef(0);
   const loadingRequest = useRef(false);
   const loadedUserId = useRef<number | null>(null);
@@ -95,7 +93,6 @@ export default function DashboardScreen() {
       if (sequence === loadSequence.current) {
         loadingRequest.current = false;
         setLoading(false);
-        setRefreshing(false);
       }
     }
   }, [user]);
@@ -106,7 +103,6 @@ export default function DashboardScreen() {
         if (loadedUserId.current !== user.id) {
           loadedUserId.current = user.id;
           setDashboard(null);
-          setTrendBuckets([]);
           setLoading(true);
         }
         void load();
@@ -123,28 +119,6 @@ export default function DashboardScreen() {
       }
     }, [user, load]),
   );
-
-  useEffect(() => {
-    if (!user) return;
-    let cancelled = false;
-    Promise.resolve()
-      .then(() => {
-        if (!cancelled) setTrendLoading(true);
-        return fetchTrends(trendPeriod);
-      })
-      .then((data) => {
-        if (!cancelled) setTrendBuckets(data.buckets);
-      })
-      .catch(() => {
-        if (!cancelled) setTrendBuckets([]);
-      })
-      .finally(() => {
-        if (!cancelled) setTrendLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [user, trendPeriod, dashboard?.pet?.device_id]);
 
   const pet = dashboard?.pet ?? null;
   const petName = pet?.name ?? '毛孩子';
@@ -185,55 +159,6 @@ export default function DashboardScreen() {
             ? theme.online
             : theme.textSecondary;
 
-  // 趋势统计：均值曲线 + 平均/最低/最高
-  const TREND_METRICS: Record<
-    SeriesKey,
-    {
-      label: string;
-      unit: string;
-      decimals: number;
-      icon: SymbolName;
-      color: string;
-      pick: (bucket: TrendBucket) => number | null;
-    }
-  > = {
-    heartRate: {
-      label: '心率',
-      unit: 'bpm',
-      decimals: 0,
-      icon: { ios: 'heart.fill', android: 'favorite', web: 'favorite' },
-      color: theme.danger,
-      pick: (bucket) => bucket.avgHr,
-    },
-    spo2: {
-      label: '血氧',
-      unit: '%',
-      decimals: 0,
-      icon: { ios: 'lungs.fill', android: 'air', web: 'air' },
-      color: theme.info,
-      pick: (bucket) => bucket.avgSpo2,
-    },
-    bodyTemp: {
-      label: '体温',
-      unit: '℃',
-      decimals: 1,
-      icon: { ios: 'thermometer.medium', android: 'device_thermostat', web: 'device_thermostat' },
-      color: theme.warning,
-      pick: (bucket) => bucket.avgTemp,
-    },
-  };
-  const trend = TREND_METRICS[trendMetric];
-
-  const trendPoints = trendBuckets
-    .map((bucket) => ({ v: trend.pick(bucket), label: bucket.label }))
-    .filter((item): item is { v: number; label: string } => item.v !== null && item.v > 0)
-    .map((item, index) => ({ ...item, t: index }));
-  const trendAvg = trendPoints.length
-    ? trendPoints.reduce((sum, point) => sum + point.v, 0) / trendPoints.length
-    : null;
-  const trendMin = trendPoints.length ? Math.min(...trendPoints.map((point) => point.v)) : null;
-  const trendMax = trendPoints.length ? Math.max(...trendPoints.map((point) => point.v)) : null;
-
   return (
     <ScrollView
       style={[styles.scrollView, { backgroundColor: theme.background }]}
@@ -243,7 +168,7 @@ export default function DashboardScreen() {
           refreshing={refreshing}
           onRefresh={() => {
             setRefreshing(true);
-            void load();
+            void Promise.all([load(), trends.refresh()]).finally(() => setRefreshing(false));
           }}
         />
       }
@@ -481,165 +406,16 @@ export default function DashboardScreen() {
               )}
             </View>
 
-            {/* 趋势统计（默认折叠，标题行展开） */}
-            <View
-              style={[
-                styles.trendCard,
-                { backgroundColor: theme.backgroundElement, boxShadow: Shadows.card },
-              ]}
-            >
-              <Pressable
-                style={styles.sectionHead}
-                onPress={() => setTrendOpen((value) => !value)}
-                accessibilityLabel={trendOpen ? '收起趋势统计' : '展开趋势统计'}
-              >
-                <ThemedText style={[styles.trendTitle, { fontFamily: Fonts.rounded }]}>
-                  {trendPeriod === 'day'
-                    ? '24 小时趋势'
-                    : trendPeriod === 'week'
-                      ? '7 天趋势'
-                      : trendPeriod === 'month'
-                        ? '30 天趋势'
-                        : '全部历史趋势'}
-                </ThemedText>
-                <SymbolView
-                  name={{ ios: 'chevron.down', android: 'expand_more', web: 'expand_more' }}
-                  size={15}
-                  tintColor={theme.textSecondary}
-                  style={{ transform: [{ rotate: trendOpen ? '180deg' : '0deg' }] }}
-                />
-              </Pressable>
-
-              {trendOpen ? (
-                <>
-                  <View style={styles.trendHeadRow}>
-                    <View style={styles.trendSwitch}>
-                      {(Object.keys(TREND_METRICS) as SeriesKey[]).map((key) => {
-                        const selected = key === trendMetric;
-                        return (
-                          <Pressable key={key} onPress={() => setTrendMetric(key)}>
-                            <View
-                              style={[
-                                styles.trendChip,
-                                selected && { backgroundColor: theme.tint },
-                              ]}
-                            >
-                              <ThemedText
-                                type="smallBold"
-                                style={[styles.trendChipText, selected && { color: '#ffffff' }]}
-                              >
-                                {TREND_METRICS[key].label}
-                              </ThemedText>
-                            </View>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                    <View style={styles.periodRow}>
-                      {(
-                        [
-                          ['day', '24小时'],
-                          ['week', '7天'],
-                          ['month', '30天'],
-                          ['all', '全部'],
-                        ] as const
-                      ).map(([period, label]) => {
-                        const selected = trendPeriod === period;
-                        return (
-                          <Pressable key={period} onPress={() => setTrendPeriod(period)}>
-                            <View
-                              style={[
-                                styles.periodChip,
-                                selected && { backgroundColor: theme.tint },
-                              ]}
-                            >
-                              <ThemedText
-                                type="smallBold"
-                                style={[styles.trendChipText, selected && { color: '#ffffff' }]}
-                              >
-                                {label}
-                              </ThemedText>
-                            </View>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                  </View>
-
-                  <View
-                    style={styles.trendChart}
-                    onLayout={(event) => {
-                      const { width } = event.nativeEvent.layout;
-                      if (width > 0 && width !== trendWidth) setTrendWidth(width);
-                    }}
-                  >
-                    {trendLoading ? (
-                      <ActivityIndicator
-                        color={theme.tint}
-                        style={{ height: 150, width: '100%' }}
-                      />
-                    ) : (
-                      trendWidth > 0 && (
-                        <LineChart
-                          points={trendPoints}
-                          color={trend.color}
-                          unit={trend.unit}
-                          decimals={trend.decimals}
-                          width={trendWidth}
-                          height={150}
-                        />
-                      )
-                    )}
-                  </View>
-
-                  {trendPoints.length >= 2 && (
-                    <View style={styles.trendLabels}>
-                      <ThemedText
-                        type="small"
-                        themeColor="textSecondary"
-                        style={styles.trendLabelText}
-                      >
-                        {trendPoints[0].label}
-                      </ThemedText>
-                      <ThemedText
-                        type="small"
-                        themeColor="textSecondary"
-                        style={styles.trendLabelText}
-                      >
-                        {trendPoints[Math.floor(trendPoints.length / 2)].label}
-                      </ThemedText>
-                      <ThemedText
-                        type="small"
-                        themeColor="textSecondary"
-                        style={styles.trendLabelText}
-                      >
-                        {trendPoints[trendPoints.length - 1].label}
-                      </ThemedText>
-                    </View>
-                  )}
-
-                  {trendAvg !== null && (
-                    <View style={styles.summaryRow}>
-                      <SummaryCell label="平均" value={trendAvg.toFixed(trend.decimals)} />
-                      <SummaryCell
-                        label="最低"
-                        value={trendMin !== null ? trendMin.toFixed(trend.decimals) : '--'}
-                      />
-                      <SummaryCell
-                        label="最高"
-                        value={trendMax !== null ? trendMax.toFixed(trend.decimals) : '--'}
-                      />
-                    </View>
-                  )}
-                </>
-              ) : (
-                <ThemedText type="small" themeColor="textSecondary" style={styles.sectionSummary}>
-                  {trendAvg !== null
-                    ? `${trend.label}平均 ${trendAvg.toFixed(trend.decimals)} ${trend.unit} · 最低 ${trendMin?.toFixed(trend.decimals) ?? '--'} · 最高 ${trendMax?.toFixed(trend.decimals) ?? '--'}`
-                    : '暂无统计记录'}
-                </ThemedText>
-              )}
-            </View>
+            <TrendCard
+              key={`${user?.id}/${pet.id}/${pet.device_id}`}
+              {...trends}
+              expanded={trendOpen}
+              setExpanded={setTrendOpen}
+              period={trendPeriod}
+              setPeriod={setTrendPeriod}
+              metric={trendMetric}
+              setMetric={setTrendMetric}
+            />
 
             {/* 运动日记入口 */}
             {pet.petgif_id && (
@@ -736,20 +512,6 @@ function MiniPill({ label, value }: { label: string; value: string }) {
   );
 }
 
-function SummaryCell({ label, value }: { label: string; value: string }) {
-  const theme = useTheme();
-  return (
-    <View style={[styles.summaryCell, { backgroundColor: theme.backgroundSelected }]}>
-      <ThemedText type="small" themeColor="textSecondary" style={styles.summaryCellLabel}>
-        {label}
-      </ThemedText>
-      <ThemedText type="smallBold" style={styles.summaryCellValue}>
-        {value}
-      </ThemedText>
-    </View>
-  );
-}
-
 function GuideCard({
   emoji,
   title,
@@ -796,7 +558,8 @@ const styles = StyleSheet.create({
   scrollView: { flex: 1 },
   contentContainer: { flexDirection: 'row', justifyContent: 'center' },
   container: {
-    flexGrow: 1,
+    flex: 1,
+    minWidth: 0,
     maxWidth: MaxContentWidth,
     paddingHorizontal: Spacing.four,
     paddingBottom: BottomTabInset + 70,
@@ -914,57 +677,6 @@ const styles = StyleSheet.create({
   },
   miniPillLabel: { fontSize: 12, lineHeight: 16 },
   miniPillValue: { fontSize: 13, lineHeight: 17 },
-
-  trendCard: {
-    borderRadius: 22,
-    padding: 14,
-    gap: 10,
-  },
-  trendHeadRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    flexWrap: 'wrap',
-    gap: Spacing.two,
-  },
-  trendTitle: { fontSize: 18, fontWeight: '700', lineHeight: 24 },
-  trendSwitch: {
-    flexDirection: 'row',
-    gap: 6,
-  },
-  trendChip: {
-    borderRadius: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    backgroundColor: 'rgba(148,131,111,0.12)',
-  },
-  trendChipText: { fontSize: 11, lineHeight: 15 },
-  periodRow: { flexDirection: 'row', gap: 6 },
-  periodChip: {
-    borderRadius: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    backgroundColor: 'rgba(148,131,111,0.12)',
-  },
-  trendChart: { width: '100%' },
-  trendLabels: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  trendLabelText: { fontSize: 10, lineHeight: 13 },
-  summaryRow: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  summaryCell: {
-    flex: 1,
-    alignItems: 'center',
-    borderRadius: 12,
-    paddingVertical: 8,
-    gap: 2,
-  },
-  summaryCellLabel: { fontSize: 11, lineHeight: 14 },
-  summaryCellValue: { fontSize: 15, lineHeight: 19 },
 
   diaryEntry: {
     flexDirection: 'row',

@@ -142,10 +142,19 @@ type DashboardWithPet = {
 /** 趋势统计周期 */
 export type TrendPeriod = 'day' | 'week' | 'month' | 'all';
 
-/** 趋势统计桶：按小时/按天聚合的平均体征值 */
+export type TrendMetric = 'heartRate' | 'spo2' | 'bodyTemp';
+export type TrendStats = {
+  count: number;
+  avg: number | null;
+  min: number | null;
+  max: number | null;
+};
 export type TrendBucket = {
   date: string;
   label: string;
+  start: string;
+  end: string;
+  metrics: Record<TrendMetric, TrendStats>;
   avgHr: number | null;
   minHr: number | null;
   maxHr: number | null;
@@ -153,10 +162,16 @@ export type TrendBucket = {
   avgTemp: number | null;
   samples: number;
 };
-
 export type TrendsResponse = {
   success: boolean;
-  period: string;
+  schemaVersion: number;
+  period: TrendPeriod;
+  generatedAt: string;
+  window: { start: string; end: string; granularity: 'hour' | 'day' };
+  actualRange: { start: string; end: string } | null;
+  summary: Record<TrendMetric, TrendStats>;
+  coverage: Record<TrendMetric, { recordedBuckets: number; totalBuckets: number }>;
+  warnings: string[];
   buckets: TrendBucket[];
 };
 
