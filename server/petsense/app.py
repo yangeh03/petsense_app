@@ -19,6 +19,7 @@ from petsense.pets import routes as pets_routes
 from petsense.social import routes as social_routes
 from petsense.telemetry import audio as telemetry_audio
 from petsense.telemetry import edge as telemetry_edge
+from petsense.telemetry import observations
 from petsense.telemetry import commands as telemetry_commands
 from petsense.telemetry import mqtt_ingest
 from petsense.telemetry import realtime as telemetry_realtime
@@ -35,6 +36,7 @@ def create_app(start_background=True):
     os.makedirs(config.CLOUD_DATA_DIR, exist_ok=True)
     os.makedirs(config.UPLOADS_DIR, exist_ok=True)
     db.init_db()
+    observations.backfill()
 
     app = Flask('petsense')
     app.register_blueprint(mqtt_ingest.collection_store.blueprint())
@@ -43,6 +45,7 @@ def create_app(start_background=True):
     app.register_blueprint(actions_service.bp)
     app.register_blueprint(telemetry_audio.bp)
     app.register_blueprint(telemetry_edge.bp)
+    app.register_blueprint(observations.bp)
     app.register_blueprint(telemetry_commands.bp)
     app.register_blueprint(experiments_recorder.bp)
     app.register_blueprint(auth_routes.bp)
@@ -61,7 +64,7 @@ def create_app(start_background=True):
             response.headers['Access-Control-Allow-Origin'] = origin
             response.headers['Access-Control-Allow-Credentials'] = 'true'
             response.headers['Access-Control-Allow-Headers'] = f'{config.APP_TOKEN_HEADER}, Content-Type'
-            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PATCH, OPTIONS'
             response.headers['Vary'] = 'Origin'
         return response
 

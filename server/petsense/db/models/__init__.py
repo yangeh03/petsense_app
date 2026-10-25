@@ -9,11 +9,11 @@ from petsense.db.models.collection import (
 from petsense.db.models.devices import Device
 from petsense.db.models.pets import DailyStat, HomeLayout, Pet
 from petsense.db.models.social import Comment, Follow, Post, PostLike
-from petsense.db.models.telemetry import ActionPrediction, Reading
+from petsense.db.models.telemetry import ActionPrediction, Reading, TelemetryLatest, TelemetryMinute, TelemetryEvent
 
 __all__ = [
     'User', 'AuthSession', 'Pet', 'DailyStat', 'HomeLayout',
     'Post', 'PostLike', 'Comment', 'Follow',
-    'Reading', 'ActionPrediction', 'Device',
+    'Reading', 'ActionPrediction', 'Device', 'TelemetryLatest', 'TelemetryMinute', 'TelemetryEvent',
     'CollectionSession', 'CollectionFrame', 'CollectionVideo', 'JournalCrc',
 ]

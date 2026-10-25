@@ -18,7 +18,7 @@ from petsense.db import iso_z, session_scope, utc_now
 from petsense.db.models import Device, Reading
 from petsense.experiments import recorder
 from petsense.telemetry import audio as audio_module
-from petsense.telemetry import edge
+from petsense.telemetry import edge, observations
 from petsense.telemetry.realtime import broadcast_packet
 
 _trim_counter = 0
@@ -61,6 +61,10 @@ def store(topic, payload, device_id=None):
     with session_scope() as s:
         s.execute(insert(Reading).values(topic=topic, payload=payload,
                                          received_at=received, device_id=device_id))
+        if device_id:
+            decoded = json.loads(payload)
+            if isinstance(decoded, dict) and decoded.get('deviceId') == device_id:
+                observations.ingest_observation(s, decoded, received)
     global _trim_counter
     _trim_counter += 1
     if _trim_counter >= 500:
@@ -70,6 +74,7 @@ def store(topic, payload, device_id=None):
             max_id = s.execute(select(func.max(Reading.id))).scalar_one()
             if max_id is not None:
                 s.execute(delete(Reading).where(Reading.id <= max_id - config.MAX_HISTORY))
+            observations.prune(s, received)
     return received
 
 
