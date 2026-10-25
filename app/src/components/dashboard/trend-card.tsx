@@ -198,13 +198,8 @@ export function TrendCard({
                 </ThemedText>
               )}
               <ThemedText style={styles.footnote} themeColor="textSecondary">
-                统计来自项圈近期记录与实验归档；未归档的旧记录可能已清理。平均及极值按有效原始样本计算，记录时段不代表连续佩戴时长。
+                统计来自项圈近期实时记录；更早的记录可能已按容量清理。平均及极值按有效原始样本计算，记录时段不代表连续佩戴时长。
               </ThemedText>
-              {data.warnings.map((warning) => (
-                <ThemedText key={warning} type="small" themeColor="danger">
-                  {warning}，当前统计可能不完整。
-                </ThemedText>
-              ))}
             </>
           )}
         </>

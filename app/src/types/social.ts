@@ -171,7 +171,6 @@ export type TrendsResponse = {
   actualRange: { start: string; end: string } | null;
   summary: Record<TrendMetric, TrendStats>;
   coverage: Record<TrendMetric, { recordedBuckets: number; totalBuckets: number }>;
-  warnings: string[];
   buckets: TrendBucket[];
 };
 

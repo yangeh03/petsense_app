@@ -1,4 +1,4 @@
-"""Trend API: deduplicated raw statistics over owned-device archive + live records."""
+"""Trend API: raw statistics over owned-device live readings."""
 import json
 from datetime import timedelta
 
@@ -9,7 +9,7 @@ from petsense.auth.routes import require_app_user
 from petsense.db import session_scope, utc_now
 from petsense.db.models import Reading
 from petsense.telemetry.realtime import device_ids_for_user
-from petsense.trends.aggregation import archive_records, build_trends, floor_time, merge_records, positive
+from petsense.trends.aggregation import build_trends, floor_time, positive
 
 bp = Blueprint('trends', __name__, url_prefix='/api/app')
 
@@ -24,7 +24,6 @@ def app_trends():
         return {'success': False, 'message': '不支持的趋势时间范围'}, 400
     now = utc_now()
     devices = device_ids_for_user(user['id'])
-    records, warnings = archive_records(devices) if devices else ([], [])
     live = []
     cutoff = (now - timedelta(hours=24) if period == 'day' else
               floor_time(now, False) - timedelta(days=6 if period == 'week' else 29))
@@ -45,7 +44,4 @@ def app_trends():
                     live.append((device, received, values))
             except (TypeError, ValueError, AttributeError):
                 continue
-    result = build_trends(merge_records(records, live), period, now, warnings, bool(devices))
-    if warnings and result['actualRange'] is None:
-        return {'success': False, 'message': '历史记录读取失败，请稍后重试'}, 503
-    return result
+    return build_trends(live, period, now, bool(devices))

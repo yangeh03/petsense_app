@@ -1,31 +1,14 @@
-"""Owned-device health records, shared by every trend range."""
-import csv
+"""Owned-device health statistics over live readings, shared by every trend range."""
 import math
-import os
-import time
-from collections import Counter, OrderedDict
-from datetime import datetime, timezone, timedelta
-from threading import RLock
+from datetime import timezone, timedelta
 from zoneinfo import ZoneInfo
-
-from petsense import config
-from petsense.experiments.recorder import manifest_device
 
 SHANGHAI = ZoneInfo('Asia/Shanghai')
 METRICS = ('heartRate', 'spo2', 'bodyTemp')
-CSV_FIELDS = ('heart_rate_bpm', 'spo2_pct', 'body_temp_c')
-_archive_cache = OrderedDict()
-_cache_lock = RLock()
 
 
 def iso(dt):
     return dt.astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
-
-
-def timestamp(raw):
-    dt = datetime.fromisoformat(str(raw).replace('Z', '+00:00'))
-    # Legacy received_at without an offset is server UTC.
-    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
 
 
 def positive(raw):
@@ -36,91 +19,6 @@ def positive(raw):
         return value if math.isfinite(value) and value > 0 else None
     except (TypeError, ValueError, OverflowError):
         return None
-
-
-def archive_records(devices):
-    """Cache only complete file snapshots; append/replace invalidates on next request."""
-    records, warnings = [], []
-    root = config.CLOUD_DATA_DIR
-    if not os.path.exists(root):
-        return records, warnings
-    try:
-        folders = sorted(os.scandir(root), key=lambda item: item.name)
-    except OSError:
-        return records, ['部分历史归档暂时无法读取']
-    for folder in folders:
-        if not folder.is_dir():
-            continue
-        device = manifest_device(folder.path)
-        if device not in devices:
-            continue
-        path = os.path.join(folder.path, 'health.csv')
-        try:
-            stat = os.stat(path)
-        except FileNotFoundError:
-            continue
-        except OSError:
-            warnings.append('部分历史归档暂时无法读取')
-            continue
-        signature = (stat.st_mtime_ns, stat.st_size, device)
-        with _cache_lock:
-            cached = _archive_cache.get(path)
-            if cached and cached[0] == signature and time.monotonic() - cached[1] < 900:
-                _archive_cache.move_to_end(path)
-                records.extend(cached[2])
-                warnings.extend(cached[3])
-                continue
-        rows, problems = [], []
-        try:
-            with open(path, encoding='utf-8-sig', newline='') as handle:
-                reader = csv.DictReader(handle)
-                required = {'received_at', 'valid', *CSV_FIELDS}
-                if not required.issubset(reader.fieldnames or []):
-                    problems.append('部分历史归档格式不完整')
-                else:
-                    for row in reader:
-                        if str(row.get('valid', '')).lower() != 'true':
-                            continue
-                        values = tuple(positive(row.get(key)) for key in CSV_FIELDS)
-                        if all(value is None for value in values):
-                            continue
-                        try:
-                            rows.append((device, timestamp(row['received_at']), values))
-                        except (ValueError, TypeError, OverflowError):
-                            problems.append('部分历史记录时间无效，已跳过')
-        except (OSError, UnicodeError, csv.Error):
-            problems.append('部分历史归档暂时无法读取')
-        # A concurrent append is not cached under a new signature: next request re-reads.
-        with _cache_lock:
-            _archive_cache[path] = (signature, time.monotonic(), rows, list(set(problems)))
-            _archive_cache.move_to_end(path)
-            while len(_archive_cache) > 16:
-                _archive_cache.popitem(last=False)
-        records.extend(rows)
-        warnings.extend(problems)
-    return records, sorted(set(warnings))
-
-
-def merge_records(archived, live):
-    """Legacy CSV times have millisecond precision; DB times retain microseconds.
-
-    Prefer DB records when the same sample is archived, without rounding or
-    collapsing distinct DB frames that happened to arrive in one millisecond.
-    """
-    def key(record):
-        device, received, values = record
-        return device, received.replace(microsecond=received.microsecond // 1000 * 1000), values
-
-    live = set(live)
-    available = Counter(key(record) for record in live)
-    merged = list(live)
-    for record in sorted(set(archived), key=lambda row: row[1]):
-        identity = key(record)
-        if available[identity]:
-            available[identity] -= 1
-        else:
-            merged.append(record)
-    return merged
 
 
 def stats(values):
@@ -141,12 +39,12 @@ def floor_time(dt, hourly):
                          **({} if hourly else {'hour': 0})).astimezone(timezone.utc)
 
 
-def build_trends(records, period, now, warnings=(), has_devices=True):
+def build_trends(records, period, now, has_devices=True):
     hourly = period == 'day'
     step = timedelta(hours=1) if hourly else timedelta(days=1)
     start = (now - timedelta(hours=24) if hourly else
              floor_time(now, False) - timedelta(days=6 if period == 'week' else 29))
-    # Exact duplicate records are also removed; source precision is reconciled before this step.
+    # Exact duplicate rows collapse; distinct frames keep their own sample.
     unique = {record for record in records if record[1] <= now and
               (period == 'all' or record[1] >= start)}
     ordered = sorted(unique, key=lambda row: row[1])
@@ -192,5 +90,4 @@ def build_trends(records, period, now, warnings=(), has_devices=True):
         'summary': summarize(ordered), 'buckets': buckets,
         'coverage': {name: {'recordedBuckets': sum(b['metrics'][name]['count'] > 0 for b in buckets),
                             'totalBuckets': total} for name in METRICS},
-        'warnings': list(warnings),
     }
