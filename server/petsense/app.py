@@ -18,6 +18,7 @@ from petsense.petgif import proxy as petgif_proxy
 from petsense.pets import routes as pets_routes
 from petsense.social import routes as social_routes
 from petsense.telemetry import audio as telemetry_audio
+from petsense.telemetry import edge as telemetry_edge
 from petsense.telemetry import commands as telemetry_commands
 from petsense.telemetry import mqtt_ingest
 from petsense.telemetry import realtime as telemetry_realtime
@@ -41,6 +42,7 @@ def create_app(start_background=True):
     app.register_blueprint(telemetry_realtime.bp)
     app.register_blueprint(actions_service.bp)
     app.register_blueprint(telemetry_audio.bp)
+    app.register_blueprint(telemetry_edge.bp)
     app.register_blueprint(telemetry_commands.bp)
     app.register_blueprint(experiments_recorder.bp)
     app.register_blueprint(auth_routes.bp)

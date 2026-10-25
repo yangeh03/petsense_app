@@ -18,6 +18,7 @@ from petsense.db import iso_z, session_scope, utc_now
 from petsense.db.models import Device, Reading
 from petsense.experiments import recorder
 from petsense.telemetry import audio as audio_module
+from petsense.telemetry import edge
 from petsense.telemetry.realtime import broadcast_packet
 
 _trim_counter = 0
@@ -25,7 +26,7 @@ _last_seen_updates = {}
 
 SENSOR_PREFIX = 'petsense/sensor/'
 # sensor/ 前缀下不属于"设备遥测"的专用 topic（其余尾段即设备 ID）
-SENSOR_RESERVED_TAILS = {'clock_v2', 'collection_v2', 'collection_status', 'audio_wav', 'audio_file'}
+SENSOR_RESERVED_TAILS = {'clock_v2', 'collection_v2', 'collection_status', 'audio_wav', 'audio_file', 'edge_v1'}
 
 
 def sensor_device(topic):
@@ -226,6 +227,20 @@ def on_connect(client, userdata, flags, rc):
 
 
 def on_message(client, userdata, msg):
+    if msg.topic == edge.TOPIC:
+        try:
+            if len(msg.payload) > 65536:
+                raise ValueError('Oversize edge summary')
+            payload = json.loads(msg.payload)
+            device_id = edge.validate(payload)
+            serialized = json.dumps(payload, allow_nan=False, separators=(',', ':'))
+            ts = store(msg.topic, serialized, device_id)
+            _touch_device_last_seen(device_id)
+            broadcast_packet(json.dumps({'topic': msg.topic, 'payload': serialized,
+                                         'received_at': iso_z(ts)}), device_id)
+        except Exception as error:
+            print(f'[EDGE] rejected: {error}')
+        return
     if msg.topic in ('petsense/sensor/clock_v2', 'petsense/sensor/collection_v2', 'petsense/sensor/collection_status'):
         try:
             collection_store.ingest(msg.topic, json.loads(msg.payload))
