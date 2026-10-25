@@ -1,5 +1,6 @@
+import { Image } from 'expo-image';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -18,8 +19,16 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
+import { usePetChanges } from '@/hooks/use-pet-changes';
 import { useTheme } from '@/hooks/use-theme';
-import { deletePost, fetchFeed, fetchUserProfile, toggleFollow, toggleLike } from '@/services/api';
+import {
+  absoluteUrl,
+  deletePost,
+  fetchFeed,
+  fetchUserProfile,
+  toggleFollow,
+  toggleLike,
+} from '@/services/api';
 import type { Post, UserProfile } from '@/types/social';
 
 /** 用户主页：资料卡 + 关注按钮 + 粉丝/关注列表 + TA 的帖子（评论/删除闭环）。 */
@@ -38,28 +47,39 @@ export default function UserScreen() {
   const [followListKind, setFollowListKind] = useState<'followers' | 'following' | null>(null);
   const isMe = user?.id === userId;
 
+  const sequence = useRef(0);
   const load = useCallback(async () => {
     if (!Number.isFinite(userId)) return;
+    const current = ++sequence.current;
     try {
       const [profileData, feedData] = await Promise.all([
         fetchUserProfile(userId),
         fetchFeed(userId),
       ]);
+      if (current !== sequence.current) return;
       setProfile(profileData.profile);
       setPosts(feedData.posts);
     } catch {
       // 下拉重试
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (current === sequence.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [userId]);
 
   useFocusEffect(
     useCallback(() => {
+      if (!user) setFollowListKind(null);
       void load();
-    }, [load]),
+      return () => {
+        sequence.current++;
+      };
+    }, [load, user]),
   );
+
+  usePetChanges(load);
 
   const requireLogin = () => {
     if (!user) {
@@ -182,7 +202,15 @@ export default function UserScreen() {
                     key={pet.id}
                     style={[styles.petChip, { backgroundColor: theme.tintBackground }]}
                   >
-                    <ThemedText style={{ fontSize: 22 }}>{pet.avatar_emoji}</ThemedText>
+                    {pet.avatarImageUrl ? (
+                      <Image
+                        source={{ uri: absoluteUrl(pet.avatarImageUrl) }}
+                        style={{ width: 32, height: 32, borderRadius: 16 }}
+                        contentFit="cover"
+                      />
+                    ) : (
+                      <ThemedText style={{ fontSize: 22 }}>{pet.avatar_emoji}</ThemedText>
+                    )}
                     <ThemedText type="small" style={styles.petName}>
                       {pet.name}
                     </ThemedText>

@@ -1,7 +1,8 @@
 import { AppIcon } from '@/components/ui/icon';
 import { Image } from 'expo-image';
+import { SymbolView } from 'expo-symbols';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 
 import { DeviceCard } from '@/components/device-card';
 import { FollowListModal } from '@/components/social/follow-list-modal';
@@ -12,9 +13,11 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { BottomTabInset, MaxContentWidth, Shadows, Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
+import { usePetChanges } from '@/hooks/use-pet-changes';
 import { useTheme } from '@/hooks/use-theme';
 import { absoluteUrl, fetchUserProfile } from '@/services/api';
 import type { UserProfile } from '@/types/social';
+import { speciesLabel } from '@/services/pet-profile';
 
 /** 我的页：用户卡 + 三格统计 + 宠物列表（含电量/在线）+ 设备诊断入口。 */
 export default function ProfileScreen() {
@@ -22,24 +25,34 @@ export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user, loading, logout } = useAuth();
-  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [loadedProfile, setProfile] = useState<UserProfile | null>(null);
+  const profile = loadedProfile?.id === user?.id ? loadedProfile : null;
+  const sequence = useRef(0);
+  const [profileError, setProfileError] = useState('');
   const [followKind, setFollowKind] = useState<'followers' | 'following' | null>(null);
 
   const load = useCallback(async () => {
+    const current = ++sequence.current;
     if (!user) return;
     try {
       const data = await fetchUserProfile(user.id);
+      if (current !== sequence.current) return;
       setProfile(data.profile);
+      setProfileError('');
     } catch {
-      // 保留旧数据
+      if (current === sequence.current) setProfileError('宠物资料加载失败，点击重试');
     }
   }, [user]);
 
   useFocusEffect(
     useCallback(() => {
       void load();
+      return () => {
+        sequence.current++;
+      };
     }, [load]),
   );
+  usePetChanges(load);
 
   if (loading) {
     return (
@@ -129,41 +142,64 @@ export default function ProfileScreen() {
             </Pressable>
           )}
         </View>
+        {!!profileError && (
+          <Pressable onPress={() => void load()}>
+            <ThemedText type="small" style={{ color: theme.danger }}>
+              {profileError}
+            </ThemedText>
+          </Pressable>
+        )}
+        {!profile && !profileError && <ActivityIndicator color={theme.tint} />}
         {(profile?.pets ?? []).map((pet) => (
-          <ThemedView key={pet.id} type="backgroundElement" style={styles.petCard}>
-            <View style={[styles.petAvatar, { backgroundColor: theme.tintBackground }]}>
-              {pet.avatarImageUrl ? (
-                <Image
-                  source={{ uri: absoluteUrl(pet.avatarImageUrl) }}
-                  style={styles.petAvatarImage}
-                  contentFit="cover"
-                />
-              ) : (
-                <ThemedText style={{ fontSize: 26 }}>{pet.avatar_emoji}</ThemedText>
-              )}
-            </View>
-            <View style={styles.petTexts}>
-              <ThemedText type="smallBold" style={styles.petName}>
-                {pet.name}
-              </ThemedText>
-              <ThemedText type="small" themeColor="textSecondary">
-                {pet.breed || '宠物'} · {pet.device_id || '未绑定设备'}
-              </ThemedText>
-            </View>
-            {pet.batteryPercent != null ? (
-              <View style={styles.petBattery}>
-                <View
-                  style={[
-                    styles.batteryDot,
-                    { backgroundColor: pet.online ? theme.online : theme.textSecondary },
-                  ]}
-                />
+          <Pressable
+            key={pet.id}
+            accessibilityRole="button"
+            accessibilityLabel={`管理 ${pet.name} 的宠物资料`}
+            onPress={() => router.push('/pet')}
+          >
+            <ThemedView type="backgroundElement" style={styles.petCard}>
+              <View style={[styles.petAvatar, { backgroundColor: theme.tintBackground }]}>
+                {pet.avatarImageUrl ? (
+                  <Image
+                    source={{ uri: absoluteUrl(pet.avatarImageUrl) }}
+                    style={styles.petAvatarImage}
+                    contentFit="cover"
+                  />
+                ) : (
+                  <ThemedText style={{ fontSize: 26 }}>{pet.avatar_emoji}</ThemedText>
+                )}
+              </View>
+              <View style={styles.petTexts}>
+                <ThemedText type="smallBold" style={styles.petName}>
+                  {pet.name}
+                </ThemedText>
                 <ThemedText type="small" themeColor="textSecondary">
-                  {pet.batteryPercent}%
+                  {speciesLabel(pet.species)} · {pet.breed || '品种未填写'}
+                </ThemedText>
+                <ThemedText type="small" style={{ color: theme.tint }}>
+                  查看与编辑资料
                 </ThemedText>
               </View>
-            ) : null}
-          </ThemedView>
+              {pet.batteryPercent != null ? (
+                <View style={styles.petBattery}>
+                  <View
+                    style={[
+                      styles.batteryDot,
+                      { backgroundColor: pet.online ? theme.online : theme.textSecondary },
+                    ]}
+                  />
+                  <ThemedText type="small" themeColor="textSecondary">
+                    {pet.batteryPercent}%
+                  </ThemedText>
+                </View>
+              ) : null}
+              <SymbolView
+                name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }}
+                size={16}
+                tintColor={theme.textSecondary}
+              />
+            </ThemedView>
+          </Pressable>
         ))}
 
         <FollowListModal

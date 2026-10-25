@@ -1,6 +1,6 @@
 import { SymbolView } from 'expo-symbols';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -19,6 +19,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { BottomTabInset, Fonts, MaxContentWidth, Shadows, Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
+import { usePetChanges } from '@/hooks/use-pet-changes';
 import { useTheme } from '@/hooks/use-theme';
 import { deletePost, fetchFeed, toggleLike } from '@/services/api';
 import type { Post } from '@/types/social';
@@ -43,15 +44,19 @@ export default function CommunityScreen() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
 
+  const sequence = useRef(0);
   const load = useCallback(() => {
+    const current = ++sequence.current;
     return fetchFeed()
       .then((data) => {
+        if (current !== sequence.current) return;
         setPosts(data.posts);
         setError(null);
         setLoading(false);
         setRefreshing(false);
       })
       .catch(() => {
+        if (current !== sequence.current) return;
         setError('社区动态加载失败，下拉重试');
         setLoading(false);
         setRefreshing(false);
@@ -60,9 +65,15 @@ export default function CommunityScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      if (!user) setCommentsFor(null);
       void load();
-    }, [load]),
+      return () => {
+        sequence.current++;
+      };
+    }, [load, user]),
   );
+
+  usePetChanges(load);
 
   const handleLike = (post: Post) => {
     if (!user) {

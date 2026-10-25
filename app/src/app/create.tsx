@@ -1,8 +1,8 @@
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
 import { SymbolView } from 'expo-symbols';
-import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
 import { Shadows, Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
+import { usePetChanges } from '@/hooks/use-pet-changes';
 import { useTheme } from '@/hooks/use-theme';
 import { createPost, fetchPets } from '@/services/api';
 import type { SocialPet } from '@/types/social';
@@ -54,7 +55,7 @@ export default function CreateScreen() {
               <Pressable
                 key={item}
                 onPress={() => {
-                  if (item === 'pet') router.replace('/setup');
+                  if (item === 'pet') router.replace('/pet');
                 }}
                 style={styles.segmentItemWrap}
               >
@@ -65,7 +66,7 @@ export default function CreateScreen() {
                   ]}
                 >
                   <ThemedText type="smallBold" style={selected ? { color: theme.tint } : undefined}>
-                    {item === 'post' ? '新帖子' : '添加宠物'}
+                    {item === 'post' ? '新帖子' : '宠物档案'}
                   </ThemedText>
                 </View>
               </Pressable>
@@ -109,6 +110,31 @@ function PostForm() {
   const [petId, setPetId] = useState<number | null>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { user } = useAuth();
+  const sequence = useRef(0);
+  const loadPets = useCallback(async () => {
+    const current = ++sequence.current;
+    if (!user) return;
+    try {
+      const data = await fetchPets();
+      if (current !== sequence.current) return;
+      setPets(data.pets);
+      setPetId((selected) =>
+        data.pets.some((pet) => pet.id === selected) ? selected : (data.pets[0]?.id ?? null),
+      );
+    } catch {
+      /* 下次进入页面或资料更新后重试，不阻断发帖。 */
+    }
+  }, [user]);
+  usePetChanges(loadPets);
+  useFocusEffect(
+    useCallback(() => {
+      void loadPets();
+      return () => {
+        sequence.current++;
+      };
+    }, [loadPets]),
+  );
 
   const pickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -123,16 +149,6 @@ function PostForm() {
         name: asset.fileName ?? 'photo.jpg',
         type: asset.mimeType ?? 'image/jpeg',
       });
-      if (pets.length === 0) {
-        fetchPets()
-          .then((data) => {
-            setPets(data.pets);
-            setPetId(data.pets[0]?.id ?? null);
-          })
-          .catch(() => {
-            // 无宠物也能发帖
-          });
-      }
     }
   };
 

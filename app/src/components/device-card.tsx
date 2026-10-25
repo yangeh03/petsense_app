@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 
@@ -6,6 +6,9 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { useAuth } from '@/hooks/use-auth';
+import { usePetChanges } from '@/hooks/use-pet-changes';
+import { notifyPetChanged } from '@/services/pet-profile-events';
 import { fetchMyDevice, releaseDevice, type MyDevice } from '@/services/api';
 import { reconnectTelemetry } from '@/services/telemetry-service';
 
@@ -13,28 +16,38 @@ import { reconnectTelemetry } from '@/services/telemetry-service';
 export function DeviceCard() {
   const theme = useTheme();
   const router = useRouter();
-  const [device, setDevice] = useState<MyDevice | null>(null);
+  const { user } = useAuth();
+  const [stored, setStored] = useState<{ userId: number; device: MyDevice | null } | null>(null);
+  const device = stored?.userId === user?.id ? stored?.device : null;
+  const sequence = useRef(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const refresh = useCallback(async () => {
+    const current = ++sequence.current;
+    if (!user) return;
     try {
       const data = await fetchMyDevice();
-      setDevice(data.device);
+      if (current !== sequence.current) return;
+      setStored({ userId: user.id, device: data.device });
       setError('');
     } catch {
-      setError('设备信息加载失败，请重试');
+      if (current === sequence.current) setError('设备信息加载失败，请重试');
     } finally {
-      setLoading(false);
+      if (current === sequence.current) setLoading(false);
     }
-  }, []);
+  }, [user]);
+  usePetChanges(refresh);
   useFocusEffect(
     useCallback(() => {
       void refresh();
+      return () => {
+        sequence.current++;
+      };
     }, [refresh]),
   );
 
   const confirmRelease = () => {
-    if (!device) return;
+    if (!device || !user) return;
     Alert.alert('解绑项圈', '解绑后将停止接收这只项圈的数据，宠物档案会保留。', [
       { text: '取消', style: 'cancel' },
       {
@@ -43,7 +56,8 @@ export function DeviceCard() {
         onPress: () => {
           void releaseDevice(device.deviceId)
             .then(() => {
-              setDevice(null);
+              setStored({ userId: user.id, device: null });
+              notifyPetChanged(user.id);
               reconnectTelemetry();
             })
             .catch(() => Alert.alert('解绑失败', '请稍后重试'));

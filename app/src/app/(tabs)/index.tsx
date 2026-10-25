@@ -23,6 +23,7 @@ import { ThemedView } from '@/components/themed-view';
 import { BottomTabInset, Fonts, MaxContentWidth, Shadows, Spacing } from '@/constants/theme';
 import { useAlerts, worstSeverity } from '@/hooks/use-alerts';
 import { useAuth } from '@/hooks/use-auth';
+import { usePetChanges } from '@/hooks/use-pet-changes';
 import { useTelemetry } from '@/hooks/use-telemetry';
 import { usePetAction } from '@/hooks/use-pet-action';
 import { useTheme } from '@/hooks/use-theme';
@@ -96,6 +97,14 @@ export default function DashboardScreen() {
       }
     }
   }, [user]);
+
+  usePetChanges(
+    useCallback(() => {
+      loadSequence.current++;
+      loadingRequest.current = false;
+      void load();
+    }, [load]),
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -230,25 +239,28 @@ export default function DashboardScreen() {
             />
             {/* 宠物头像与设备在线状态 */}
             <View style={styles.hero}>
-              <View
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`查看 ${petName} 的宠物资料`}
+                onPress={() => router.push('/pet')}
                 style={[
                   styles.avatarRing,
                   { borderColor: ringColor, backgroundColor: theme.tintBackground },
                 ]}
               >
                 <View style={[styles.avatarInner, { borderColor: theme.backgroundElement }]}>
-                  {heroGifUri ? (
+                  {heroAvatarImage ? (
+                    <Image
+                      source={{ uri: heroAvatarImage }}
+                      style={styles.avatarGif}
+                      contentFit="cover"
+                    />
+                  ) : heroGifUri ? (
                     <Image
                       source={{ uri: heroGifUri }}
                       style={styles.avatarGif}
                       contentFit="cover"
                       autoplay={true}
-                    />
-                  ) : heroAvatarImage ? (
-                    <Image
-                      source={{ uri: heroAvatarImage }}
-                      style={styles.avatarGif}
-                      contentFit="cover"
                     />
                   ) : (
                     <ThemedText style={styles.avatarEmoji}>{pet.avatar_emoji}</ThemedText>
@@ -276,8 +288,17 @@ export default function DashboardScreen() {
                           : '等待设备数据'}
                   </ThemedText>
                 </View>
-              </View>
+              </Pressable>
             </View>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => router.push('/pet')}
+              style={{ alignSelf: 'center', padding: Spacing.two }}
+            >
+              <ThemedText type="small" style={{ color: theme.tint }}>
+                宠物资料 ›
+              </ThemedText>
+            </Pressable>
 
             {/* 三项主要体征始终可见，次要指标点标题展开。 */}
             <View

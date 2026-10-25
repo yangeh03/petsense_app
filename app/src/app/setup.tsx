@@ -19,6 +19,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
 import { claimDevice, createPet, fetchMyDevice, fetchPets, type MyDevice } from '@/services/api';
 import { reconnectTelemetry } from '@/services/telemetry-service';
+import { notifyPetChanged } from '@/services/pet-profile-events';
 import type { SocialPet } from '@/types/social';
 
 type SetupPet = Pick<SocialPet, 'id' | 'name' | 'avatar_emoji'>;
@@ -94,6 +95,7 @@ export default function SetupScreen() {
         deviceId: device?.deviceId ?? '',
       });
       setPet({ id: result.pet.id, name: result.pet.name, avatar_emoji: emoji });
+      notifyPetChanged(user!.id);
       // 先前已认领的设备在建档时一并关联，无需再次输入编码。
       if (device) {
         setDevice({ ...device, petId: result.pet.id, petName: result.pet.name });
@@ -133,6 +135,7 @@ export default function SetupScreen() {
         return;
       }
       setDevice(result.device);
+      notifyPetChanged(user!.id);
       reconnectTelemetry();
       setStep('done');
     } catch (exc) {
