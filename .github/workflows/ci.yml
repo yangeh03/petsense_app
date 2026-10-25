@@ -135,6 +135,8 @@ jobs:
         working-directory: app
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          # 打包期注入生产 REST 地址（缺省会落到 localhost，装到手机上必然连不上）
+          EXPO_PUBLIC_API_BASE_URL: http://81.71.71.31
         run: |
           if [ -z "$EXPO_TOKEN" ]; then
             echo "::error::缺少 EXPO_TOKEN secret（expo.dev → Account Settings → Access tokens 创建后添加到仓库 secrets）"
