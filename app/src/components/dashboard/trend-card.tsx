@@ -137,16 +137,13 @@ export function TrendCard({
           {!data && loading ? (
             <View style={styles.loading}>
               <ActivityIndicator color={theme.tint} />
-              <ThemedText type="small" themeColor="textSecondary">
-                正在加载趋势…
-              </ThemedText>
             </View>
           ) : null}
           {data && (
             <>
               <ThemedText type="small" themeColor="textSecondary">
                 {trendDate(data.window.start, period === 'day')} —{' '}
-                {trendDate(data.window.end, period === 'day')} · 北京时间
+                {trendDate(data.window.end, period === 'day')}
               </ThemedText>
               <View style={styles.stats}>
                 {(['avg', 'min', 'max'] as const).map((key, i) => (
@@ -162,43 +159,22 @@ export function TrendCard({
                 ))}
               </View>
               {summary?.count ? (
-                <>
-                  <ThemedText type="small" themeColor="textSecondary">
-                    每{data.window.granularity === 'hour' ? '小时' : '天'}均值 · 缺失时段断线
-                  </ThemedText>
-                  <TrendChart
-                    key={`${period}/${metric}`}
-                    data={data}
-                    metric={metric}
-                    decimals={info.decimals}
-                    unit={info.unit}
-                    color={color}
-                  />
-                </>
+                <TrendChart
+                  key={`${period}/${metric}`}
+                  data={data}
+                  metric={metric}
+                  decimals={info.decimals}
+                  unit={info.unit}
+                  color={color}
+                />
               ) : (
                 <View style={[styles.empty, { backgroundColor: theme.background }]}>
                   <ThemedText type="smallBold">此范围暂无有效{info.label}记录</ThemedText>
-                  <ThemedText type="small" themeColor="textSecondary">
-                    保持项圈联网并确认传感器贴合，收到有效记录后可刷新查看。
-                  </ThemedText>
                 </View>
               )}
               <ThemedText type="small" themeColor="textSecondary">
                 有记录 {coverage?.recordedBuckets ?? 0}/{coverage?.totalBuckets ?? 0} 个{countUnit}{' '}
-                · {summary?.count ?? 0} 个有效样本
-              </ThemedText>
-              <ThemedText type="small" themeColor="textSecondary">
-                更新于 {trendDate(data.generatedAt, true)}
-                {loading ? ' · 正在刷新' : ''}
-              </ThemedText>
-              {data.actualRange && (
-                <ThemedText type="small" themeColor="textSecondary">
-                  实际记录 {trendDate(data.actualRange.start, true)} —{' '}
-                  {trendDate(data.actualRange.end, true)}
-                </ThemedText>
-              )}
-              <ThemedText style={styles.footnote} themeColor="textSecondary">
-                统计来自项圈近期实时记录；更早的记录可能已按容量清理。平均及极值按有效原始样本计算，记录时段不代表连续佩戴时长。
+                · 更新于 {trendDate(data.generatedAt, true)}
               </ThemedText>
             </>
           )}
@@ -206,8 +182,8 @@ export function TrendCard({
       ) : (
         <ThemedText type="small" themeColor="textSecondary">
           {summary?.count
-            ? `${info.label}平均 ${format(summary.avg)} ${info.unit} · 点击展开`
-            : '展开查看趋势与记录覆盖情况'}
+            ? `${info.label}平均 ${format(summary.avg)} ${info.unit}`
+            : '暂无趋势记录'}
         </ThemedText>
       )}
     </View>
@@ -264,5 +240,4 @@ const styles = StyleSheet.create({
   notice: { padding: 12, borderRadius: 12, gap: 4 },
   retry: { minHeight: 40, justifyContent: 'center' },
   loading: { minHeight: 150, alignItems: 'center', justifyContent: 'center', gap: 12 },
-  footnote: { fontSize: 11, lineHeight: 17 },
 });

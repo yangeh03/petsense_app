@@ -175,7 +175,7 @@ export function TrendChart({
               <>
                 <ThemedText type="small">
                   均值 {valueText(selected.metrics[metric].avg)} · {selected.metrics[metric].count}{' '}
-                  个有效样本
+                  个样本
                 </ThemedText>
                 <ThemedText type="small" themeColor="textSecondary">
                   最低 {valueText(selected.metrics[metric].min)} · 最高{' '}
@@ -188,11 +188,7 @@ export function TrendChart({
               </ThemedText>
             )}
           </>
-        ) : (
-          <ThemedText type="small" themeColor="textSecondary">
-            轻触图表，查看各时段均值、极值和有效样本
-          </ThemedText>
-        )}
+        ) : null}
         <View style={styles.navigation}>
           <Pressable
             accessibilityRole="button"
