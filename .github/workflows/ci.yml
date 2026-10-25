@@ -141,6 +141,7 @@ jobs:
             exit 1
           fi
           npx eas-cli@latest update --non-interactive \
+            --environment production \
             --branch production \
             --message "auto: ${GITHUB_SHA}"
 
