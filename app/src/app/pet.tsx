@@ -27,6 +27,7 @@ import {
   buildPetUpdate,
   createPetDraft,
   isPetDraftDirty,
+  petSaveError,
   speciesLabel,
   validatePetDraft,
   type PetDraft,
@@ -160,8 +161,7 @@ export default function PetScreen() {
       setSuccess('宠物资料已保存');
       notifyPetChanged(user.id);
     } catch (exc) {
-      if (current === sequence.current)
-        setError(exc instanceof Error ? exc.message : '保存失败，请重试');
+      if (current === sequence.current) setError(petSaveError(exc));
     } finally {
       savingRequest.current = false;
       setSaving(false);

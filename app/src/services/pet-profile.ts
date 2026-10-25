@@ -22,6 +22,11 @@ export function speciesLabel(species: string): string {
   return PET_SPECIES.find((item) => item.id === species)?.label ?? '宠物';
 }
 
+export function petSaveError(error: unknown): string {
+  if (error instanceof TypeError) return '网络连接失败，请检查网络后重试';
+  return error instanceof Error ? error.message : '保存失败，请稍后重试';
+}
+
 export function createPetDraft(pet: SocialPet): PetDraft {
   return {
     name: pet.name,

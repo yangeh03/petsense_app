@@ -45,6 +45,14 @@ test('species labels are localized without guessing missing values', () => {
   assert.equal(profile.speciesLabel('rabbit'), '兔子');
   assert.equal(profile.speciesLabel('unknown'), '宠物');
 });
+test('network save failures have a useful Chinese message while server validation is preserved', () => {
+  assert.equal(
+    profile.petSaveError(new TypeError('Failed to fetch')),
+    '网络连接失败，请检查网络后重试',
+  );
+  assert.equal(profile.petSaveError(new Error('图片无法读取')), '图片无法读取');
+  assert.equal(profile.petSaveError(null), '保存失败，请稍后重试');
+});
 test('profile invalidation is account scoped and unsubscribe stops updates', () => {
   let mine = 0;
   let other = 0;
