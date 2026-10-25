@@ -95,6 +95,11 @@ def app_pets():
     with session_scope() as s:
         if s.execute(select(Pet.id).where(Pet.user_id == user['id'])).scalar_one_or_none():
             return {'success': False, 'message': '每个账号支持一只宠物档案'}, 409
+        if not device_id:
+            from petsense.db.models import Device
+            owned = s.execute(select(Device).where(Device.owner_id == user['id'])).scalar_one_or_none()
+            if owned is not None:
+                device_id = owned.device_id
         if device_id:
             _, _, claim_error = claim_device(s, user['id'], device_id)
             if claim_error:

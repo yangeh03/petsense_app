@@ -19,22 +19,11 @@ import { ThemedText } from '@/components/themed-text';
 import { Shadows, Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
-import { createPet, createPost, fetchPets } from '@/services/api';
-import { bindPetgif, createPetgifPetSync, setPetAvatarImage } from '@/services/petgif';
+import { createPost, fetchPets } from '@/services/api';
 import type { SocialPet } from '@/types/social';
 
-type Mode = 'post' | 'pet';
-
-const SPECIES = [
-  { id: 'dog', label: '狗狗', emoji: '🐶' },
-  { id: 'cat', label: '猫咪', emoji: '🐱' },
-  { id: 'rabbit', label: '兔子', emoji: '🐰' },
-] as const;
-
-const PET_EMOJIS = ['🐾', '🐶', '🐱', '🐰', '🦮', '🐕‍🦺', '😺'];
-
 /**
- * 创建页（底部弹层）：发帖 / 添加宠物。
+ * 创建页（底部弹层）：发帖；宠物建档入口转到独立设置流程。
  * 布局约定：sheet 撑满 → 内容统一 640 上限 + alignSelf 居中 + 水平边距 20，
  * 控件全部 width:'100%'，杜绝宽度收缩差异导致的贴边与横向拖动。
  */
@@ -43,7 +32,6 @@ export default function CreateScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useAuth();
-  const [mode, setMode] = useState<Mode>('post');
 
   return (
     <KeyboardAvoidingView
@@ -61,9 +49,15 @@ export default function CreateScreen() {
         </Pressable>
         <View style={[styles.segment, { backgroundColor: theme.backgroundSelected }]}>
           {(['post', 'pet'] as const).map((item) => {
-            const selected = mode === item;
+            const selected = item === 'post';
             return (
-              <Pressable key={item} onPress={() => setMode(item)} style={styles.segmentItemWrap}>
+              <Pressable
+                key={item}
+                onPress={() => {
+                  if (item === 'pet') router.replace('/setup');
+                }}
+                style={styles.segmentItemWrap}
+              >
                 <View
                   style={[
                     styles.segmentItem,
@@ -98,10 +92,8 @@ export default function CreateScreen() {
             </Pressable>
           </View>
         </ScrollView>
-      ) : mode === 'post' ? (
-        <PostForm />
       ) : (
-        <PetForm />
+        <PostForm />
       )}
     </KeyboardAvoidingView>
   );
@@ -267,189 +259,6 @@ function PostForm() {
   );
 }
 
-function PetForm() {
-  const theme = useTheme();
-  const router = useRouter();
-  const [name, setName] = useState('');
-  const [species, setSpecies] = useState<string>('dog');
-  const [breed, setBreed] = useState('');
-  const [deviceId, setDeviceId] = useState('');
-  const [avatarEmoji, setAvatarEmoji] = useState('🐾');
-  const [photo, setPhoto] = useState<{ uri: string; name: string; type: string } | null>(null);
-  const [stage, setStage] = useState<'idle' | 'creating' | 'generating'>('idle');
-  const [error, setError] = useState<string | null>(null);
-  const sending = stage !== 'idle';
-
-  const pickPhoto = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      quality: 0.9,
-      allowsMultipleSelection: false,
-    });
-    const asset = result.assets?.[0];
-    if (asset?.uri) {
-      setPhoto({
-        uri: asset.uri,
-        name: asset.fileName ?? 'pet.jpg',
-        type: asset.mimeType ?? 'image/jpeg',
-      });
-    }
-  };
-
-  const submit = async () => {
-    if (!name.trim() || sending) return;
-    setError(null);
-    try {
-      setStage('creating');
-      const created = await createPet({
-        name: name.trim(),
-        species,
-        breed: breed.trim(),
-        avatarEmoji,
-        deviceId: deviceId.trim(),
-      });
-      if (photo) {
-        setStage('generating');
-        const result = await createPetgifPetSync({ image: photo, name: name.trim() });
-        await bindPetgif(created.pet.id, result.petgifId);
-        if (result.characterCardUrl) {
-          await setPetAvatarImage(created.pet.id, result.characterCardUrl);
-        }
-      }
-      router.back();
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : '添加失败，请重试');
-      setStage('idle');
-    }
-  };
-
-  return (
-    <ScrollView contentContainerStyle={styles.form}>
-      {/* AI 数字形象（可选）：上传照片，添加时同步生成角色卡 */}
-      <Pressable
-        onPress={pickPhoto}
-        disabled={sending}
-        style={[styles.imagePicker, { borderColor: theme.backgroundSelected }]}
-      >
-        {photo ? (
-          <Image source={{ uri: photo.uri }} style={styles.imagePreview} contentFit="cover" />
-        ) : (
-          <View style={styles.imagePickerEmpty}>
-            <SymbolView
-              name={{ ios: 'camera.aperture', android: 'photo_camera', web: 'photo_camera' }}
-              size={26}
-              tintColor={theme.tint}
-            />
-            <ThemedText type="smallBold" style={{ color: theme.tint }}>
-              上传照片 · 生成 AI 数字形象
-            </ThemedText>
-            <ThemedText type="small" themeColor="textSecondary" style={styles.photoHint}>
-              可选，AI 将为它生成角色卡与 9 种动作
-            </ThemedText>
-          </View>
-        )}
-      </Pressable>
-
-      <TextInput
-        value={name}
-        onChangeText={setName}
-        placeholder="名字（必填）"
-        placeholderTextColor={theme.textSecondary}
-        maxLength={20}
-        style={[styles.field, { color: theme.text, borderColor: theme.backgroundSelected }]}
-      />
-
-      <View style={styles.speciesRow}>
-        {SPECIES.map((item) => {
-          const selected = species === item.id;
-          return (
-            <Pressable
-              key={item.id}
-              onPress={() => setSpecies(item.id)}
-              style={[styles.speciesChip, selected && { backgroundColor: theme.tint }]}
-            >
-              <ThemedText type="small" style={selected ? { color: '#ffffff' } : undefined}>
-                {item.emoji} {item.label}
-              </ThemedText>
-            </Pressable>
-          );
-        })}
-      </View>
-
-      <TextInput
-        value={breed}
-        onChangeText={setBreed}
-        placeholder="品种（可选）"
-        placeholderTextColor={theme.textSecondary}
-        maxLength={40}
-        style={[styles.field, { color: theme.text, borderColor: theme.backgroundSelected }]}
-      />
-      <TextInput
-        value={deviceId}
-        onChangeText={setDeviceId}
-        placeholder="项圈设备 ID（选填，机身标签可查，填写后自动绑定）"
-        placeholderTextColor={theme.textSecondary}
-        maxLength={40}
-        autoCapitalize="none"
-        style={[styles.field, { color: theme.text, borderColor: theme.backgroundSelected }]}
-      />
-
-      <ThemedText type="small" themeColor="textSecondary">
-        头像 emoji
-      </ThemedText>
-      <View style={styles.emojiRow}>
-        {PET_EMOJIS.map((emoji) => (
-          <Pressable
-            key={emoji}
-            onPress={() => setAvatarEmoji(emoji)}
-            style={[
-              styles.emojiCell,
-              avatarEmoji === emoji && {
-                borderColor: theme.tint,
-                backgroundColor: theme.tintBackground,
-              },
-            ]}
-          >
-            <ThemedText style={{ fontSize: 22 }}>{emoji}</ThemedText>
-          </Pressable>
-        ))}
-      </View>
-
-      {error ? (
-        <ThemedText type="small" style={{ color: theme.danger }}>
-          {error}
-        </ThemedText>
-      ) : null}
-
-      <Pressable
-        onPress={submit}
-        disabled={!name.trim() || sending}
-        style={({ pressed }) => [
-          styles.primaryButton,
-          { backgroundColor: name.trim() ? theme.tint : theme.backgroundSelected },
-          pressed && { opacity: 0.85 },
-        ]}
-      >
-        {sending ? (
-          <View style={styles.sendingRow}>
-            <ActivityIndicator color="#ffffff" size="small" />
-            <ThemedText type="smallBold" style={{ color: '#ffffff' }}>
-              {stage === 'generating' ? 'AI 正在生成数字形象…约 1 分钟' : '创建中…'}
-            </ThemedText>
-          </View>
-        ) : (
-          <ThemedText
-            type="smallBold"
-            style={{ color: name.trim() ? '#ffffff' : theme.textSecondary }}
-          >
-            {photo ? '添加并生成 AI 形象' : '添加宠物'}
-          </ThemedText>
-        )}
-      </Pressable>
-    </ScrollView>
-  );
-}
-
 const styles = StyleSheet.create({
   sheet: {
     flex: 1,
@@ -511,10 +320,6 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
-  photoHint: {
-    fontSize: 11,
-    lineHeight: 15,
-  },
 
   petRow: {
     gap: Spacing.two,
@@ -553,44 +358,6 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingVertical: 12,
     fontSize: 15,
-  },
-
-  field: {
-    width: '100%',
-    borderWidth: 1,
-    borderRadius: 14,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: 12,
-    fontSize: 15,
-  },
-
-  speciesRow: {
-    flexDirection: 'row',
-    gap: Spacing.two,
-  },
-  speciesChip: {
-    flex: 1,
-    alignItems: 'center',
-    borderRadius: 14,
-    paddingVertical: 10,
-    backgroundColor: 'rgba(148,131,111,0.12)',
-  },
-
-  emojiRow: {
-    width: '100%',
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: Spacing.two,
-  },
-  emojiCell: {
-    width: 48,
-    height: 48,
-    borderRadius: 13,
-    borderWidth: 1.5,
-    borderColor: 'transparent',
-    backgroundColor: 'rgba(148,131,111,0.10)',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
 
   primaryButton: {

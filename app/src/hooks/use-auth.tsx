@@ -47,6 +47,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (cancelled) return;
         if (me) {
           setUser(me);
+          reconnectTelemetry();
         }
       })
       .catch(() => {

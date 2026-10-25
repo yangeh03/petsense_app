@@ -1,7 +1,7 @@
 import { Image } from 'expo-image';
 import { SymbolView } from 'expo-symbols';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState, type ComponentProps } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -9,11 +9,11 @@ import {
   ScrollView,
   StyleSheet,
   View,
-  type StyleProp,
-  type ViewStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { DeviceStatusCard } from '@/components/dashboard/device-status-card';
+import { selectDashboardReadings } from '@/services/dashboard-readings';
 import { DiaryModal } from '@/components/dashboard/diary-modal';
 import { NotificationBell } from '@/components/alerts/notification-bell';
 import { LineChart } from '@/components/live/line-chart';
@@ -25,8 +25,8 @@ import { useAuth } from '@/hooks/use-auth';
 import { useTelemetry } from '@/hooks/use-telemetry';
 import { usePetAction } from '@/hooks/use-pet-action';
 import { useTheme } from '@/hooks/use-theme';
-import { absoluteUrl, fetchDashboard, fetchPets, fetchTrends } from '@/services/api';
-import type { DashboardData, SocialPet, TrendBucket, TrendPeriod } from '@/types/social';
+import { absoluteUrl, fetchDashboard, fetchTrends } from '@/services/api';
+import type { DashboardData, TrendBucket, TrendPeriod } from '@/types/social';
 import type { SeriesKey } from '@/types/telemetry';
 
 type SymbolName = ComponentProps<typeof SymbolView>['name'];
@@ -53,7 +53,7 @@ function greeting() {
 }
 
 /**
- * 今日页：设计稿风格（暖色圆角卡 / 柔和投影 / 圆体大字 / 悬浮芯片），
+ * 今日页：设计稿风格（暖色圆角卡 / 柔和投影 / 圆体大字），
  * 内容为设备真实在测的体征遥测 + PetGIF 数字形象 + 时间维度统计趋势 + 运动日记。
  */
 export default function DashboardScreen() {
@@ -63,44 +63,61 @@ export default function DashboardScreen() {
   const { user, loading: authLoading } = useAuth();
   const { activeAlerts } = useAlerts();
   const { latest, displayState } = useTelemetry();
-  const [pets, setPets] = useState<SocialPet[]>([]);
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState('');
   const [diaryVisible, setDiaryVisible] = useState(false);
-  // 板块默认折叠：首屏聚焦 Hero，点标题行展开
+  // 板块主要体征始终可见，更多指标与历史趋势按需展开
   const [vitalsOpen, setVitalsOpen] = useState(false);
   const [trendOpen, setTrendOpen] = useState(false);
   const [trendMetric, setTrendMetric] = useState<SeriesKey>('heartRate');
-  const [trendPeriod, setTrendPeriod] = useState<TrendPeriod>('all');
+  const [trendPeriod, setTrendPeriod] = useState<TrendPeriod>('day');
   const [trendBuckets, setTrendBuckets] = useState<TrendBucket[]>([]);
   const [trendLoading, setTrendLoading] = useState(false);
   const [trendWidth, setTrendWidth] = useState(0);
+  const loadSequence = useRef(0);
+  const loadingRequest = useRef(false);
+  const loadedUserId = useRef<number | null>(null);
 
-  const load = useCallback(
-    async (petId?: number) => {
-      if (!user) return;
-      try {
-        const petData = await fetchPets();
-        setPets(petData.pets);
-        const targetId = petId ?? petData.pets[0]?.id;
-        const data = await fetchDashboard(targetId);
-        setDashboard(data);
-      } catch {
-        // 后端不可达时保留旧数据，下拉重试
-      } finally {
+  const load = useCallback(async () => {
+    if (!user || loadingRequest.current) return;
+    loadingRequest.current = true;
+    const sequence = ++loadSequence.current;
+    try {
+      const data = await fetchDashboard();
+      if (sequence !== loadSequence.current) return;
+      setDashboard(data);
+      setError('');
+    } catch {
+      if (sequence === loadSequence.current) setError('数据暂时加载失败，请检查网络后重试');
+    } finally {
+      if (sequence === loadSequence.current) {
+        loadingRequest.current = false;
         setLoading(false);
         setRefreshing(false);
       }
-    },
-    [user],
-  );
+    }
+  }, [user]);
 
   useFocusEffect(
     useCallback(() => {
       if (user) {
+        if (loadedUserId.current !== user.id) {
+          loadedUserId.current = user.id;
+          setDashboard(null);
+          setTrendBuckets([]);
+          setLoading(true);
+        }
         void load();
+        const timer = setInterval(() => void load(), 15_000);
+        return () => {
+          clearInterval(timer);
+          loadSequence.current += 1;
+          loadingRequest.current = false;
+        };
       } else {
+        loadedUserId.current = null;
         setLoading(false);
         setDashboard(null);
       }
@@ -127,27 +144,21 @@ export default function DashboardScreen() {
     return () => {
       cancelled = true;
     };
-  }, [user, trendPeriod]);
+  }, [user, trendPeriod, dashboard?.pet?.device_id]);
 
   const pet = dashboard?.pet ?? null;
   const petName = pet?.name ?? '毛孩子';
   const liveForPet = latest && pet?.device_id && latest.deviceId === pet.device_id ? latest : null;
-  // 动作推断用帧：优先绑定设备，其次任意在线设备（演示宠物也有动作可看）
-  const latestForAction = liveForPet ?? latest;
-  // 在线判定：实时流仍在更新且属于绑定宠物才算在线（陈旧帧不算），否则回退后端 60s 窗口判定
-  const online =
-    displayState === 'streaming' && !!liveForPet ? true : (dashboard?.latest?.online ?? false);
-
-  // 有效体征：优先实时流（valid 帧），否则回退后端转发的最近有效帧
-  const vitals =
-    (liveForPet?.health?.valid ? liveForPet.health : null) ??
-    (dashboard?.latest?.valid ? dashboard.latest : null);
+  const latestForAction = displayState === 'streaming' ? liveForPet : null;
+  const readings = selectDashboardReadings({
+    pet,
+    snapshot: dashboard?.latest,
+    frame: latest,
+    displayState,
+  });
+  const { online, vitals, batteryPercent } = readings;
   const fmt = (value: number | undefined | null, digits = 0) =>
     value && value > 0 ? value.toFixed(digits) : '--';
-  const batteryPercent =
-    liveForPet?.battery?.found || dashboard?.latest?.batteryPercent
-      ? Math.round(liveForPet?.battery?.percent ?? dashboard?.latest?.batteryPercent ?? 0)
-      : null;
 
   // 数字宠物：优先 AI 角色卡头像，其次按「实时行为」播放动作 GIF
   const action = usePetAction(latestForAction);
@@ -249,7 +260,7 @@ export default function DashboardScreen() {
           {greeting()}，{petName}！
         </ThemedText>
         <ThemedText type="small" themeColor="textSecondary" style={styles.greetingSub}>
-          出门散步准备好了吗 🐾
+          {pet ? '今天也一起好好照顾它 🐾' : '从一份宠物档案，开启健康记录'}
         </ThemedText>
 
         {authLoading || (loading && user) ? (
@@ -264,62 +275,36 @@ export default function DashboardScreen() {
             buttonLabel="去登录"
             onPress={() => router.push('/login')}
           />
+        ) : !dashboard && error ? (
+          <GuideCard
+            emoji="↻"
+            title="暂时无法读取档案"
+            text={error}
+            buttonLabel="重新加载"
+            onPress={() => void load()}
+          />
         ) : !pet ? (
           <GuideCard
             emoji="🐶"
-            title="还没有添加宠物"
-            text="添加宠物并绑定项圈设备，开始记录它的健康日常"
+            title="先认识你的毛孩子"
+            text="1 建立宠物档案 → 2 输入项圈编码 → 3 查看健康数据。先起个名字，绑定可以稍后完成。"
             buttonLabel="添加宠物"
-            onPress={() => router.push('/create')}
+            onPress={() => router.push('/setup')}
           />
         ) : (
           <>
-            {pets.length > 1 && (
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.petSwitcher}
-              >
-                {pets.map((item) => {
-                  const selected = item.id === pet.id;
-                  return (
-                    <Pressable
-                      key={item.id}
-                      onPress={() => {
-                        void fetchDashboard(item.id).then(setDashboard);
-                      }}
-                      style={[
-                        styles.petChip,
-                        { backgroundColor: selected ? theme.tint : theme.backgroundElement },
-                        selected && { boxShadow: Shadows.chip },
-                      ]}
-                    >
-                      <ThemedText type="small" style={selected ? { color: '#ffffff' } : undefined}>
-                        {item.avatar_emoji} {item.name}
-                      </ThemedText>
-                    </Pressable>
-                  );
-                })}
-              </ScrollView>
-            )}
-
-            {/* Hero：心率/血氧悬浮芯片 + 数字宠物 + ONLINE 徽章 */}
+            {error ? (
+              <ThemedText type="small" style={{ color: theme.danger }}>
+                {error}，可下拉刷新
+              </ThemedText>
+            ) : null}
+            <DeviceStatusCard
+              state={readings.state}
+              updatedAt={readings.updatedAt}
+              batteryPercent={batteryPercent}
+            />
+            {/* 宠物头像与设备在线状态 */}
             <View style={styles.hero}>
-              <FloatingChip
-                icon={{ ios: 'lungs.fill', android: 'air', web: 'air' }}
-                iconColor={theme.info}
-                value={fmt(vitals?.spo2)}
-                label="血氧 %"
-                style={styles.chipLeft}
-              />
-              <FloatingChip
-                icon={{ ios: 'heart.fill', android: 'favorite', web: 'favorite' }}
-                iconColor={theme.danger}
-                value={fmt(vitals?.heartRate)}
-                label="心率 bpm"
-                style={styles.chipRight}
-              />
-
               <View
                 style={[
                   styles.avatarRing,
@@ -357,13 +342,19 @@ export default function DashboardScreen() {
                     ]}
                   />
                   <ThemedText type="smallBold" style={styles.onlineText}>
-                    {online ? `ONLINE · ${ACTION_LABELS[action]}` : 'OFFLINE 离线'}
+                    {!pet.device_id
+                      ? '等待绑定项圈'
+                      : latestForAction
+                        ? `在线 · ${ACTION_LABELS[action]}`
+                        : online
+                          ? '项圈在线'
+                          : '等待设备数据'}
                   </ThemedText>
                 </View>
               </View>
             </View>
 
-            {/* 生命体征主卡（默认折叠，标题行展开） */}
+            {/* 三项主要体征始终可见，次要指标点标题展开。 */}
             <View
               style={[
                 styles.vitalsCard,
@@ -373,7 +364,7 @@ export default function DashboardScreen() {
               <Pressable
                 style={styles.sectionHead}
                 onPress={() => setVitalsOpen((value) => !value)}
-                accessibilityLabel={vitalsOpen ? '收起生命体征' : '展开生命体征'}
+                accessibilityLabel={vitalsOpen ? '收起更多指标' : '展开更多指标'}
               >
                 <ThemedText style={[styles.vitalsTitle, { fontFamily: Fonts.rounded }]}>
                   生命体征
@@ -398,7 +389,11 @@ export default function DashboardScreen() {
                       color: online ? theme.online : theme.textSecondary,
                     }}
                   >
-                    {online ? '实时' : '离线'}
+                    {readings.state === 'live'
+                      ? '实时'
+                      : readings.state === 'snapshot'
+                        ? '最近采样'
+                        : '待测量'}
                   </ThemedText>
                 </View>
                 <SymbolView
@@ -409,34 +404,36 @@ export default function DashboardScreen() {
                 />
               </Pressable>
 
-              {vitalsOpen ? (
+              <View style={styles.vitalsGrid}>
+                <VitalCell
+                  icon={{ ios: 'heart.fill', android: 'favorite', web: 'favorite' }}
+                  color={theme.danger}
+                  label="心率"
+                  value={fmt(vitals?.heartRate)}
+                  unit="bpm"
+                />
+                <VitalCell
+                  icon={{ ios: 'lungs.fill', android: 'air', web: 'air' }}
+                  color={theme.info}
+                  label="血氧"
+                  value={fmt(vitals?.spo2)}
+                  unit="%"
+                />
+                <VitalCell
+                  icon={{
+                    ios: 'thermometer.medium',
+                    android: 'device_thermostat',
+                    web: 'device_thermostat',
+                  }}
+                  color={theme.warning}
+                  label="体温"
+                  value={fmt(vitals?.bodyTemp, 1)}
+                  unit="℃"
+                />
+              </View>
+              {vitalsOpen && (
                 <>
                   <View style={styles.vitalsGrid}>
-                    <VitalCell
-                      icon={{ ios: 'heart.fill', android: 'favorite', web: 'favorite' }}
-                      color={theme.danger}
-                      label="心率"
-                      value={fmt(vitals?.heartRate)}
-                      unit="bpm"
-                    />
-                    <VitalCell
-                      icon={{ ios: 'lungs.fill', android: 'air', web: 'air' }}
-                      color={theme.info}
-                      label="血氧"
-                      value={fmt(vitals?.spo2)}
-                      unit="%"
-                    />
-                    <VitalCell
-                      icon={{
-                        ios: 'thermometer.medium',
-                        android: 'device_thermostat',
-                        web: 'device_thermostat',
-                      }}
-                      color={theme.warning}
-                      label="体温"
-                      value={fmt(vitals?.bodyTemp, 1)}
-                      unit="℃"
-                    />
                     <VitalCell
                       icon={{ ios: 'wind', android: 'air', web: 'air' }}
                       color={theme.tint}
@@ -481,11 +478,6 @@ export default function DashboardScreen() {
                     />
                   </View>
                 </>
-              ) : (
-                <ThemedText type="small" themeColor="textSecondary" style={styles.sectionSummary}>
-                  心率 {fmt(vitals?.heartRate)} · 血氧 {fmt(vitals?.spo2)}% · 体温{' '}
-                  {fmt(vitals?.bodyTemp, 1)}℃ · 呼吸 {fmt(vitals?.respiration)}
-                </ThemedText>
               )}
             </View>
 
@@ -502,7 +494,13 @@ export default function DashboardScreen() {
                 accessibilityLabel={trendOpen ? '收起趋势统计' : '展开趋势统计'}
               >
                 <ThemedText style={[styles.trendTitle, { fontFamily: Fonts.rounded }]}>
-                  趋势统计
+                  {trendPeriod === 'day'
+                    ? '24 小时趋势'
+                    : trendPeriod === 'week'
+                      ? '7 天趋势'
+                      : trendPeriod === 'month'
+                        ? '30 天趋势'
+                        : '全部历史趋势'}
                 </ThemedText>
                 <SymbolView
                   name={{ ios: 'chevron.down', android: 'expand_more', web: 'expand_more' }}
@@ -644,30 +642,32 @@ export default function DashboardScreen() {
             </View>
 
             {/* 运动日记入口 */}
-            <Pressable
-              onPress={() => setDiaryVisible(true)}
-              style={[
-                styles.diaryEntry,
-                { backgroundColor: theme.backgroundElement, boxShadow: Shadows.card },
-              ]}
-            >
-              <SymbolView
-                name={{ ios: 'book.pages', android: 'menu_book', web: 'menu_book' }}
-                size={20}
-                tintColor={theme.tint}
-              />
-              <View style={styles.diaryTexts}>
-                <ThemedText type="smallBold">生成运动日记</ThemedText>
-                <ThemedText type="small" themeColor="textSecondary">
-                  把今天的活跃生成手账风海报
-                </ThemedText>
-              </View>
-              <SymbolView
-                name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }}
-                size={14}
-                tintColor={theme.textSecondary}
-              />
-            </Pressable>
+            {pet.petgif_id && (
+              <Pressable
+                onPress={() => setDiaryVisible(true)}
+                style={[
+                  styles.diaryEntry,
+                  { backgroundColor: theme.backgroundElement, boxShadow: Shadows.card },
+                ]}
+              >
+                <SymbolView
+                  name={{ ios: 'book.pages', android: 'menu_book', web: 'menu_book' }}
+                  size={20}
+                  tintColor={theme.tint}
+                />
+                <View style={styles.diaryTexts}>
+                  <ThemedText type="smallBold">生成运动日记</ThemedText>
+                  <ThemedText type="small" themeColor="textSecondary">
+                    把今天的活跃生成手账风海报
+                  </ThemedText>
+                </View>
+                <SymbolView
+                  name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }}
+                  size={14}
+                  tintColor={theme.textSecondary}
+                />
+              </Pressable>
+            )}
           </>
         )}
       </ThemedView>
@@ -750,39 +750,6 @@ function SummaryCell({ label, value }: { label: string; value: string }) {
   );
 }
 
-function FloatingChip({
-  icon,
-  iconColor,
-  value,
-  label,
-  style,
-}: {
-  icon: SymbolName;
-  iconColor: string;
-  value: string;
-  label: string;
-  style?: StyleProp<ViewStyle>;
-}) {
-  const theme = useTheme();
-  return (
-    <View
-      style={[
-        styles.floatingChip,
-        { backgroundColor: theme.backgroundElement, boxShadow: Shadows.chip },
-        style,
-      ]}
-    >
-      <SymbolView name={icon} size={18} tintColor={iconColor} />
-      <ThemedText style={[styles.floatingChipValue, { fontFamily: Fonts.rounded }]}>
-        {value}
-      </ThemedText>
-      <ThemedText type="small" themeColor="textSecondary" style={styles.floatingChipLabel}>
-        {label}
-      </ThemedText>
-    </View>
-  );
-}
-
 function GuideCard({
   emoji,
   title,
@@ -849,30 +816,23 @@ const styles = StyleSheet.create({
   greetingSub: { textAlign: 'center', marginTop: 2 },
   center: { paddingVertical: Spacing.six, alignItems: 'center' },
 
-  petSwitcher: { gap: Spacing.two },
-  petChip: {
-    borderRadius: 16,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: 6,
-  },
-
   hero: {
     alignItems: 'center',
     justifyContent: 'center',
-    height: 210,
+    height: 155,
   },
   avatarRing: {
-    width: 174,
-    height: 174,
-    borderRadius: 87,
+    width: 132,
+    height: 132,
+    borderRadius: 66,
     borderWidth: 3,
     alignItems: 'center',
     justifyContent: 'center',
   },
   avatarInner: {
-    width: 162,
-    height: 162,
-    borderRadius: 81,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
     borderWidth: 6,
     alignItems: 'center',
     justifyContent: 'center',
@@ -893,21 +853,6 @@ const styles = StyleSheet.create({
   },
   onlineDot: { width: 7, height: 7, borderRadius: 4 },
   onlineText: { fontSize: 12, lineHeight: 16 },
-
-  floatingChip: {
-    position: 'absolute',
-    alignItems: 'center',
-    gap: 2,
-    borderRadius: 18,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.two + 2,
-    minWidth: 76,
-    zIndex: 2,
-  },
-  chipLeft: { left: 6, top: 28 },
-  chipRight: { right: 6, top: 58 },
-  floatingChipValue: { fontSize: 19, fontWeight: '800', lineHeight: 24 },
-  floatingChipLabel: { fontSize: 11, lineHeight: 14 },
 
   vitalsCard: {
     borderRadius: 22,
@@ -957,7 +902,6 @@ const styles = StyleSheet.create({
     gap: 8,
     borderTopWidth: StyleSheet.hairlineWidth,
     paddingTop: 12,
-    paddingRight: 68,
   },
   miniPill: {
     flexDirection: 'row',

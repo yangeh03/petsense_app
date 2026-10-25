@@ -3,7 +3,6 @@ import { Image } from 'expo-image';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 
-import { CharacterCardModal } from '@/components/dashboard/character-card-modal';
 import { DeviceCard } from '@/components/device-card';
 import { FollowListModal } from '@/components/social/follow-list-modal';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
@@ -25,7 +24,6 @@ export default function ProfileScreen() {
   const { user, loading, logout } = useAuth();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [followKind, setFollowKind] = useState<'followers' | 'following' | null>(null);
-  const [cardFor, setCardFor] = useState<{ id: number; name: string } | null>(null);
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -122,12 +120,14 @@ export default function ProfileScreen() {
 
         {/* 我的宠物 */}
         <View style={styles.sectionHeader}>
-          <ThemedText type="smallBold">我的宠物</ThemedText>
-          <Pressable onPress={() => router.push('/create')}>
-            <ThemedText type="small" style={{ color: theme.tint }}>
-              ＋ 添加
-            </ThemedText>
-          </Pressable>
+          <ThemedText type="smallBold">宠物档案</ThemedText>
+          {profile && profile.pets.length === 0 && (
+            <Pressable onPress={() => router.push('/setup')}>
+              <ThemedText type="small" style={{ color: theme.tint }}>
+                添加宠物
+              </ThemedText>
+            </Pressable>
+          )}
         </View>
         {(profile?.pets ?? []).map((pet) => (
           <ThemedView key={pet.id} type="backgroundElement" style={styles.petCard}>
@@ -150,14 +150,6 @@ export default function ProfileScreen() {
                 {pet.breed || '宠物'} · {pet.device_id || '未绑定设备'}
               </ThemedText>
             </View>
-            <Pressable
-              onPress={() => setCardFor({ id: pet.id, name: pet.name })}
-              hitSlop={6}
-              accessibilityLabel={`为${pet.name}生成 AI 形象`}
-              style={styles.aiButton}
-            >
-              <AppIcon name="auto-fix" size={17} color={theme.tint} />
-            </Pressable>
             {pet.batteryPercent != null ? (
               <View style={styles.petBattery}>
                 <View
@@ -173,14 +165,6 @@ export default function ProfileScreen() {
             ) : null}
           </ThemedView>
         ))}
-
-        <CharacterCardModal
-          visible={cardFor !== null}
-          petId={cardFor?.id ?? 0}
-          petName={cardFor?.name ?? ''}
-          onClose={() => setCardFor(null)}
-          onBound={() => void load()}
-        />
 
         <FollowListModal
           visible={followKind !== null && profile !== null}

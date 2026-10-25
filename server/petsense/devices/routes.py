@@ -16,6 +16,8 @@ DEVICE_ID_PATTERN = re.compile(r'[A-Za-z0-9_-]{1,40}')
 
 
 def device_dict(device, pet=None):
+    if pet is not None and pet.device_id != device.device_id:
+        pet = None
     telemetry = latest_telemetry(device.device_id)
     return {
         'deviceId': device.device_id,
@@ -37,12 +39,15 @@ def claim_device(session, user_id, device_id, name=''):
     device = session.get(Device, device_id)
     if device is not None and device.owner_id != user_id:
         return None, None, ('设备已被其他账号绑定', 409)
+    owned = session.execute(select(Device).where(Device.owner_id == user_id)).scalar_one_or_none()
+    if owned is not None and owned.device_id != device_id:
+        return None, None, ('请先解绑当前设备，再绑定新的项圈', 409)
     pet = session.execute(select(Pet).where(Pet.user_id == user_id)).scalar_one_or_none()
     if device is None:
         device = Device(device_id=device_id, owner_id=user_id, name=name, claimed_at=utc_now())
         session.add(device)
-        if pet is not None and not pet.device_id:
-            pet.device_id = device_id
+    if pet is not None:
+        pet.device_id = device_id
     return device, pet, None
 
 

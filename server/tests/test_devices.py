@@ -82,6 +82,35 @@ class DeviceApiTests(unittest.TestCase):
         self.assertEqual(self.client.post('/api/app/device/claim', headers=self.header_bob,
                          json={'deviceId': 'esp32-001'}).status_code, 200)
 
+    def test_create_pet_inherits_previously_claimed_device(self):
+        self.client.post('/api/app/device/claim', headers=self.header_alice,
+                         json={'deviceId': 'petsense-esp32-001'})
+        reply = self.client.post('/api/app/pets', headers=self.header_alice,
+                                 json={'name': 'Max'})
+        self.assertEqual(reply.status_code, 201)
+        pets = self.client.get('/api/app/pets', headers=self.header_alice).get_json()['pets']
+        self.assertEqual(pets[0]['device_id'], 'petsense-esp32-001')
+
+    def test_reclaim_repairs_unbound_pet(self):
+        self.client.post('/api/app/pets', headers=self.header_alice, json={'name': 'Max'})
+        with db.session_scope() as s:
+            s.add(Device(device_id='petsense-esp32-001', owner_id=self.alice,
+                         name='', claimed_at=db.utc_now()))
+        reply = self.client.post('/api/app/device/claim', headers=self.header_alice,
+                                 json={'deviceId': 'petsense-esp32-001'})
+        self.assertEqual(reply.status_code, 200)
+        pets = self.client.get('/api/app/pets', headers=self.header_alice).get_json()['pets']
+        self.assertEqual(pets[0]['device_id'], 'petsense-esp32-001')
+
+    def test_second_device_returns_conflict_and_preserves_binding(self):
+        self.client.post('/api/app/pets', headers=self.header_alice,
+                         json={'name': 'Max', 'deviceId': 'petsense-esp32-001'})
+        reply = self.client.post('/api/app/device/claim', headers=self.header_alice,
+                                 json={'deviceId': 'petsense-esp32-002'})
+        self.assertEqual(reply.status_code, 409)
+        device = self.client.get('/api/app/device', headers=self.header_alice).get_json()['device']
+        self.assertEqual(device['deviceId'], 'petsense-esp32-001')
+
     def test_single_pet_per_user(self):
         self.assertEqual(self.client.post('/api/app/pets', headers=self.header_alice,
                          json={'name': 'Max'}).status_code, 201)
