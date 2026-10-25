@@ -7,6 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { API_BASE_URL } from '@/config';
 import { buildUploadForm } from '@/services/form-upload';
+import type { PetUpdate } from '@/services/pet-profile';
 import type {
   AppUser,
   DashboardData,
@@ -154,6 +155,17 @@ export async function fetchMe(): Promise<AppUser | null> {
 
 export function fetchPets(): Promise<{ pets: SocialPet[] }> {
   return request('/pets');
+}
+
+export function fetchPet(petId: number): Promise<{ pet: SocialPet }> {
+  return request(`/pets/${petId}`);
+}
+
+export async function updatePet(petId: number, input: PetUpdate): Promise<{ pet: SocialPet }> {
+  const { photo, ...fields } = input;
+  if (!photo) return request(`/pets/${petId}`, { method: 'PATCH', body: fields });
+  const form = await buildUploadForm(fields, [{ field: 'photo', ...photo }]);
+  return request(`/pets/${petId}`, { method: 'PATCH', form });
 }
 
 // ─── 设备（一人一设备，认领即绑定宠物） ───
