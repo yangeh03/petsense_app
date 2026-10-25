@@ -1,0 +1,114 @@
+{
+  "dataset": "Zenodo 18972388 + Karaaslan2024 Bark/Howl + Freesound whine supplement",
+  "supplement_manifest": "data/whine_fsd/manifest.json",
+  "supplement_recordings": 8,
+  "window_s": 1,
+  "feature": "10Hz frame-DC removal, 256-point Hann power log-Mel40 gain centered, mean + std",
+  "test_dogs": [
+    "P-04",
+    "P-06",
+    "P-12",
+    "P-13"
+  ],
+  "validation_dogs": [
+    "P-03",
+    "P-05",
+    "P-09",
+    "P-14"
+  ],
+  "license": "Zenodo metadata CC BY4.0 but included README CC BY-NC4.0: use research/noncommercial pending clarification. Supplement repository MIT; preserve original recording provenance.",
+  "caveats": [
+    "Whine supplement has weak whole-recording labels, not expert event boundaries; uploader-grouped holdout, not guaranteed dog independence.",
+    "Growl is excluded, not a recognized class. Unknown growls can still be confused with supported classes.",
+    "Primary Bark/yelp category includes yelps.",
+    "Howl supplement lacks dog IDs; source/domain confounding and identity leakage cannot be excluded.",
+    "Test windows from the same event/recording are correlated; report is window-level, not independent dog accuracy.",
+    "Other covers selected pant/human examples, not all unknown sounds."
+  ],
+  "classes": [
+    "bark",
+    "howl",
+    "whine",
+    "other"
+  ],
+  "split_counts": {
+    "train": 1826,
+    "val": 787,
+    "test": 483
+  },
+  "selection_metric": "validation balanced accuracy",
+  "selection_score": 0.8954406197556882,
+  "validation_accuracy": 0.9377382465057179,
+  "test": {
+    "bark": {
+      "precision": 0.9069767441860465,
+      "recall": 0.7647058823529411,
+      "f1-score": 0.8297872340425532,
+      "support": 51.0
+    },
+    "howl": {
+      "precision": 0.9714285714285714,
+      "recall": 0.9714285714285714,
+      "f1-score": 0.9714285714285714,
+      "support": 35.0
+    },
+    "whine": {
+      "precision": 0.325,
+      "recall": 0.41935483870967744,
+      "f1-score": 0.36619718309859156,
+      "support": 31.0
+    },
+    "other": {
+      "precision": 0.9452054794520548,
+      "recall": 0.9426229508196722,
+      "f1-score": 0.9439124487004104,
+      "support": 366.0
+    },
+    "accuracy": 0.8923395445134575,
+    "macro avg": {
+      "precision": 0.7871526987666682,
+      "recall": 0.7745280608277156,
+      "f1-score": 0.7778313593175316,
+      "support": 483.0
+    },
+    "weighted avg": {
+      "precision": 0.9032629801924232,
+      "recall": 0.8923395445134575,
+      "f1-score": 0.8967768485229333,
+      "support": 483.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      39,
+      1,
+      6,
+      5
+    ],
+    [
+      1,
+      34,
+      0,
+      0
+    ],
+    [
+      3,
+      0,
+      13,
+      15
+    ],
+    [
+      0,
+      0,
+      21,
+      345
+    ]
+  ],
+  "parameters": 5164,
+  "architecture": [
+    80,
+    48,
+    24,
+    4
+  ]
+}

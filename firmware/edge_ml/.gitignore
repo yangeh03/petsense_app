@@ -1,0 +1,7 @@
+data/
+server_snapshot/
+__pycache__/
+boot_validation.log
+device_validation*.json
+staging/
+preview*.log

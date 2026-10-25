@@ -1,0 +1,141 @@
+{
+  "dataset": "Mendeley mpph6bmn7g v1, chest only",
+  "source_hz": 100,
+  "target_hz": 10,
+  "window_s": 2,
+  "feature": "six-axis means + population stds; accelerometer g, gyro degrees/s",
+  "test_dogs": [
+    "04-01-LD",
+    "04-02-LE",
+    "04-07-LE",
+    "05-01-LD",
+    "07-01-LG",
+    "10-14-LI",
+    "11-24-IK",
+    "11-28-IZ"
+  ],
+  "validation_dogs": [
+    "04-03-LD",
+    "05-11-LE",
+    "05-14-LE",
+    "07-03-LE",
+    "09-03-LJ",
+    "10-13-LK",
+    "11-02-IM",
+    "11-21-IK"
+  ],
+  "train_dogs": [
+    "04-04-LZ",
+    "04-08-LE",
+    "05-03-LF",
+    "05-04-LZ",
+    "05-05-LE",
+    "05-13-LE",
+    "05-22-LE",
+    "07-02-LH",
+    "07-04-LZ",
+    "08-01-LH",
+    "08-02-LH",
+    "08-04-LH",
+    "09-01-LI",
+    "09-02-LJ",
+    "09-04-LJ",
+    "10-03-LJ",
+    "10-04-LJ",
+    "10-11-LJ",
+    "10-12-LJ",
+    "10-15-LK",
+    "11-11-IK",
+    "11-22-IM",
+    "11-23-IT",
+    "11-25-IJ",
+    "11-26-IL",
+    "11-27-II"
+  ],
+  "license": "CC BY 4.0",
+  "caveat": "Chest mounting orientation must match training; not collar-validated.",
+  "classes": [
+    "standing",
+    "sitting",
+    "lying down",
+    "walking"
+  ],
+  "split_counts": {
+    "train": 8539,
+    "val": 2729,
+    "test": 3782
+  },
+  "validation_accuracy": 0.8402345181385122,
+  "test": {
+    "standing": {
+      "precision": 0.8888888888888888,
+      "recall": 0.8477466504263094,
+      "f1-score": 0.8678304239401496,
+      "support": 1642.0
+    },
+    "sitting": {
+      "precision": 0.8161073825503355,
+      "recall": 0.9838187702265372,
+      "f1-score": 0.8921496698459281,
+      "support": 618.0
+    },
+    "lying down": {
+      "precision": 0.8414634146341463,
+      "recall": 0.8273381294964028,
+      "f1-score": 0.8343409915356711,
+      "support": 417.0
+    },
+    "walking": {
+      "precision": 0.9368520263901979,
+      "recall": 0.8995475113122172,
+      "f1-score": 0.9178208679593721,
+      "support": 1105.0
+    },
+    "accuracy": 0.8828662083553676,
+    "macro avg": {
+      "precision": 0.8708279281158922,
+      "recall": 0.8896127653653666,
+      "f1-score": 0.8780354883202802,
+      "support": 3782.0
+    },
+    "weighted avg": {
+      "precision": 0.8857804471272528,
+      "recall": 0.8828662083553676,
+      "f1-score": 0.8827176902802725,
+      "support": 3782.0
+    }
+  },
+  "confusion_matrix": [
+    [
+      1392,
+      125,
+      60,
+      65
+    ],
+    [
+      4,
+      608,
+      4,
+      2
+    ],
+    [
+      63,
+      9,
+      345,
+      0
+    ],
+    [
+      107,
+      3,
+      1,
+      994
+    ]
+  ],
+  "parameters": 1900,
+  "architecture": [
+    12,
+    48,
+    24,
+    4
+  ]
+}
