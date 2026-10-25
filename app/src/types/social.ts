@@ -116,8 +116,19 @@ export type Insight = {
   text: string;
 };
 
-export type DashboardData = {
-  pet: SocialPet | null;
+/** 无宠物时接口只返回 { pet: null }，不包含统计字段。 */
+export type DashboardData =
+  | DashboardWithPet
+  | {
+      pet: null;
+      latest?: never;
+      today?: never;
+      insight?: never;
+      petgif?: never;
+    };
+
+type DashboardWithPet = {
+  pet: SocialPet;
   latest: DashboardTelemetry | null;
   today: {
     sleepMinutes: number;

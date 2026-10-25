@@ -673,13 +673,13 @@ export default function DashboardScreen() {
       </ThemedView>
 
       <DiaryModal
-        key={`diary-${diaryVisible}-${dashboard?.today.activeMinutes ?? 0}`}
+        key={`diary-${diaryVisible}-${dashboard?.today?.activeMinutes ?? 0}`}
         visible={diaryVisible}
         onClose={() => setDiaryVisible(false)}
         petName={petName}
         petId={pet?.id ?? null}
         petgifId={pet?.petgif_id ?? null}
-        activeMinutes={dashboard?.today.activeMinutes ?? 0}
+        activeMinutes={dashboard?.today?.activeMinutes ?? 0}
         onShared={() => {
           void load();
           router.push('/community');
