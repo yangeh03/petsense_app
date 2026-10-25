@@ -11,6 +11,7 @@ depends_on = None
 
 def upgrade():
     op.create_table('telemetry_latest',
+        sa.Column('owner_id', sa.Integer(), nullable=False),
         sa.Column('device_id', sa.String(64), primary_key=True),
         sa.Column('boot_id', sa.String(80), nullable=False),
         sa.Column('ordinal', sa.BigInteger(), nullable=False),
@@ -18,6 +19,7 @@ def upgrade():
         sa.Column('payload', sa.Text(), nullable=False),
         sa.Column('received_at', UTCDatetime(), nullable=False))
     op.create_table('telemetry_minutes',
+        sa.Column('owner_id', sa.Integer(), primary_key=True),
         sa.Column('device_id', sa.String(64), primary_key=True),
         sa.Column('minute', UTCDatetime(), primary_key=True),
         sa.Column('metrics', sa.Text(), nullable=False),
@@ -25,6 +27,7 @@ def upgrade():
         sa.Column('observed_seconds', sa.Float(), nullable=False),
         sa.Column('frames', sa.Integer(), nullable=False))
     op.create_table('telemetry_events',
+        sa.Column('owner_id', sa.Integer(), nullable=False),
         sa.Column('id', sa.Integer(), primary_key=True, autoincrement=True),
         sa.Column('device_id', sa.String(64), nullable=False),
         sa.Column('boot_id', sa.String(80), nullable=False),

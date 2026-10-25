@@ -39,7 +39,7 @@ export function SoundTimeline({
                 {event.experimental ? ' · 实验性' : ''}
               </ThemedText>
               <ThemedText type="small" themeColor="textSecondary">
-                检测到 {duration(event.observedSeconds)}
+                {event.observedSeconds < 1 ? '短片段' : `检测到 ${duration(event.observedSeconds)}`}
               </ThemedText>
             </View>
             <ThemedText style={{ color: theme.textSecondary }}>

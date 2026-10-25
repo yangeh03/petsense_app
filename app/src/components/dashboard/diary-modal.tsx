@@ -43,8 +43,8 @@ export function DiaryModal({
 }) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
-  const [durationMin, setDurationMin] = useState(String(activeMinutes || 30));
-  const [steps, setSteps] = useState('8000');
+  const [durationMin, setDurationMin] = useState(activeMinutes > 0 ? String(activeMinutes) : '');
+  const [steps, setSteps] = useState('');
   const [places, setPlaces] = useState('');
   const [notes, setNotes] = useState('');
   const [generating, setGenerating] = useState(false);
@@ -73,10 +73,21 @@ export function DiaryModal({
 
   const generate = async () => {
     if (generating) return;
+    if (
+      !durationMin.trim() ||
+      !steps.trim() ||
+      !Number.isFinite(Number(durationMin)) ||
+      Number(durationMin) <= 0 ||
+      !Number.isFinite(Number(steps)) ||
+      Number(steps) < 0
+    ) {
+      Alert.alert('请补充运动记录', '时长和步数由你确认；项圈目前没有提供步数。');
+      return;
+    }
     setGenerating(true);
     try {
       const result = await generateDiary(petgifId ?? 'default', {
-        durationMin: Number(durationMin) || 30,
+        durationMin: Number(durationMin),
         steps: Number(steps) || 0,
         places: places.trim(),
         notes: notes.trim() || `${petName} 今天的运动日记`,
@@ -139,7 +150,7 @@ export function DiaryModal({
           contentContainerStyle={[styles.form, { paddingBottom: insets.bottom + Spacing.five }]}
         >
           <ThemedText type="small" themeColor="textSecondary" style={styles.guide}>
-            把 {petName} 今天的运动生成一张手账风日记海报
+            用你确认的运动记录，为 {petName} 制作日记海报。步数需手动填写。
           </ThemedText>
 
           <View style={styles.statsRow}>
@@ -157,7 +168,7 @@ export function DiaryModal({
             </View>
             <View style={[styles.statBox, { borderColor: theme.backgroundSelected }]}>
               <ThemedText type="small" themeColor="textSecondary">
-                步数（约）
+                手动估计步数
               </ThemedText>
               <TextInput
                 value={steps}

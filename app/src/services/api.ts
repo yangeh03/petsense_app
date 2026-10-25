@@ -68,7 +68,13 @@ export function absoluteUrl(path: string): string {
 
 export async function request<T>(
   path: string,
-  options: { method?: string; body?: unknown; form?: FormData; auth?: boolean } = {},
+  options: {
+    method?: string;
+    body?: unknown;
+    form?: FormData;
+    auth?: boolean;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<T> {
   const headers: Record<string, string> = {};
   let body: BodyInit | undefined;
@@ -86,6 +92,7 @@ export async function request<T>(
     method: options.method ?? 'GET',
     headers,
     body,
+    signal: options.signal,
   });
   let payload: unknown = null;
   try {
@@ -93,6 +100,7 @@ export async function request<T>(
   } catch {
     payload = null;
   }
+  if (options.signal?.aborted) throw new Error('请求已取消');
   if (!response.ok) {
     const message =
       payload && typeof payload === 'object' && 'message' in payload
@@ -191,9 +199,9 @@ export function createPet(input: {
   return request('/pets', { method: 'POST', body: input });
 }
 
-export function fetchDashboard(petId?: number): Promise<DashboardData> {
+export function fetchDashboard(petId?: number, signal?: AbortSignal): Promise<DashboardData> {
   const query = petId ? `?pet_id=${petId}` : '';
-  return request(`/dashboard${query}`);
+  return request(`/dashboard${query}`, { signal });
 }
 
 // ─── 社区 ───

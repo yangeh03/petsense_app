@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from petsense.auth.routes import require_app_user
 from petsense.db import session_scope, utc_now
-from petsense.db.models import Device, Reading
+from petsense.db.models import Device, TelemetryLatest
 
 bp = Blueprint('edge', __name__)
 TOPIC = 'petsense/sensor/edge_v1'
@@ -41,10 +41,11 @@ def latest():
         return error
     with session_scope() as session:
         row = session.execute(
-            select(Reading.payload, Reading.received_at)
-            .join(Device, Reading.device_id == Device.device_id)
-            .where(Device.owner_id == user['id'], Reading.topic == TOPIC)
-            .order_by(Reading.id.desc()).limit(1)
+            select(TelemetryLatest.payload, TelemetryLatest.received_at)
+            .join(Device, TelemetryLatest.device_id == Device.device_id)
+            .where(Device.owner_id == user['id'], TelemetryLatest.owner_id == user['id'],
+                   TelemetryLatest.received_at >= Device.claimed_at)
+            .order_by(TelemetryLatest.received_at.desc()).limit(1)
         ).first()
     age = max(0, (utc_now() - row.received_at).total_seconds()) if row else None
     response = jsonify(online=age is not None and age < 10,

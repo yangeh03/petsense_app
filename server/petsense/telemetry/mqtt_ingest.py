@@ -58,13 +58,17 @@ def _touch_device_last_seen(device_id):
 def store(topic, payload, device_id=None):
     """落库一条原始帧，返回 aware UTC 时间（调用方用 iso_z() 序列化）。"""
     received = utc_now()
+    accepted = True
     with session_scope() as s:
         s.execute(insert(Reading).values(topic=topic, payload=payload,
                                          received_at=received, device_id=device_id))
         if device_id:
-            decoded = json.loads(payload)
+            try:
+                decoded = json.loads(payload)
+            except (ValueError, TypeError):
+                decoded = None
             if isinstance(decoded, dict) and decoded.get('deviceId') == device_id:
-                observations.ingest_observation(s, decoded, received)
+                accepted = observations.ingest_observation(s, decoded, received)
     global _trim_counter
     _trim_counter += 1
     if _trim_counter >= 500:
@@ -75,7 +79,7 @@ def store(topic, payload, device_id=None):
             if max_id is not None:
                 s.execute(delete(Reading).where(Reading.id <= max_id - config.MAX_HISTORY))
             observations.prune(s, received)
-    return received
+    return received if accepted else None
 
 
 def list_at(value, index, default=None):
@@ -240,6 +244,8 @@ def on_message(client, userdata, msg):
             device_id = edge.validate(payload)
             serialized = json.dumps(payload, allow_nan=False, separators=(',', ':'))
             ts = store(msg.topic, serialized, device_id)
+            if ts is None:
+                return
             _touch_device_last_seen(device_id)
             broadcast_packet(json.dumps({'topic': msg.topic, 'payload': serialized,
                                          'received_at': iso_z(ts)}), device_id)
@@ -278,6 +284,8 @@ def on_message(client, userdata, msg):
                 actions_service.enrich_frame_with_action(frame)
                 frame_payload = json.dumps(frame, ensure_ascii=False, separators=(',', ':'))
                 ts = store(msg.topic, frame_payload, device_id)
+                if ts is None:
+                    continue
                 packet = json.dumps({'topic': msg.topic, 'payload': frame_payload, 'received_at': iso_z(ts)})
                 try:
                     recorder.append_cloud_experiment_frame(msg.topic, frame, iso_z(ts), device_id)
@@ -296,6 +304,8 @@ def on_message(client, userdata, msg):
         payload_str = json.dumps(payload_dict, ensure_ascii=False, separators=(',', ':'))
 
     ts = store(msg.topic, payload_str, device_id)
+    if ts is None:
+        return
     packet = json.dumps({'topic': msg.topic, 'payload': payload_str, 'received_at': iso_z(ts)})
     if device_id and isinstance(payload_dict, dict):
         try:

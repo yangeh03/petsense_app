@@ -24,20 +24,20 @@ edge_v1 每秒上报 source=esp32_mlp、modelVersion、deviceId、boot_id、seq�
 ## 数据持久化和口径
 
 原始 readings 保留现有环冲仅供排查。新增三类独立持久表：
-- telemetry_latest：每设备一个检查点，保存最近合法 payload、接收时间、boot/seq/ts 及已结束 boot 列表；同 boot 重复/迟到序号忽略，已结束 boot 的迟到帧忽略。boot 缺失的旧协议按 ts_ms 去重。重启不重复统计。
-- telemetry_minutes：每设备每分钟一个聚合桶，存三项有效体征的 sum/count/min/max、有效观测秒数、动作时长；按服务端接收时间归桶。有效体征只来自 health.valid=true 且对应值是有限正数。电量0有效。只有相邻上报间隔不超过3秒才累计间隔（归前帧动作），跨失联不补齐时长；没有采样不能显示全天安静或睡眠。
-- telemetry_events：每设备每种声音的连续片段，声类相同且间隔不超过3秒合并；重启、模型变化或更长间隔分段；保存首末时间、匹配帧数、置信度和 experimental 标记。检测时长按匹配帧间有效间隔累计，不把中间静默伪装为连续声音。仅 bark/howl/whine 进入家长时间线。叫声片段不是单声计数。
+- telemetry_latest：每设备一个检查点，保存最近合法 payload、接收时间、boot/seq/ts 及已结束 boot 列表；同 boot 重复/迟到序号忽略，已结束 boot 的迟到帧忽略。当前 edge 协议按 boot_id 与 seq 严格去重并识别重启。boot 缺失的旧协议按 ts_ms 去重，并用运行时间回退及接收间隔启发式识别重启；缺少唯一启动标识时不能完全区分重启与迟到包。
+- telemetry_minutes：按 owner_id、device_id、minute 分隔的聚合桶，存三项有效体征的 sum/count/min/max、有效观测秒数、动作时长；按服务端接收时间归桶。有效体征只来自 health.valid=true 且对应值是有限正数。电量0有效。只有相邻上报间隔不超过3秒才累计间隔（归前帧动作），跨失联不补齐时长；没有采样不能显示全天安静或睡眠。
+- telemetry_events：按账号归属隔离、每设备每种声音的连续片段，声类相同且间隔不超过3秒合并；重启、模型变化或更长间隔分段；保存首末时间、匹配帧数、置信度和 experimental 标记。检测时长按匹配帧间有效间隔累计，不把中间静默伪装为连续声音。仅 bark/howl/whine 进入家长时间线。叫声片段不是单声计数。
 
-按宠物账号和当前设备归属查询；未绑定设备返回明确空态，不串数据。分钟桶和声音事件保留90天，最新检查点保留；raw 环冲删除不影响已聚合历史。保留期限在接口返回。统计仅覆盖采集到的时段，显示实际时间范围与覆盖信息。解绑后旧账号立即失去设备数据访问，延续当前所有权规则。
+每个检查点、分钟桶和事件均记录写入时的 owner_id；换绑后不继承前任账号的历史。按宠物账号和当前设备归属及认领时间查询；未绑定设备返回明确空态，不串数据。分钟桶和声音事件保留90天，最新检查点保留；raw 环冲删除不影响已聚合历史。保留期限在接口返回。统计仅覆盖采集到的时段，显示实际时间范围与覆盖信息。解绑后旧账号立即失去设备数据访问，延续当前所有权规则。
 
 写入原始帧、检查点、分钟聚合和片段在同一事务中完成，失败不广播。启动时在订阅 MQTT 前用残留原始帧按顺序补建（幂等），已有环冲以外的历史无法补回，不合成实验数据。旧传感器主题也进入体征聚合，端侧动作/声音结果不经过云端重分类。
 
 ## API
 
-新增 GET /api/app/observations?period=day|week|month，返回 latest（含 payload/receivedAt）、summary（观测/动作时长/声音片段数）、events（最多20）、buckets（24小时或7/30日固定时间桶，三个指标各自sum/count/min/max）、range、retentionDays。缺失桶的指标为null或count=0。平均和极值在服务端由所有桶合并，前端不再对均值取极值。
+新增 GET /api/app/observations?period=day|week|month，返回 latest（含 payload/receivedAt）、summary（观测/动作时长/声音片段数）、events（最多20）、buckets（滚动24小时采用25个小时桶，首末桶为部分小时，实际范围严格为24小时；另有7/30日桶；三个指标各自sum/count/min/max）、range、retentionDays。缺失桶的指标为null或count=0。平均和极值在服务端由所有桶合并，前端不再对均值取极值。
 
 现有 dashboard/pets 社交接口兼容保留；新页面通过 observations 使用统一历史来源，旧 /trends 暂留兼容旧客户端。新增 PATCH /api/app/pets/:id 只允许账号归属内修改展示资料，不允许借此修改设备绑定。
 
 ## 验收
 
-真实 edge 帧可被 App 消费，quiet=0 保留、实验性声音标注、无帧不推断行为；重复/重排/重启/跨日/失联/非法值/多用户隔离有行为测试；raw 裁剪和进程重启后统计仍存在；不完整时间轴不伪造连续数据；宠物编辑立即在各页面重取；iOS/Web computer use 验证默认、展开和无数据状态；客户端 lint/typecheck/format/test + server unittest。
+真实 edge 帧可被 App 消费，quiet=0 保留、实验性声音标注、无帧不推断行为；重复/重排/重启/跨日/失联/非法值/多用户隔离有行为测试；raw 裁剪和进程重启后统计仍存在；不完整时间轴不伪造连续数据；宠物编辑立即在各页面重取；Web computer use 验证默认、展开和无数据状态；原生设备单独回归；客户端 lint/typecheck/format/test + server unittest。

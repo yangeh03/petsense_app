@@ -30,11 +30,11 @@ def prediction(payload, kind):
     return value if .6 <= value['confidence'] <= 1 else None
 
 
-def _minute(session, device, moment):
+def _minute(session, device, owner, moment):
     minute = moment.replace(second=0, microsecond=0)
-    row = session.get(TelemetryMinute, (device, minute))
+    row = session.get(TelemetryMinute, (owner, device, minute))
     if row is None:
-        row = TelemetryMinute(device_id=device, minute=minute, metrics='{}', actions='{}',
+        row = TelemetryMinute(owner_id=owner, device_id=device, minute=minute, metrics='{}', actions='{}',
                               observed_seconds=0, frames=0)
         session.add(row)
         session.flush()
@@ -47,14 +47,27 @@ def ingest_observation(session, payload, received_at):
     ordinal = payload.get('seq', payload.get('ts_ms'))
     if not isinstance(device, str) or not number(ordinal) or ordinal < 0:
         return False
+    binding = session.get(Device, device)
+    if binding is None or received_at < binding.claimed_at:
+        return False
+    owner = binding.owner_id
     boot = str(payload.get('boot_id') or 'legacy')[:80]
     cursor = session.get(TelemetryLatest, device, with_for_update=True)
+    if not payload.get('boot_id') and cursor and cursor.boot_id.startswith('legacy'):
+        boot = cursor.boot_id
+        receipt_gap = (received_at - cursor.received_at).total_seconds()
+        # Older firmware has no boot identity. A large rollback to the first minute
+        # starts a new epoch; reject subsequent buffered pre-reboot uptime jumps.
+        if ordinal < cursor.ordinal and ((ordinal <= 60_000 and cursor.ordinal - ordinal >= 30_000) or receipt_gap >= 10):
+            boot = f'legacy:{received_at.timestamp()}'
+        elif ordinal - cursor.ordinal > max(0, receipt_gap) * 1000 + 10_000:
+            return False
     previous = json.loads(cursor.payload) if cursor else None
     retired = json.loads(cursor.retired_boots) if cursor else []
     if cursor and (received_at <= cursor.received_at or boot in retired or
                    (boot == cursor.boot_id and ordinal <= cursor.ordinal)):
         return False
-    same_boot = cursor is not None and boot == cursor.boot_id
+    same_boot = cursor is not None and boot == cursor.boot_id and cursor.owner_id == owner
     gap = (received_at - cursor.received_at).total_seconds() if cursor else 0
     valid_gap = same_boot and 0 < gap <= GAP_SECONDS
     if valid_gap:
@@ -65,14 +78,14 @@ def ingest_observation(session, payload, received_at):
         while start < received_at:
             end = min(received_at, start.replace(second=0, microsecond=0) + timedelta(minutes=1))
             seconds = (end - start).total_seconds()
-            minute = _minute(session, device, start)
+            minute = _minute(session, device, owner, start)
             minute.observed_seconds += seconds
             if label in ACTIONS:
                 actions = json.loads(minute.actions)
                 actions[label] = actions.get(label, 0) + seconds
                 minute.actions = json.dumps(actions)
             start = end
-    minute = _minute(session, device, received_at)
+    minute = _minute(session, device, owner, received_at)
     minute.frames += 1
     health = payload.get('health') or {}
     metrics = json.loads(minute.metrics)
@@ -92,15 +105,19 @@ def ingest_observation(session, payload, received_at):
         label = sound['label']
         model = str(payload.get('modelVersion') or '')[:80]
         episode = session.execute(select(TelemetryEvent).where(
-            TelemetryEvent.device_id == device).order_by(TelemetryEvent.id.desc()).limit(1)).scalar_one_or_none()
+            TelemetryEvent.device_id == device, TelemetryEvent.owner_id == owner).order_by(TelemetryEvent.id.desc()).limit(1)).scalar_one_or_none()
+        continuation = (episode is not None and episode.label == label and episode.boot_id == boot and
+                        episode.model_version == model and
+                        (received_at - episode.last_seen_at).total_seconds() <= GAP_SECONDS)
         if (episode is None or episode.label != label or episode.boot_id != boot or
                 episode.model_version != model or
                 (received_at - episode.last_seen_at).total_seconds() > GAP_SECONDS):
-            episode = TelemetryEvent(device_id=device, boot_id=boot, model_version=model, label=label,
+            episode = TelemetryEvent(owner_id=owner, device_id=device, boot_id=boot, model_version=model, label=label,
                                      started_at=received_at, last_seen_at=received_at, frames=0,
                                      confidence_sum=0, observed_seconds=0, experimental=0)
             session.add(episode)
-        if valid_gap and (previous.get('sound') or {}).get('label') == label:
+        previous_sound = prediction(previous, 'sound') if previous else None
+        if continuation and valid_gap and previous_sound and previous_sound['label'] == label:
             episode.observed_seconds += gap
         episode.frames += 1
         episode.confidence_sum += sound['confidence']
@@ -109,8 +126,9 @@ def ingest_observation(session, payload, received_at):
     if cursor is None:
         cursor = TelemetryLatest(device_id=device)
         session.add(cursor)
-    elif not same_boot:
+    elif boot != cursor.boot_id:
         retired.append(cursor.boot_id)
+    cursor.owner_id = owner
     cursor.boot_id = boot
     cursor.ordinal = int(ordinal)
     cursor.retired_boots = json.dumps(retired)
@@ -171,11 +189,13 @@ def observations():
     if period == 'day':
         step = timedelta(hours=1)
         end = now.replace(minute=0, second=0, microsecond=0) + step
-        start = end - timedelta(hours=24)
+        window_start = (now - timedelta(hours=24)).replace(second=0, microsecond=0)
+        start = window_start.replace(minute=0)
     else:
         step = timedelta(days=1)
         end = today + step
         start = end - timedelta(days=7 if period == 'week' else 30)
+        window_start = start
     buckets = []
     at = start
     while at < end:
@@ -185,18 +205,18 @@ def observations():
         at += step
     with session_scope() as session:
         devices = session.execute(select(Device.device_id).where(Device.owner_id == user['id'])).scalars().all()
-        latest = session.execute(select(TelemetryLatest).where(TelemetryLatest.device_id.in_(devices))
+        latest = session.execute(select(TelemetryLatest).where(TelemetryLatest.device_id.in_(devices), TelemetryLatest.owner_id == user['id'])
                                  .order_by(TelemetryLatest.received_at.desc()).limit(1)).scalar_one_or_none()
-        rows = session.execute(select(TelemetryMinute).where(TelemetryMinute.device_id.in_(devices),
-                               TelemetryMinute.minute >= min(start, today), TelemetryMinute.minute <= now)).scalars().all()
-        episodes = session.execute(select(TelemetryEvent).where(TelemetryEvent.device_id.in_(devices),
+        rows = session.execute(select(TelemetryMinute).where(TelemetryMinute.device_id.in_(devices), TelemetryMinute.owner_id == user['id'],
+                               TelemetryMinute.minute >= min(window_start, today), TelemetryMinute.minute <= now)).scalars().all()
+        episodes = session.execute(select(TelemetryEvent).where(TelemetryEvent.device_id.in_(devices), TelemetryEvent.owner_id == user['id'],
                                    TelemetryEvent.last_seen_at >= today, TelemetryEvent.last_seen_at <= now)
                                    .order_by(TelemetryEvent.last_seen_at.desc())).scalars().all()
         summary = {'observedSeconds': 0, 'walkingSeconds': 0, 'stationarySeconds': 0,
                    'soundEpisodeCount': len(episodes), 'firstObservedAt': None}
         combined = {}
         for row in rows:
-            if row.minute >= start:
+            if row.minute >= window_start:
                 index = int((row.minute - start).total_seconds() / step.total_seconds())
                 if 0 <= index < len(buckets):
                     _combine(buckets[index]['metrics'], json.loads(row.metrics))
@@ -216,7 +236,7 @@ def observations():
                    'lastSeenAt': iso_z(e.last_seen_at), 'frames': e.frames,
                    'confidence': round(e.confidence_sum / e.frames, 4),
                    'observedSeconds': e.observed_seconds, 'experimental': bool(e.experimental)} for e in episodes[:20]]
-        result = {'period': period, 'latest': {'payload': json.loads(latest.payload), 'receivedAt': iso_z(latest.received_at)} if latest else None,
+        result = {'deviceId': devices[0] if devices else None, 'period': period, 'latest': {'payload': json.loads(latest.payload), 'receivedAt': iso_z(latest.received_at)} if latest else None,
                   'summary': summary, 'events': events, 'metrics': _public_metrics(combined), 'buckets': buckets,
-                  'range': {'startAt': iso_z(start), 'endAt': iso_z(now)}, 'retentionDays': RETENTION_DAYS}
+                  'range': {'startAt': iso_z(window_start), 'endAt': iso_z(now)}, 'retentionDays': RETENTION_DAYS}
     return result, 200, {'Cache-Control': 'no-store'}

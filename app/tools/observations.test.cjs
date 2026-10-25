@@ -100,3 +100,23 @@ test('real experiment replay continues to emit health without requiring an edge 
   assert.equal(frame.edge, undefined);
   off();
 });
+test('cached history is discarded when a successful dashboard refresh unbinds or replaces its device', () => {
+  const { observationsForPet } = view();
+  const data = { deviceId: 'old-collar', summary: { soundEpisodeCount: 12 } };
+  assert.equal(observationsForPet({ pet: { device_id: '' } }, data), null);
+  assert.equal(observationsForPet({ pet: { device_id: 'new-collar' } }, data), null);
+  assert.equal(observationsForPet(null, data), null);
+  assert.equal(observationsForPet({ pet: { device_id: 'old-collar' } }, data), data);
+});
+test('nonfinite chart values also create a gap', () => {
+  const { chartSegments } = view();
+  const result = chartSegments([NaN, 60, Infinity, 90]);
+  assert.equal(result.length, 2);
+  assert.equal(result[0][0].index, 1);
+});
+test('minute changes do not turn a hundredth of a heartbeat into a full-height spike', () => {
+  const { trendScale } = view();
+  const scale = trendScale([64, 64.01], 'heartRate');
+  assert.ok(scale.max - scale.min >= 2);
+  assert.equal(scale.ticks.map((value) => value.toFixed(scale.decimals)).join(','), '65,64,63');
+});

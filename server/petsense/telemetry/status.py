@@ -7,7 +7,7 @@ from sqlalchemy import and_, or_, select
 
 from petsense import config
 from petsense.db import iso_z, session_scope
-from petsense.db.models import Reading
+from petsense.db.models import Reading, Device, TelemetryLatest
 
 
 def latest_telemetry(device_id):
@@ -18,11 +18,21 @@ def latest_telemetry(device_id):
     if not device_id:
         return None
     with session_scope() as s:
-        rows = s.execute(select(Reading.payload, Reading.received_at)
-                         .where(or_(Reading.device_id == device_id,
-                                    and_(Reading.device_id.is_(None),
-                                         Reading.topic == f'petsense/sensor/{device_id}')))
-                         .order_by(Reading.id.desc()).limit(5)).fetchall()
+        binding = s.get(Device, device_id)
+        if binding is None:
+            return None
+        checkpoint = s.get(TelemetryLatest, device_id)
+        if checkpoint:
+            if checkpoint.owner_id != binding.owner_id or checkpoint.received_at < binding.claimed_at:
+                return None
+            rows = [(checkpoint.payload, checkpoint.received_at)]
+        else:
+            rows = s.execute(select(Reading.payload, Reading.received_at)
+                             .where(or_(Reading.device_id == device_id,
+                                        and_(Reading.device_id.is_(None),
+                                             Reading.topic == f'petsense/sensor/{device_id}')),
+                                    Reading.received_at >= binding.claimed_at)
+                             .order_by(Reading.id.desc()).limit(5)).fetchall()
     for payload_text, received_at in rows:
         try:
             payload = json.loads(payload_text)

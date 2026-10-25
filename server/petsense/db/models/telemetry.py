@@ -38,6 +38,7 @@ class ActionPrediction(Base):
 
 class TelemetryLatest(Base):
     __tablename__ = 'telemetry_latest'
+    owner_id = Column(Integer, nullable=False)
     device_id = Column(String(64), primary_key=True)
     boot_id = Column(String(80), nullable=False)
     ordinal = Column(BigInteger, nullable=False)
@@ -48,6 +49,7 @@ class TelemetryLatest(Base):
 
 class TelemetryMinute(Base):
     __tablename__ = 'telemetry_minutes'
+    owner_id = Column(Integer, primary_key=True)
     device_id = Column(String(64), primary_key=True)
     minute = Column(UTCDatetime, primary_key=True)
     metrics = Column(Text, nullable=False, default='{}')
@@ -58,6 +60,7 @@ class TelemetryMinute(Base):
 
 class TelemetryEvent(Base):
     __tablename__ = 'telemetry_events'
+    owner_id = Column(Integer, nullable=False)
     id = Column(Integer, primary_key=True, autoincrement=True)
     device_id = Column(String(64), nullable=False)
     boot_id = Column(String(80), nullable=False)

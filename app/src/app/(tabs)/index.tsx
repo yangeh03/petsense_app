@@ -33,7 +33,14 @@ export default function DashboardScreen() {
   const { user, loading: authLoading } = useAuth();
   const { latest: live, displayState, isFresh, now } = useTelemetry();
   const [period, setPeriod] = useState<ObservationPeriod>('day');
-  const { dashboard, observations: data, busy, error, reload } = useObservations(period);
+  const {
+    dashboard,
+    observations: data,
+    busy,
+    error,
+    reload,
+  } = useObservations(period, displayState !== 'replaying');
+  const [pullRefreshing, setPullRefreshing] = useState(false);
   const [vitalsOpen, setVitalsOpen] = useState(false);
   const [diaryVisible, setDiaryVisible] = useState(false);
   const pet = dashboard?.pet ?? null;
@@ -66,7 +73,7 @@ export default function DashboardScreen() {
         : current
           ? `最近同步 ${clockTime(frame!.receivedAt)}`
           : matchingSnapshot
-            ? `等待更新 · 最近 ${clockTime(matchingSnapshot.receivedAt)}`
+            ? `最近更新 ${clockTime(matchingSnapshot.receivedAt)}`
             : '等待项圈数据';
   const color = current ? theme.online : theme.textSecondary;
   const avatar = pet?.avatarImageUrl ? absoluteUrl(pet.avatarImageUrl) : null;
@@ -79,8 +86,11 @@ export default function DashboardScreen() {
       contentContainerStyle={styles.scroll}
       refreshControl={
         <RefreshControl
-          refreshing={busy && !!dashboard}
-          onRefresh={() => void reload()}
+          refreshing={pullRefreshing}
+          onRefresh={() => {
+            setPullRefreshing(true);
+            void reload().finally(() => setPullRefreshing(false));
+          }}
           tintColor={theme.tint}
         />
       }
@@ -97,7 +107,7 @@ export default function DashboardScreen() {
               {new Date(now).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })} · 今日
             </ThemedText>
             <ThemedText style={styles.pageTitle}>
-              {pet ? `${pet.name}的今天` : '和它一起，好好生活'}
+              {replay ? '实验数据回放' : pet ? `${pet.name}的今天` : '和它一起，好好生活'}
             </ThemedText>
           </View>
           {pet && (
@@ -127,7 +137,39 @@ export default function DashboardScreen() {
             </ThemedText>
           </Pressable>
         ) : null}
-        {authLoading || (user && !dashboard && busy) ? (
+        {replay ? (
+          <>
+            <View style={[styles.card, { backgroundColor: theme.tintBackground }]}>
+              <ThemedText style={styles.sectionTitle}>真实实验数据 · 循环回放</ThemedText>
+              <ThemedText type="small" themeColor="textSecondary">
+                这是已录制的实验数据，不代表项圈当前状态，也不会写入今日记录。
+              </ThemedText>
+            </View>
+            <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
+              <ThemedText style={styles.sectionTitle}>实验中的读数</ThemedText>
+              <View style={styles.metrics}>
+                <Metric
+                  label="心率"
+                  value={format(live?.health?.valid ? live.health.heartRate : undefined)}
+                  unit="bpm"
+                />
+                <Metric
+                  label="血氧"
+                  value={format(live?.health?.valid ? live.health.spo2 : undefined)}
+                  unit="%"
+                />
+                <Metric
+                  label="传感器温度"
+                  value={format(live?.health?.valid ? live.health.bodyTemp : undefined, 1)}
+                  unit="℃"
+                />
+              </View>
+              <ThemedText type="small" themeColor="textSecondary">
+                此回放片段未包含端侧声音与动作分类，不补造这些结果。
+              </ThemedText>
+            </View>
+          </>
+        ) : authLoading || (user && !dashboard && busy) ? (
           <ActivityIndicator color={theme.tint} />
         ) : !user ? (
           <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
@@ -180,7 +222,7 @@ export default function DashboardScreen() {
             <View style={[styles.nowCard, { backgroundColor: theme.tintBackground }]}>
               <View style={styles.rowBetween}>
                 <ThemedText type="smallBold" style={{ color: theme.tint }}>
-                  {current ? '此刻的它' : '等待新的观测'}
+                  {current ? '此刻的它' : '项圈状态'}
                 </ThemedText>
                 {current && (
                   <ThemedText type="small" themeColor="textSecondary">
@@ -188,23 +230,33 @@ export default function DashboardScreen() {
                   </ThemedText>
                 )}
               </View>
-              <ThemedText style={styles.currentTitle}>{prediction.action}</ThemedText>
-              <View style={styles.soundRow}>
-                <SymbolView
-                  name={{ ios: 'waveform', android: 'graphic_eq', web: 'graphic_eq' }}
-                  size={18}
-                  tintColor={theme.tint}
-                />
-                <ThemedText>
-                  {prediction.sound}
-                  {prediction.experimental ? ' · 实验性识别' : ''}
-                </ThemedText>
-              </View>
+              <ThemedText style={current ? styles.currentTitle : styles.sectionTitle}>
+                {current
+                  ? prediction.action
+                  : replay
+                    ? '正在回放实验数据'
+                    : frame
+                      ? '项圈暂未在线'
+                      : '等待首次观测'}
+              </ThemedText>
+              {current && (
+                <View style={styles.soundRow}>
+                  <SymbolView
+                    name={{ ios: 'waveform', android: 'graphic_eq', web: 'graphic_eq' }}
+                    size={18}
+                    tintColor={theme.tint}
+                  />
+                  <ThemedText>
+                    {prediction.sound}
+                    {prediction.experimental ? ' · 实验性识别' : ''}
+                  </ThemedText>
+                </View>
+              )}
               {!current && (
                 <ThemedText type="small" themeColor="textSecondary">
                   {replay
                     ? '回放数据不会混入宠物的实时状态和今日统计。'
-                    : '项圈恢复上报后会自动更新，离线时不推测动作和声音。'}
+                    : '恢复连接后自动更新，今天的记录仍可查看。'}
                 </ThemedText>
               )}
             </View>
@@ -222,11 +274,17 @@ export default function DashboardScreen() {
                   </ThemedText>
                 </Pressable>
               </View>
-              <View style={styles.metrics}>
-                <Metric label="心率" value={format(health?.heartRate)} unit="bpm" />
-                <Metric label="血氧" value={format(health?.spo2)} unit="%" />
-                <Metric label="传感器温度" value={format(health?.bodyTemp, 1)} unit="℃" />
-              </View>
+              {current ? (
+                <View style={styles.metrics}>
+                  <Metric label="心率" value={format(health?.heartRate)} unit="bpm" />
+                  <Metric label="血氧" value={format(health?.spo2)} unit="%" />
+                  <Metric label="传感器温度" value={format(health?.bodyTemp, 1)} unit="℃" />
+                </View>
+              ) : (
+                <ThemedText type="small" themeColor="textSecondary">
+                  暂无实时读数，恢复连接后自动更新。
+                </ThemedText>
+              )}
               {current && !health && (
                 <ThemedText type="small" themeColor="textSecondary">
                   暂未获得有效读数，请确认传感器佩戴与接触情况。

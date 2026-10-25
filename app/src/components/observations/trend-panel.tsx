@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
-import Svg, { Circle, Line, Path } from 'react-native-svg';
+import Svg, { Circle, Line, Path, Text as SvgText } from 'react-native-svg';
 
 import { ThemedText } from '@/components/themed-text';
 import { useTheme } from '@/hooks/use-theme';
-import { chartSegments, clockTime } from '@/services/observation-view';
+import { chartSegments, clockTime, trendScale } from '@/services/observation-view';
 import type { MetricKey, ObservationPeriod, Observations } from '@/types/observations';
 
 const METRICS: { key: MetricKey; name: string; unit: string; decimals: number }[] = [
@@ -27,20 +27,31 @@ export function TrendPanel({
   const theme = useTheme();
   const [open, setOpen] = useState(false);
   const [metric, setMetric] = useState<MetricKey>('heartRate');
+  const [selection, setSelection] = useState<{
+    period: ObservationPeriod;
+    metric: MetricKey;
+    index: number;
+  } | null>(null);
   const [width, setWidth] = useState(0);
   const config = METRICS.find((item) => item.key === metric)!;
   const validPeriod = data?.period === period;
   const values = validPeriod ? data.buckets.map((b) => b.metrics[metric].avg) : [];
   const points = values.filter((value): value is number => value !== null);
-  const min = points.length ? Math.min(...points) : 0;
-  const max = points.length ? Math.max(...points) : 1;
-  const padding = max === min ? 1 : (max - min) * 0.15;
-  const bottom = min - padding;
-  const top = max + padding;
+  const scale = trendScale(points, metric);
+  const bottom = scale.min;
+  const top = scale.max;
   const height = 148;
-  const x = (index: number) => 12 + (index / Math.max(1, values.length - 1)) * (width - 24);
+  const x = (index: number) => 36 + (index / Math.max(1, values.length - 1)) * (width - 48);
   const y = (value: number) => 12 + (1 - (value - bottom) / (top - bottom)) * (height - 24);
   const summary = validPeriod ? data.metrics[metric] : null;
+  const selectedIndex =
+    selection?.period === period && selection.metric === metric
+      ? Math.min(selection.index, values.length - 1)
+      : values.reduce<number>((last, value, index) => (value !== null ? index : last), 0);
+  const selected = validPeriod ? data.buckets[selectedIndex] : null;
+  const selectedMetric = selected?.metrics[metric];
+  const moveSelection = (index: number) => setSelection({ period, metric, index });
+  const axisDecimals = scale.decimals;
   return (
     <View style={[styles.panel, { backgroundColor: theme.backgroundElement }]}>
       <Pressable
@@ -111,9 +122,20 @@ export function TrendPanel({
                 accessibilityLabel={`${config.name}历史均值，缺失时段断开`}
               >
                 {[0, 1, 2].map((index) => (
+                  <SvgText
+                    key={`label-${index}`}
+                    x={0}
+                    y={16 + index * 62}
+                    fill={theme.textSecondary}
+                    fontSize={10}
+                  >
+                    {(top - ((top - bottom) * index) / 2).toFixed(axisDecimals)}
+                  </SvgText>
+                ))}
+                {[0, 1, 2].map((index) => (
                   <Line
                     key={index}
-                    x1={0}
+                    x1={36}
                     x2={width}
                     y1={12 + index * 62}
                     y2={12 + index * 62}
@@ -159,6 +181,51 @@ export function TrendPanel({
               )}
             </View>
           )}
+          {selected && (
+            <View style={[styles.inspection, { backgroundColor: theme.background }]}>
+              <View style={styles.axis}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="上一时段"
+                  disabled={selectedIndex <= 0}
+                  onPress={() => moveSelection(selectedIndex - 1)}
+                  style={styles.navigation}
+                >
+                  <ThemedText
+                    style={{ color: selectedIndex <= 0 ? theme.textSecondary : theme.tint }}
+                  >
+                    ‹ 上一时段
+                  </ThemedText>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="下一时段"
+                  disabled={selectedIndex >= values.length - 1}
+                  onPress={() => moveSelection(selectedIndex + 1)}
+                  style={styles.navigation}
+                >
+                  <ThemedText
+                    style={{
+                      color: selectedIndex >= values.length - 1 ? theme.textSecondary : theme.tint,
+                    }}
+                  >
+                    下一时段 ›
+                  </ThemedText>
+                </Pressable>
+              </View>
+              <ThemedText type="smallBold">
+                {selected.label} ·{' '}
+                {selectedMetric?.avg === null
+                  ? '没有有效读数'
+                  : `${selectedMetric?.avg?.toFixed(config.decimals)} ${config.unit}`}
+              </ThemedText>
+              {!!selectedMetric?.count && (
+                <ThemedText type="small" themeColor="textSecondary">
+                  该时段均值 · {selectedMetric.count}个有效读数
+                </ThemedText>
+              )}
+            </View>
+          )}
           {summary && summary.count > 0 && (
             <View style={styles.stats}>
               {(['avg', 'min', 'max'] as const).map((key, index) => (
@@ -200,5 +267,7 @@ const styles = StyleSheet.create({
   chart: { height: 148, justifyContent: 'center', alignItems: 'center' },
   axis: { flexDirection: 'row', justifyContent: 'space-between' },
   stats: { flexDirection: 'row', gap: 12 },
+  inspection: { padding: 12, borderRadius: 12, gap: 6 },
+  navigation: { paddingVertical: 8 },
   stat: { flex: 1, gap: 4 },
 });

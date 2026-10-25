@@ -1,3 +1,5 @@
+import type { DashboardData } from '@/types/social';
+import type { Observations } from '@/types/observations';
 import type { TelemetryFrame } from '@/types/telemetry';
 
 export const ACTION_NAMES: Record<string, string> = {
@@ -40,13 +42,15 @@ export function chartSegments(values: (number | null)[]) {
   const segments: { index: number; value: number }[][] = [];
   values.forEach((value, index) => {
     if (value === null || !Number.isFinite(value)) return;
-    if (!index || values[index - 1] === null) segments.push([]);
+    if (!index || values[index - 1] === null || !Number.isFinite(values[index - 1]))
+      segments.push([]);
     segments[segments.length - 1].push({ index, value });
   });
   return segments;
 }
 
 export function duration(seconds: number) {
+  if (seconds === 0) return '0秒';
   if (seconds < 1) return '不足1秒';
   if (seconds < 60) return `${Math.floor(seconds)}秒`;
   if (seconds < 3600) return `${Math.floor(seconds / 60)}分钟`;
@@ -60,4 +64,25 @@ export function clockTime(value: string) {
     hour12: false,
     timeZone: 'Asia/Shanghai',
   });
+}
+
+/** A partial refresh must never attach a previous collar's history to this pet. */
+export function observationsForPet(dashboard: DashboardData | null, data: Observations | null) {
+  const device = dashboard?.pet?.device_id;
+  return device && data?.deviceId === device ? data : null;
+}
+
+/** Keep the visible scale at least as wide as the sensor's useful resolution. */
+export function trendScale(values: number[], metric: string) {
+  const low = values.length ? Math.min(...values) : 0;
+  const high = values.length ? Math.max(...values) : 1;
+  const padding = Math.max((high - low) * 0.15, metric === 'bodyTemp' ? 0.1 : 1);
+  const min = metric === 'spo2' ? Math.max(0, low - padding) : low - padding;
+  const max = metric === 'spo2' ? Math.min(100, high + padding) : high + padding;
+  const step = (max - min) / 2;
+  const decimals = Math.max(
+    metric === 'bodyTemp' ? 1 : 0,
+    step > 0 ? -Math.floor(Math.log10(step)) : 0,
+  );
+  return { min, max, decimals, ticks: [max, (min + max) / 2, min] };
 }

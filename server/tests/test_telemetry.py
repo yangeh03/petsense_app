@@ -47,6 +47,11 @@ class TelemetryTests(unittest.TestCase):
             rows = {row.device_id for row in s.execute(select(Reading.device_id)).fetchall()}
         self.assertEqual(rows, {'dev-a', 'dev-b', None})
 
+    def test_malformed_raw_payload_is_retained_without_crashing_ingress(self):
+        mqtt_ingest.store('petsense/sensor/dev-a', 'not-json', 'dev-a')
+        with db.session_scope() as session:
+            self.assertEqual(session.execute(select(Reading.payload)).scalar_one(), 'not-json')
+
     def test_sensor_device_extraction(self):
         self.assertEqual(mqtt_ingest.sensor_device('petsense/sensor/esp32-001'), 'esp32-001')
         self.assertIsNone(mqtt_ingest.sensor_device('petsense/sensor/audio_file'))

@@ -23,6 +23,7 @@ export type SoundEvent = {
   experimental: boolean;
 };
 export type Observations = {
+  deviceId: string | null;
   period: ObservationPeriod;
   latest: { payload: Record<string, unknown>; receivedAt: string } | null;
   summary: {

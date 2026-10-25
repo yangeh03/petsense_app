@@ -24,7 +24,7 @@ class EdgeTests(unittest.TestCase):
         self.other_headers = {'X-Petsense-Session': make_session_token(self.other)}
         with db.session_scope() as s:
             s.add(Device(device_id='test-edge', owner_id=self.owner, name='', claimed_at=db.utc_now()))
-        self.payload = {'source': 'esp32_mlp', 'deviceId': 'test-edge',
+        self.payload = {'source': 'esp32_mlp', 'deviceId': 'test-edge', 'ts_ms': 1000,
                         'action': {'label': 'standing', 'confidence': .9},
                         'sound': {'label': 'whine', 'confidence': .7}, 'health': {}}
 
