@@ -518,6 +518,13 @@ function CollectionScreen({ ownerId }: { ownerId: number }) {
   const color = { color: theme.text };
   const muted = { color: theme.textSecondary };
   const fresh = received > 0 && now - received < 15000;
+  const canLabel =
+    ready &&
+    !!session &&
+    !busy &&
+    fresh &&
+    !!device?.capture_active &&
+    device.session_id === session;
   return (
     <ScrollView
       style={{ backgroundColor: theme.background }}
@@ -648,19 +655,15 @@ function CollectionScreen({ ownerId }: { ownerId: number }) {
           <Pressable
             key={id}
             accessibilityRole="button"
-            accessibilityState={{ selected: action === id, disabled: !ready || !session }}
-            disabled={
-              !ready ||
-              !session ||
-              busy ||
-              !fresh ||
-              !device?.capture_active ||
-              device.session_id !== session
-            }
+            accessibilityState={{ selected: action === id, disabled: !canLabel }}
+            disabled={!canLabel}
             onPress={() => choose(id)}
             style={[
               styles.event,
-              { backgroundColor: action === id ? theme.tint : theme.backgroundSelected },
+              {
+                backgroundColor: action === id ? theme.tint : theme.backgroundSelected,
+                opacity: canLabel ? 1 : 0.45,
+              },
             ]}
           >
             <Text style={[color, { fontWeight: action === id ? '700' : '400' }]}>{label}</Text>
