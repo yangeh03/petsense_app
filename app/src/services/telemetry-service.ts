@@ -296,7 +296,36 @@ export function parseTelemetryMessage(raw: unknown): TelemetryFrame | null {
     return null;
   if (typeof payload.deviceId !== 'string' || !Number.isFinite(payload.ts_ms)) return null;
 
+  const edgeSource = payload.source === 'esp32_mlp';
+  const sound = payload.sound as Record<string, unknown> | undefined;
   const frame: TelemetryFrame = {
+    edge: edgeSource
+      ? {
+          modelVersion: typeof payload.modelVersion === 'string' ? payload.modelVersion : '',
+          action: edgePrediction(payload.action, [
+            'standing',
+            'sitting',
+            'lying down',
+            'walking',
+            'unknown',
+            'warming_up',
+          ]),
+          sound: edgePrediction(payload.sound, [
+            'bark',
+            'howl',
+            'whine',
+            'other',
+            'quiet',
+            'unknown',
+            'warming_up',
+          ]),
+          acRms: finiteNonnegative(sound?.ac_rms),
+          inferenceUs: finiteNonnegative(payload.inference_us),
+          sdReady: typeof payload.sd_ready === 'boolean' ? payload.sd_ready : undefined,
+          captureActive:
+            typeof payload.capture_active === 'boolean' ? payload.capture_active : undefined,
+        }
+      : undefined,
     deviceId: typeof payload.deviceId === 'string' ? payload.deviceId : 'unknown',
     tsMs: typeof payload.ts_ms === 'number' ? payload.ts_ms : 0,
     receivedAt: packet.received_at,
@@ -421,3 +450,25 @@ function safeParse(text: string): unknown {
 }
 
 export const telemetryService = new TelemetryService();
+
+function finiteNonnegative(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function edgePrediction(value: unknown, labels: string[]) {
+  if (!value || typeof value !== 'object') return undefined;
+  const prediction = value as Record<string, unknown>;
+  const score = finiteNonnegative(prediction.confidence);
+  if (
+    typeof prediction.label !== 'string' ||
+    !labels.includes(prediction.label) ||
+    score === undefined ||
+    score > 1
+  )
+    return undefined;
+  return {
+    label: prediction.label,
+    confidence: score,
+    experimental: prediction.experimental === true || prediction.label === 'whine',
+  };
+}

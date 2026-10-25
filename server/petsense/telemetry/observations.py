@@ -216,7 +216,7 @@ def observations():
                    'lastSeenAt': iso_z(e.last_seen_at), 'frames': e.frames,
                    'confidence': round(e.confidence_sum / e.frames, 4),
                    'observedSeconds': e.observed_seconds, 'experimental': bool(e.experimental)} for e in episodes[:20]]
-        result = {'latest': {'payload': json.loads(latest.payload), 'receivedAt': iso_z(latest.received_at)} if latest else None,
+        result = {'period': period, 'latest': {'payload': json.loads(latest.payload), 'receivedAt': iso_z(latest.received_at)} if latest else None,
                   'summary': summary, 'events': events, 'metrics': _public_metrics(combined), 'buckets': buckets,
                   'range': {'startAt': iso_z(start), 'endAt': iso_z(now)}, 'retentionDays': RETENTION_DAYS}
     return result, 200, {'Cache-Control': 'no-store'}
