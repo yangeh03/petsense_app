@@ -2,7 +2,7 @@
 
 日期：2026-10-25
 分支：codex/pet-profile-management
-状态：方案 A 已由用户选择；本文待用户确认后进入实现。
+状态：已实现并合入 main（2026-10-25）。质量门禁与接口层端到端验证通过；UI 层端到端走查未执行（详见 plans/2026-10-25-pet-profile-management.md 验证记录）。
 
 ## 目标与范围
 
