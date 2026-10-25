@@ -9,3 +9,4 @@ joblib==1.6.0
 # 数据层：ORM + 迁移框架（SQLite 现行 / PostgreSQL 双方言）
 SQLAlchemy==2.0.39
 alembic==1.16.5
+Pillow==13.0.0

@@ -1,6 +1,8 @@
 """宠物档案 / 仪表盘聚合 / UWB 快照路由。"""
 
 import time
+import os
+import secrets
 
 import requests
 from flask import Blueprint, request
@@ -13,6 +15,7 @@ from petsense.db import iso_z, session_scope, utc_now
 from petsense.db.models import DailyStat, Pet
 from petsense.devices.routes import DEVICE_ID_PATTERN, claim_device
 from petsense.petgif.proxy import app_petgif_pet
+from petsense.pets.profile import decode_avatar, validate_fields
 from petsense.telemetry.status import latest_telemetry
 
 bp = Blueprint('pets', __name__, url_prefix='/api/app')
@@ -56,7 +59,7 @@ def build_insight(pet, telemetry, today):
     return {'icon': '🐾', 'text': f'{name} 状态平稳，陪你度过平常又安心的一天'}
 
 
-def pet_dict(pet):
+def pet_dict(pet, public=False):
     """pets 列表 / dashboard 共用的行序列化（键与旧 dict(row) 一致）。"""
     item = {'id': pet.id, 'user_id': pet.user_id, 'name': pet.name, 'species': pet.species,
             'breed': pet.breed, 'avatar_emoji': pet.avatar_emoji, 'device_id': pet.device_id,
@@ -66,6 +69,9 @@ def pet_dict(pet):
     item['batteryPercent'] = telemetry.get('batteryPercent') if telemetry else None
     item['online'] = telemetry.get('online') if telemetry else False
     item['avatarImageUrl'] = '/uploads/' + pet.avatar_image if pet.avatar_image else None
+    if public:
+        item = {key: item[key] for key in ('id', 'name', 'species', 'breed', 'avatar_emoji',
+                                         'device_id', 'batteryPercent', 'online', 'avatarImageUrl')}
     return item
 
 
@@ -80,16 +86,17 @@ def app_pets():
                              .order_by(Pet.id)).scalars().all()
         return {'success': True, 'pets': [pet_dict(pet) for pet in pets]}
 
-    data = request.get_json(silent=True) or {}
-    name = str(data.get('name', '')).strip()
-    species = str(data.get('species', 'dog')).strip()
-    breed = str(data.get('breed', '')).strip()[:40]
-    avatar_emoji = str(data.get('avatarEmoji', '')).strip() or '🐾'
-    device_id = str(data.get('deviceId', '')).strip()[:40]
-    if not name or len(name) > 20:
-        return {'success': False, 'message': '请给宠物起个 20 字以内的名字'}, 400
-    if species not in ('dog', 'cat', 'rabbit'):
-        return {'success': False, 'message': '物种仅支持 dog / cat / rabbit'}, 400
+    data = request.get_json(silent=True)
+    try:
+        if not isinstance(data, dict) or set(data) - {'name', 'species', 'breed', 'avatarEmoji', 'deviceId'}:
+            raise ValueError('请提交有效的宠物资料')
+        fields = validate_fields({'name': '', 'species': 'dog', 'breed': '', 'avatarEmoji': '🐾', **data})
+        device_id = data.get('deviceId', '')
+        if not isinstance(device_id, str):
+            raise ValueError('设备编码必须是文字')
+        device_id = device_id.strip()
+    except ValueError as exc:
+        return {'success': False, 'message': str(exc)}, 400
     if device_id and not DEVICE_ID_PATTERN.fullmatch(device_id):
         return {'success': False, 'message': '设备 ID 需为 1—40 位字母、数字、下划线或连字符'}, 400
     with session_scope() as s:
@@ -104,15 +111,68 @@ def app_pets():
             _, _, claim_error = claim_device(s, user['id'], device_id)
             if claim_error:
                 return {'success': False, 'message': claim_error[0]}, claim_error[1]
-        pet = Pet(user_id=user['id'], name=name, species=species, breed=breed,
-                  avatar_emoji=avatar_emoji, device_id=device_id, created_at=utc_now())
+        pet = Pet(user_id=user['id'], **fields, device_id=device_id, created_at=utc_now())
         s.add(pet)
         s.flush()
         pet_id = pet.id
     if device_id:
         from petsense.telemetry import realtime
         realtime.refresh_scopes()
-    return {'success': True, 'pet': {'id': pet_id, 'name': name}}, 201
+    return {'success': True, 'pet': {'id': pet_id, 'name': fields['name']}}, 201
+
+
+@bp.route('/pets/<int:pet_id>', methods=['GET', 'PATCH'])
+def app_pet_profile(pet_id):
+    user, error = require_app_user()
+    if error:
+        return error
+    new_path = None
+    try:
+        with session_scope() as s:
+            pet = s.execute(select(Pet).where(Pet.id == pet_id,
+                                              Pet.user_id == user['id'])).scalar_one_or_none()
+            if pet is None:
+                return {'success': False, 'message': '宠物档案不存在'}, 404
+            if request.method == 'PATCH':
+                multipart = request.mimetype == 'multipart/form-data'
+                data = request.form.to_dict() if multipart else request.get_json(silent=True)
+                allowed = {'name', 'species', 'breed', 'avatarEmoji', 'avatarMode'}
+                if not isinstance(data, dict) or not data or set(data) - allowed:
+                    raise ValueError('请提交有效的宠物资料，不能修改设备或账号归属')
+                if multipart and any(len(request.form.getlist(k)) != 1 for k in request.form):
+                    raise ValueError('资料字段不能重复')
+                fields = validate_fields(data, existing_emoji=pet.avatar_emoji)
+                mode = data.get('avatarMode', 'keep')
+                if mode not in ('keep', 'photo', 'emoji'):
+                    raise ValueError('头像操作无效')
+                if set(request.files) - {'photo'} or len(request.files.getlist('photo')) > 1:
+                    raise ValueError('请只选择一张头像照片')
+                photo = request.files.get('photo')
+                if (mode == 'photo') != (photo is not None):
+                    raise ValueError('请选择头像照片' if mode == 'photo' else '照片需要使用替换头像模式')
+                if mode == 'photo':
+                    image = decode_avatar(photo)
+                    filename = f'avatar_{secrets.token_hex(16)}.png'
+                    os.makedirs(config.UPLOADS_DIR, exist_ok=True)
+                    new_path = os.path.join(config.UPLOADS_DIR, filename)
+                    with open(new_path, 'xb') as handle:
+                        handle.write(image)
+                    fields['avatar_image'] = filename
+                elif mode == 'emoji':
+                    fields['avatar_image'] = None
+                for key, value in fields.items():
+                    setattr(pet, key, value)
+                s.flush()
+    except ValueError as exc:
+        if new_path:
+            os.unlink(new_path)
+        return {'success': False, 'message': str(exc)}, 400
+    except Exception:
+        if new_path and os.path.exists(new_path):
+            os.unlink(new_path)
+        raise
+    # Serialize after commit: telemetry reads open their own scoped transaction.
+    return {'success': True, 'pet': pet_dict(pet)}
 
 
 @bp.route('/pets/<int:pet_id>/avatar-image', methods=['POST'])

@@ -17,6 +17,7 @@ MarkupSafe==3.0.3
 narwhals==2.27.1
 numpy==2.5.3
 paho-mqtt==2.1.0
+Pillow==13.0.0
 requests==2.34.2
 scikit-learn==1.9.1
 scipy==1.18.1

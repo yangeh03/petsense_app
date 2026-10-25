@@ -11,7 +11,7 @@ from petsense import config
 from petsense.auth.routes import app_user_from_request, require_app_user
 from petsense.db import dialect_insert, iso_z, session_scope, utc_now
 from petsense.db.models import Comment, Follow, Pet, Post, PostLike, User
-from petsense.pets.routes import pet_latest_telemetry
+from petsense.pets.routes import pet_dict, pet_latest_telemetry
 
 bp = Blueprint('social', __name__, url_prefix='/api/app')
 
@@ -208,13 +208,7 @@ def app_user_profile(user_id):
                                  Follow.followee_id == user_id)).scalar_one_or_none())
         pets = s.execute(select(Pet).where(Pet.user_id == user_id)
                          .order_by(Pet.id)).scalars().all()
-    profile['pets'] = [{'id': pet.id, 'name': pet.name, 'species': pet.species,
-                        'breed': pet.breed, 'avatar_emoji': pet.avatar_emoji,
-                        'device_id': pet.device_id} for pet in pets]
-    for pet in profile['pets']:
-        telemetry = pet_latest_telemetry(pet['device_id'])
-        pet['batteryPercent'] = telemetry.get('batteryPercent') if telemetry else None
-        pet['online'] = telemetry.get('online') if telemetry else False
+    profile['pets'] = [pet_dict(pet, public=True) for pet in pets]
     profile['displayName'] = profile.pop('display_name')
     profile['avatarEmoji'] = profile.pop('avatar_emoji')
     return {'success': True, 'profile': profile}
