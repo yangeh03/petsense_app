@@ -13,6 +13,7 @@ from petsense.db.models import Device, Reading
 
 bp = Blueprint('edge', __name__)
 TOPIC = 'petsense/sensor/edge_v1'
+DEBUG_DEVICE_ID = 'petsense-esp32-001'
 
 
 def validate(payload):
@@ -46,6 +47,22 @@ def latest():
             .where(Device.owner_id == user['id'], Reading.topic == TOPIC)
             .order_by(Reading.id.desc()).limit(1)
         ).first()
+    return reading_response(row)
+
+
+@bp.get('/api/debug/edge/latest')
+def debug_latest():
+    """Public read-only preview of the explicitly designated lab device."""
+    with session_scope() as session:
+        row = session.execute(
+            select(Reading.payload, Reading.received_at)
+            .where(Reading.device_id == DEBUG_DEVICE_ID, Reading.topic == TOPIC)
+            .order_by(Reading.id.desc()).limit(1)
+        ).first()
+    return reading_response(row)
+
+
+def reading_response(row):
     age = max(0, (utc_now() - row.received_at).total_seconds()) if row else None
     response = jsonify(online=age is not None and age < 10,
                        age_s=round(age, 2) if age is not None else None,
