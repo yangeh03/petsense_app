@@ -30,6 +30,7 @@ const context = {
   require: (name) => {
     if (name === '@/config') return { TELEMETRY_WS_URL: url };
     if (name === '@/data/replay-dataset') return replayDataset;
+    if (name === '@/services/api') return { getToken: () => null };
     throw new Error(`unexpected require: ${name}`);
   },
   WebSocket,
@@ -246,10 +247,10 @@ const uwbMapModule = loadModule('../src/constants/uwb-map.ts', () => {
 }
 console.log('UWB checks passed');
 
-// ─── 跨端上传组装检查（Web 分支真实执行；RN 分支为静态对象 part） ───
+// ─── 跨端上传检查（Web：fetch+Blob 组表；原生：XHR{uri} multipart） ───
 {
   // form-upload 需要浏览器式全局（FormData/Blob/fetch），vm 沙箱单独注入
-  function loadFormUpload(withDocument) {
+  function loadFormUpload(withDocument, extraGlobals = {}) {
     const code = ts.transpileModule(
       fs.readFileSync(path.join(__dirname, '../src/services/form-upload.ts'), 'utf8'),
       { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } },
@@ -265,6 +266,7 @@ console.log('UWB checks passed');
       FormData,
       Blob,
       fetch,
+      ...extraGlobals,
     };
     vm.runInNewContext(code, sandbox);
     return module.exports;
@@ -273,16 +275,12 @@ console.log('UWB checks passed');
   const dataUri =
     'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
-  async function runBranch(withDocument) {
-    const mod = loadFormUpload(withDocument);
-    return mod.buildUploadForm({ caption: '测试', media_kind: 'gif' }, [
-      { field: 'image', uri: dataUri, name: 'dot.png', type: 'image/png' },
-    ]);
-  }
-
   (async () => {
     // Web 分支（注入 document）：fetch(data:) → Blob → append 不抛 Unsupported FormDataPart
-    const webForm = await runBranch(true);
+    const webMod = loadFormUpload(true);
+    const webForm = await webMod.buildUploadForm({ caption: '测试', media_kind: 'gif' }, [
+      { field: 'image', uri: dataUri, name: 'dot.png', type: 'image/png' },
+    ]);
     assert.ok(webForm instanceof FormData, 'web 分支应返回 FormData');
     const webParts = [];
     for (const [key, value] of webForm.entries()) {
@@ -299,13 +297,76 @@ console.log('UWB checks passed');
       'web 分支文件必须是 Blob（否则 react-native-web 抛 Unsupported FormDataPart）',
     );
 
-    // 原生分支冒烟（无 document）：对象 part 原样 append——node FormData 会把它字符串化
-    // （真 RN polyfill 保留对象语义），这里只验证走的是“未转 Blob”的分支且字段齐全
-    const nativeForm = await runBranch(false);
-    const nativeEntries = [...nativeForm.entries()];
-    assert.equal(nativeEntries.length, 3, '原生分支应有 3 个字段');
-    assert.equal(nativeEntries[2][0], 'image');
-    assert.equal(nativeEntries[2][1], '[object Object]', '原生分支传对象 part（未转 Blob）');
+    // 原生分支（无 document）：buildUploadForm 必须拒绝——expo/fetch 无法序列化 {uri} part，
+    // 原生端唯一正确通道是 sendMultipart（XHR + RN FormData）
+    const nativeMod = loadFormUpload(false);
+    await assert.rejects(
+      () =>
+        nativeMod.buildUploadForm({ name: 'x' }, [
+          { field: 'photo', uri: 'file:///tmp/a.jpg', name: 'a.jpg', type: 'image/jpeg' },
+        ]),
+      /sendMultipart/,
+      '原生端 buildUploadForm 应拒绝并指向 sendMultipart',
+    );
+
+    // 原生 sendMultipart：注入假 XMLHttpRequest 与 RN 语义的 FormData（append 保留原始值，
+    // 不像 Node FormData 把对象字符串化），断言 {uri,name,type} part、请求头与响应回传
+    let captured = null;
+    class FakeFormData {
+      constructor() {
+        this.parts = [];
+      }
+      append(key, value) {
+        this.parts.push([key, value]);
+      }
+      *entries() {
+        yield* this.parts;
+      }
+    }
+    class FakeXHR {
+      open(method, url) {
+        captured.method = method;
+        captured.url = url;
+      }
+      setRequestHeader(k, v) {
+        captured.headers[k] = v;
+      }
+      send(form) {
+        captured.parts = [...form.entries()];
+        this.status = 201;
+        this.responseText = '{"success":true}';
+        setTimeout(() => this.onload(), 0);
+      }
+    }
+    const nativeSandbox = {
+      XMLHttpRequest: FakeXHR,
+      FormData: FakeFormData,
+    };
+    const xhrMod = loadFormUpload(false, nativeSandbox);
+    captured = { headers: {} };
+    const response = await xhrMod.sendMultipart('http://localhost:8080/api/app/pets/1', {
+      method: 'PATCH',
+      headers: { 'X-Petsense-Session': 'tok' },
+      fields: { name: '豆豆' },
+      files: [{ field: 'photo', uri: 'file:///tmp/a.jpg', name: 'a.jpg', type: 'image/jpeg' }],
+    });
+    assert.equal(captured.method, 'PATCH');
+    assert.equal(captured.url, 'http://localhost:8080/api/app/pets/1');
+    assert.equal(captured.headers['X-Petsense-Session'], 'tok');
+    assert.deepEqual(
+      captured.parts.map((p) => p[0]),
+      ['name', 'photo'],
+      '原生分支字段顺序',
+    );
+    assert.deepEqual(
+      JSON.parse(JSON.stringify(captured.parts[1][1])),
+      { uri: 'file:///tmp/a.jpg', name: 'a.jpg', type: 'image/jpeg' },
+      '原生分支保留 {uri,name,type} 对象 part（由 RCTNetworking 原生读取文件）',
+    );
+    assert.deepEqual(JSON.parse(JSON.stringify(response)), {
+      status: 201,
+      body: '{"success":true}',
+    });
     delete global.document;
     console.log('Form upload checks passed');
   })().catch((error) => {

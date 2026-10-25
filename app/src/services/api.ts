@@ -6,7 +6,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { API_BASE_URL } from '@/config';
-import { buildUploadForm } from '@/services/form-upload';
+import {
+  buildUploadForm,
+  IS_WEB_LIKE,
+  sendMultipart,
+  type UploadFile,
+} from '@/services/form-upload';
 import type { PetUpdate } from '@/services/pet-profile';
 import type {
   AppUser,
@@ -88,20 +93,50 @@ export async function request<T>(
     headers,
     body,
   });
+  return parseApiResponse<T>(response.status, await response.text());
+}
+
+/** 统一把原始响应转成载荷：非 2xx 抛出带服务端 message 的 ApiError。 */
+async function parseApiResponse<T>(status: number, body: string): Promise<T> {
   let payload: unknown = null;
   try {
-    payload = await response.json();
+    payload = body ? JSON.parse(body) : null;
   } catch {
     payload = null;
   }
-  if (!response.ok) {
+  const ok = status >= 200 && status < 300;
+  if (!ok) {
     const message =
       payload && typeof payload === 'object' && 'message' in payload
         ? String((payload as { message: unknown }).message)
-        : `请求失败（${response.status}）`;
-    throw new ApiError(message, response.status);
+        : `请求失败（${status}）`;
+    throw new ApiError(message, status);
   }
   return payload as T;
+}
+
+/**
+ * 带文件的上传：Web 走 fetch + FormData（Blob），原生走 XHR multipart。
+ * 两种路径字段与文件一致，服务端按同一套 multipart 解析。
+ */
+async function uploadRequest<T>(
+  path: string,
+  init: { method?: string; fields: Record<string, string>; files: UploadFile[] },
+): Promise<T> {
+  if (IS_WEB_LIKE) {
+    const form = await buildUploadForm(init.fields, init.files);
+    return request<T>(path, { method: init.method, form });
+  }
+  const headers: Record<string, string> = {};
+  const token = await loadToken();
+  if (token) headers['X-Petsense-Session'] = token;
+  const { status, body } = await sendMultipart(`${API_BASE_URL}/api/app${path}`, {
+    method: init.method,
+    headers,
+    fields: init.fields,
+    files: init.files,
+  });
+  return parseApiResponse<T>(status, body);
 }
 
 // ─── 认证 ───
@@ -164,8 +199,11 @@ export function fetchPet(petId: number): Promise<{ pet: SocialPet }> {
 export async function updatePet(petId: number, input: PetUpdate): Promise<{ pet: SocialPet }> {
   const { photo, ...fields } = input;
   if (!photo) return request(`/pets/${petId}`, { method: 'PATCH', body: fields });
-  const form = await buildUploadForm(fields, [{ field: 'photo', ...photo }]);
-  return request(`/pets/${petId}`, { method: 'PATCH', form });
+  return uploadRequest(`/pets/${petId}`, {
+    method: 'PATCH',
+    fields,
+    files: [{ field: 'photo', ...photo }],
+  });
 }
 
 // ─── 设备（一人一设备，认领即绑定宠物） ───
@@ -221,15 +259,15 @@ export async function createPost(input: {
   location: string;
   petId?: number;
 }): Promise<{ postId: number }> {
-  const data = await buildUploadForm(
-    {
+  return uploadRequest('/posts', {
+    method: 'POST',
+    fields: {
       caption: input.caption,
       location: input.location,
       ...(input.petId ? { pet_id: String(input.petId) } : {}),
     },
-    [{ field: 'image', ...input.image }],
-  );
-  return request('/posts', { method: 'POST', form: data });
+    files: [{ field: 'image', ...input.image }],
+  });
 }
 
 export function toggleLike(postId: number): Promise<{ liked: boolean; likes: number }> {

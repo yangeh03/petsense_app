@@ -5,7 +5,7 @@
 
 import { ApiError, loadToken, request } from '@/services/api';
 import { API_BASE_URL } from '@/config';
-import { buildUploadForm } from '@/services/form-upload';
+import { buildUploadForm, IS_WEB_LIKE, sendMultipart } from '@/services/form-upload';
 import type { PetgifPet } from '@/types/social';
 
 async function buildAuthHeaders(): Promise<Record<string, string>> {
@@ -32,8 +32,39 @@ export async function generateDiary(
     photos?: { uri: string; name: string; type: string }[];
   },
 ): Promise<{ posterUrl?: string | null; status: string; message?: string }> {
-  let body: BodyInit;
+  const url = `${API_BASE_URL}/api/app/petgif/pet/${petgifId}/diary`;
   const headers = await buildAuthHeaders();
+  const jsonBody = JSON.stringify({
+    durationMin: input.durationMin,
+    steps: input.steps,
+    places: input.places,
+    notes: input.notes,
+  });
+  if (input.photos?.length && !IS_WEB_LIKE) {
+    // 原生端 multipart 走 XHR（expo/fetch 不支持 {uri} FormData part）
+    const { status, body } = await sendMultipart(url, {
+      method: 'POST',
+      headers,
+      timeoutMs: 240_000,
+      fields: {
+        durationMin: String(input.durationMin),
+        steps: String(input.steps),
+        places: input.places,
+        notes: input.notes,
+      },
+      files: input.photos.map((photo) => ({ field: 'photos', ...photo })),
+    });
+    try {
+      return JSON.parse(body) as {
+        posterUrl?: string | null;
+        status: string;
+        message?: string;
+      };
+    } catch {
+      return { status: 'failed', message: `生成失败（${status}）` };
+    }
+  }
+  let body: BodyInit;
   if (input.photos?.length) {
     body = await buildUploadForm(
       {
@@ -46,17 +77,12 @@ export async function generateDiary(
     );
   } else {
     headers['Content-Type'] = 'application/json';
-    body = JSON.stringify({
-      durationMin: input.durationMin,
-      steps: input.steps,
-      places: input.places,
-      notes: input.notes,
-    });
+    body = jsonBody;
   }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 240_000);
   try {
-    const response = await fetch(`${API_BASE_URL}/api/app/petgif/pet/${petgifId}/diary`, {
+    const response = await fetch(url, {
       method: 'POST',
       headers,
       body,
@@ -87,14 +113,44 @@ export async function createPetgifPetSync(input: {
   image: { uri: string; name: string; type: string };
   name: string;
 }): Promise<{ petgifId: string; characterCardUrl?: string | null }> {
-  const data = await buildUploadForm({ name: input.name }, [{ field: 'photo', ...input.image }]);
+  const url = `${API_BASE_URL}/api/app/petgif/pets/sync`;
+  const headers = await buildAuthHeaders();
   // 后端最长阻塞 150s，客户端给 200s 余量
+  if (!IS_WEB_LIKE) {
+    // 原生端 multipart 走 XHR（expo/fetch 不支持 {uri} FormData part）
+    const { status, body } = await sendMultipart(url, {
+      method: 'POST',
+      headers,
+      timeoutMs: 200_000,
+      fields: { name: input.name },
+      files: [{ field: 'photo', ...input.image }],
+    });
+    let payload: {
+      success?: boolean;
+      petgifId?: string;
+      message?: string;
+      pet?: PetgifPet;
+    } = {};
+    try {
+      payload = JSON.parse(body);
+    } catch {
+      /* 保持空载荷，走下方统一错误 */
+    }
+    if (status < 200 || (status >= 300 && status !== 202)) {
+      throw new ApiError(payload.message ?? `生成失败（${status}）`, status);
+    }
+    if (!payload.petgifId) {
+      throw new ApiError(payload.message ?? '生成失败', 0);
+    }
+    return { petgifId: payload.petgifId, characterCardUrl: payload.pet?.characterCardUrl ?? null };
+  }
+  const data = await buildUploadForm({ name: input.name }, [{ field: 'photo', ...input.image }]);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 200_000);
   try {
-    const response = await fetch(`${API_BASE_URL}/api/app/petgif/pets/sync`, {
+    const response = await fetch(url, {
       method: 'POST',
-      headers: await buildAuthHeaders(),
+      headers,
       body: data,
       signal: controller.signal,
     });
