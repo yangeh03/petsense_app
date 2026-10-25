@@ -20,6 +20,8 @@ jobs:
     name: Lint / Typecheck / Build Web
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      app: ${{ steps.filter.outputs.app }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -108,6 +110,39 @@ jobs:
         if: steps.decide.outputs.run == 'true'
         working-directory: server
         run: python -c "from petsense.actions.classifier import ActionClassifier; ActionClassifier('models/random_forest_1s.joblib')"
+
+  ota-update:
+    name: EAS Update (OTA)
+    needs: [check]
+    # 仅 main 直推且 app/ 有变更时发布 OTA；PR 不发布
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.check.outputs.app == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: 'app/.nvmrc'
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: 安装依赖
+        working-directory: app
+        run: npm ci
+      # expo-env.d.ts 不入库（Expo 官方约定），打包前生成
+      - name: 生成 Expo 类型声明
+        run: echo '/// <reference types="expo/types" />' > app/expo-env.d.ts
+      - name: 发布 EAS Update
+        working-directory: app
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "::error::缺少 EXPO_TOKEN secret（expo.dev → Account Settings → Access tokens 创建后添加到仓库 secrets）"
+            exit 1
+          fi
+          npx eas-cli@latest update --non-interactive \
+            --branch production \
+            --message "auto: ${GITHUB_SHA}"
 
   deploy:
     name: Deploy Tencent production
