@@ -116,6 +116,18 @@ test('template card is the still-image fallback after personal identity and user
   assert.equal(result.animationUrl, null);
   assert.equal(result.staticUrl, '/template.png');
 });
+test('a selected template replaces the profile photo with a standing preset while offline', () => {
+  const result = selector().selectPetAvatar({
+    pet: { ...pet, avatar_template_id: 'marni' },
+    petgif,
+    avatarTemplate: { id: 'marni', characterCardUrl: '/template.png', behaviors: {} },
+    frame: null,
+    fresh: false,
+  });
+  assert.equal(result.animationUrl, null);
+  assert.equal(result.staticUrl, '/template.png');
+  assert.equal(result.label, '静止站立');
+});
 test('legacy hook follows reported predictions and never invents movement or sleep', () => {
   const { inferPetAction } = selector();
   assert.equal(inferPetAction(null), null);

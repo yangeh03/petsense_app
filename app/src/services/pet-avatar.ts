@@ -61,13 +61,15 @@ export function selectPetAvatar({
     : [];
   const preset = actionCandidates.find((url) => url && !failedUrls.includes(url)) || null;
   const staticCandidates = [
+    // A selected preset is an explicit home-screen representation while no live action is available.
+    ...(!actionKey && selectedTemplate ? [selectedTemplate.characterCardUrl] : []),
     pet.avatarImageUrl,
     ownAssets?.characterCardUrl,
     selectedTemplate?.characterCardUrl,
   ];
   return {
     actionKey,
-    label: actionKey ? PET_ACTIONS[actionKey] : null,
+    label: actionKey ? PET_ACTIONS[actionKey] : selectedTemplate ? '静止站立' : null,
     animationAvailable: actionCandidates.some(Boolean),
     animationUrl: preset,
     staticUrl: staticCandidates.find((url) => url && !failedUrls.includes(url)) || null,
