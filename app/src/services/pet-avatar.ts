@@ -37,6 +37,11 @@ export function inferPetAction(frame: TelemetryFrame | null | undefined): PetAct
     : null;
 }
 
+/** A loaded image may replace the current visual only if it is still the requested action. */
+export function shouldPromotePetMedia(loadedUri: string, requestedUri: string | null) {
+  return loadedUri === requestedUri;
+}
+
 export function selectPetAvatar({
   pet,
   petgif,

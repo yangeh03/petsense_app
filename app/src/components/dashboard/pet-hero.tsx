@@ -1,13 +1,18 @@
 import { Image } from 'expo-image';
 import { SymbolView } from 'expo-symbols';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { Fonts, Shadows } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { absoluteUrl } from '@/services/api';
-import { PET_ACTIONS, selectPetAvatar, type PetActionKey } from '@/services/pet-avatar';
+import {
+  PET_ACTIONS,
+  selectPetAvatar,
+  shouldPromotePetMedia,
+  type PetActionKey,
+} from '@/services/pet-avatar';
 import { soundStatus } from '@/services/sound-view';
 import type { PetAvatarTemplate, PetgifPet, SocialPet } from '@/types/social';
 import type { TelemetryFrame } from '@/types/telemetry';
@@ -73,6 +78,24 @@ export function PetHero({
         ? '识别准备中'
         : '暂未识别动作'
       : statusLabel);
+  const [displayedMedia, setDisplayedMedia] = useState(
+    uri ? { uri, animation: Boolean(animation) } : null,
+  );
+  const requestedUri = useRef(uri);
+  useEffect(() => {
+    requestedUri.current = uri;
+  }, [uri]);
+  const visibleMedia = uri ? displayedMedia : null;
+  const markFailed = (failedUri: string) =>
+    setFailures((old) => ({
+      petId: pet.id,
+      refreshVersion,
+      urls: [
+        ...(old.petId === pet.id && old.refreshVersion === refreshVersion ? old.urls : []),
+        failedUri,
+      ],
+    }));
+  const waitingForMedia = Boolean(uri && visibleMedia?.uri !== uri);
   return (
     <View style={styles.hero}>
       <Pressable
@@ -94,31 +117,36 @@ export function PetHero({
         style={[styles.ring, { borderColor: color, backgroundColor: theme.tintBackground }]}
       >
         <View style={[styles.portrait, { borderColor: theme.backgroundElement }]}>
-          {uri ? (
+          {visibleMedia ? (
             <Image
-              key={`${pet.id}:${uri}`}
+              source={{ uri: absoluteUrl(visibleMedia.uri) }}
+              contentFit={visibleMedia.animation ? 'contain' : 'cover'}
+              autoplay={visibleMedia.animation}
+              cachePolicy="memory-disk"
+              transition={180}
+              recyclingKey={String(pet.id)}
+              style={styles.image}
+              onError={() => markFailed(visibleMedia.uri)}
+            />
+          ) : (
+            <ThemedText style={styles.emoji}>{pet.avatar_emoji || '🐾'}</ThemedText>
+          )}
+          {waitingForMedia && uri && (
+            <Image
+              key={`preload:${pet.id}:${uri}`}
               source={{ uri: absoluteUrl(uri) }}
               contentFit={animation ? 'contain' : 'cover'}
               autoplay={!!animation}
               cachePolicy="memory-disk"
-              transition={120}
-              recyclingKey={`${pet.id}:${uri}`}
-              style={styles.image}
-              onError={() =>
-                setFailures((old) => ({
-                  petId: pet.id,
-                  refreshVersion,
-                  urls: [
-                    ...(old.petId === pet.id && old.refreshVersion === refreshVersion
-                      ? old.urls
-                      : []),
-                    uri,
-                  ],
-                }))
-              }
+              recyclingKey={`preload:${pet.id}:${uri}`}
+              style={styles.preload}
+              onLoad={() => {
+                if (shouldPromotePetMedia(uri, requestedUri.current)) {
+                  setDisplayedMedia({ uri, animation: Boolean(animation) });
+                }
+              }}
+              onError={() => markFailed(uri)}
             />
-          ) : (
-            <ThemedText style={styles.emoji}>{pet.avatar_emoji || '🐾'}</ThemedText>
           )}
         </View>
         <View
@@ -172,23 +200,24 @@ export function PetHero({
 const styles = StyleSheet.create({
   hero: { alignItems: 'center', gap: 18, paddingTop: 4, paddingBottom: 12 },
   ring: {
-    width: 176,
-    height: 176,
-    borderRadius: 88,
+    width: 232,
+    height: 232,
+    borderRadius: 116,
     borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
   },
   portrait: {
-    width: 164,
-    height: 164,
-    borderRadius: 82,
+    width: 220,
+    height: 220,
+    borderRadius: 110,
     borderWidth: 5,
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
   },
   image: { width: '100%', height: '100%' },
+  preload: { position: 'absolute', width: 1, height: 1, opacity: 0 },
   emoji: { fontSize: 78, lineHeight: 98, fontFamily: Fonts.rounded },
   badge: {
     position: 'absolute',

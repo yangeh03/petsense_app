@@ -156,6 +156,11 @@ test('an offline template preview plays its selected action, but live telemetry 
   assert.equal(live.animationUrl, '/template-sit.gif');
   assert.equal(live.label, '坐着');
 });
+test('a late image load cannot replace a newer requested pet action', () => {
+  const { shouldPromotePetMedia } = selector();
+  assert.equal(shouldPromotePetMedia?.('/template-sit.gif', '/template-sit.gif'), true);
+  assert.equal(shouldPromotePetMedia?.('/template-walk.gif', '/template-sit.gif'), false);
+});
 test('legacy hook follows reported predictions and never invents movement or sleep', () => {
   const { inferPetAction } = selector();
   assert.equal(inferPetAction(null), null);
