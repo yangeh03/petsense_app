@@ -19,6 +19,7 @@ import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { absoluteUrl } from '@/services/api';
+import { validateDiaryDraft } from '@/services/diary-validation';
 import {
   createDiaryJob,
   getDiaryJob,
@@ -81,11 +82,19 @@ export function DiaryModal({
     if (!visible) return;
     let active = true;
     const controller = new AbortController();
-    void Promise.all([listDiaryJobs(petId, controller.signal), AsyncStorage.getItem(storageKey)])
-      .then(([history, savedKey]) => {
+    queueMicrotask(() => {
+      if (!active) return;
+      setLoadingHistory(true);
+      setHistoryError('');
+    });
+    void (async () => {
+      try {
+        const savedKey = await AsyncStorage.getItem(storageKey);
+        if (!active) return;
+        setPendingKey(savedKey);
+        const history = await listDiaryJobs(petId, controller.signal);
         if (!active) return;
         setJobs(history.jobs.slice(0, 20));
-        setPendingKey(savedKey);
         setHistoryError('');
         setSelectedJobId((current) => {
           if (current && history.jobs.some((job) => job.jobId === current)) return current;
@@ -97,13 +106,12 @@ export function DiaryModal({
           );
         });
         setSubmissionError('');
-      })
-      .catch(() => {
+      } catch {
         if (active) setHistoryError('日记记录暂时无法加载，请检查网络后重试。');
-      })
-      .finally(() => {
+      } finally {
         if (active) setLoadingHistory(false);
-      });
+      }
+    })();
     return () => {
       active = false;
       controller.abort();
@@ -145,6 +153,8 @@ export function DiaryModal({
   const refreshHistory = async () => {
     setHistoryError('');
     try {
+      const savedKey = await AsyncStorage.getItem(storageKey);
+      setPendingKey(savedKey);
       const result = await listDiaryJobs(petId);
       setJobs(result.jobs.slice(0, 20));
     } catch {
@@ -188,19 +198,9 @@ export function DiaryModal({
   };
 
   const generate = async () => {
-    if (!petgifId || submitting.current || blockingJob) return;
-    const duration = Number(durationMin);
-    const stepCount = Number(steps);
-    if (
-      !Number.isInteger(duration) ||
-      duration < 1 ||
-      duration > 600 ||
-      !Number.isInteger(stepCount) ||
-      stepCount < 0 ||
-      stepCount > 100_000 ||
-      places.trim().length > 200 ||
-      notes.trim().length > 200
-    ) {
+    if (!petgifId || submitting.current || blockingJob || loadingHistory || historyError) return;
+    const validated = validateDiaryDraft({ durationMin, steps, places, notes });
+    if (!validated) {
       Alert.alert(
         '请检查运动记录',
         '时长需为 1—600 分钟，步数需为 0—100000；地点和备注最多 200 字。',
@@ -217,10 +217,7 @@ export function DiaryModal({
       const job = await createDiaryJob(
         petId,
         {
-          durationMin: duration,
-          steps: stepCount,
-          places: places.trim(),
-          notes: notes.trim(),
+          ...validated,
           photos,
         },
         key,
@@ -258,8 +255,10 @@ export function DiaryModal({
     try {
       await shareDiaryPost({
         posterUrl: selectedJob.posterUrl,
-        caption: `${petName} 的运动日记 🏃 ${durationMin} 分钟 · ${places || '日常遛弯'}`,
-        location: places,
+        caption: `${petName} 的运动日记 🏃 ${selectedJob.input?.durationMin ?? '运动'} 分钟${
+          selectedJob.input?.places ? ` · ${selectedJob.input.places}` : ''
+        }`,
+        location: selectedJob.input?.places ?? '',
         petId,
       });
       onShared();
@@ -340,7 +339,7 @@ export function DiaryModal({
               </View>
               <Pressable
                 onPress={() => void pickPhotos()}
-                disabled={!!blockingJob}
+                disabled={loadingHistory || !!historyError || !!blockingJob}
                 style={styles.photoRow}
               >
                 <SymbolView
@@ -411,12 +410,12 @@ export function DiaryModal({
               ) : (
                 <Pressable
                   onPress={() => void generate()}
-                  disabled={!!blockingJob || loadingHistory}
+                  disabled={!!blockingJob || loadingHistory || !!historyError}
                   style={[
                     styles.primaryButton,
                     {
                       backgroundColor: theme.tint,
-                      opacity: blockingJob || loadingHistory ? 0.5 : 1,
+                      opacity: blockingJob || loadingHistory || historyError ? 0.5 : 1,
                     },
                   ]}
                 >

@@ -30,6 +30,7 @@ export type PetgifDiaryJob = {
   updatedAt: string;
   posterUrl?: string | null;
   stats?: Record<string, unknown>;
+  input?: { durationMin?: number; steps?: number; places?: string; notes?: string };
   message?: string | null;
 };
 

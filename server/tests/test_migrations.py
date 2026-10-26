@@ -12,7 +12,8 @@ from petsense import db
 EXPECTED_TABLES = {'users', 'auth_sessions', 'pets', 'daily_stats', 'home_layout', 'posts',
                    'post_likes', 'comments', 'follows', 'readings', 'action_predictions',
                    'collection_sessions', 'collection_frames', 'collection_videos', 'journal_crc', 'devices',
-                   'telemetry_latest', 'telemetry_minutes', 'telemetry_events', 'petgif_diary_jobs'}
+                   'telemetry_latest', 'telemetry_minutes', 'telemetry_events', 'petgif_diary_jobs',
+                   'petgif_identities'}
 
 
 class MigrationTests(unittest.TestCase):

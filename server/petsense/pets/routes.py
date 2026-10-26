@@ -62,9 +62,16 @@ def build_insight(pet, telemetry, today):
 
 def pet_dict(pet, public=False):
     """pets 列表 / dashboard 共用的行序列化（键与旧 dict(row) 一致）。"""
+    from petsense.db.models import PetgifIdentity
+    verified_petgif_id = None
+    if pet.petgif_id:
+        with session_scope() as session:
+            identity = session.get(PetgifIdentity, pet.petgif_id)
+            if identity is not None and identity.user_id == pet.user_id:
+                verified_petgif_id = pet.petgif_id
     item = {'id': pet.id, 'user_id': pet.user_id, 'name': pet.name, 'species': pet.species,
             'breed': pet.breed, 'avatar_emoji': pet.avatar_emoji, 'device_id': pet.device_id,
-            'petgif_id': pet.petgif_id, 'avatar_template_id': pet.avatar_template_id,
+            'petgif_id': verified_petgif_id, 'avatar_template_id': pet.avatar_template_id,
             'avatar_image': pet.avatar_image,
             'created_at': iso_z(pet.created_at)}
     telemetry = pet_latest_telemetry(pet.device_id)
@@ -227,9 +234,13 @@ def app_pet_bind_petgif(pet_id):
     if not petgif_id:
         return {'success': False, 'message': '缺少 petgifId'}, 400
     from petsense.petgif.proxy import PETGIF_AVATAR_TEMPLATES
+    from petsense.db.models import PetgifIdentity
     if petgif_id in {item['petgif_id'] for item in PETGIF_AVATAR_TEMPLATES.values()}:
         return {'success': False, 'message': '预设动画不能绑定为个人 PetGIF 数字形象'}, 400
     with session_scope() as s:
+        identity_owner = s.get(PetgifIdentity, petgif_id)
+        if identity_owner is None or identity_owner.user_id != user['id']:
+            return {'success': False, 'message': '只能绑定由当前账号生成的个人 PetGIF 数字形象'}, 403
         owned = s.execute(select(Pet.id).where(Pet.id == pet_id,
                                                Pet.user_id == user['id'])).scalar_one_or_none()
         if not owned:

@@ -45,6 +45,33 @@ const job = {
   updatedAt: 'now',
 };
 
+function loadValidation() {
+  const module = { exports: {} };
+  vm.runInNewContext(
+    ts.transpileModule(
+      fs.readFileSync(
+        require('node:path').join(__dirname, '../src/services/diary-validation.ts'),
+        'utf8',
+      ),
+      { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } },
+    ).outputText,
+    { module, exports: module.exports },
+  );
+  return module.exports;
+}
+
+test('diary requires explicitly entered steps while accepting explicit zero', () => {
+  const { validateDiaryDraft } = loadValidation();
+  const draft = { durationMin: '25', steps: '', places: '', notes: '' };
+  assert.equal(validateDiaryDraft(draft), null);
+  assert.deepEqual(JSON.parse(JSON.stringify(validateDiaryDraft({ ...draft, steps: '0' }))), {
+    durationMin: 25,
+    steps: 0,
+    places: '',
+    notes: '',
+  });
+});
+
 test('diary submission sends an idempotency key and returns immediately from the job API', async () => {
   let call;
   const api = {

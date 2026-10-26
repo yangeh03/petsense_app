@@ -127,6 +127,7 @@ def create_job(user_id, pet_id, petgif_id, idempotency_key, fields, photo_paths)
 
 def job_dict(job):
     result = json.loads(job.result_json or '{}')
+    fields = json.loads(job.input_json or '{}')
     payload = {
         'jobId': job.id,
         'petId': job.pet_id,
@@ -135,6 +136,7 @@ def job_dict(job):
         'updatedAt': iso_z(job.updated_at),
         'posterUrl': result.get('posterUrl'),
         'stats': result.get('stats') or {},
+        'input': {key: fields.get(key) for key in ('durationMin', 'steps', 'places', 'notes')},
         'message': job.error_message,
     }
     return payload
@@ -192,7 +194,9 @@ def run_diary_job(job_id, poll_timeout=None, poll_interval=None):
     poll_interval = config.PETGIF_DIARY_POLL_INTERVAL_S if poll_interval is None else poll_interval
 
     job = _read_job(job_id)
-    if job is None or job.status in ('completed', 'failed', 'unknown'):
+    if job is None or job.status in ('completed', 'failed'):
+        return
+    if job.status == 'unknown' and not job.upstream_diary_id:
         return
     _update_job(job_id, status='running', error_message=None)
     fields = json.loads(job.input_json)
@@ -212,9 +216,8 @@ def run_diary_job(job_id, poll_timeout=None, poll_interval=None):
                 if not cover_url:
                     _set_terminal(job_id, 'failed', '缺少照片且个人形象图暂不可用')
                     return
-                cover = requests.get(cover_url, timeout=30)
-                cover.raise_for_status()
-                uploads.append(('photos', ('cover.png', io.BytesIO(cover.content), 'image/png')))
+                cover_bytes = proxy.download_petgif_image(cover_url)
+                uploads.append(('photos', ('cover.png', io.BytesIO(cover_bytes), 'image/png')))
             try:
                 upstream_attempted = True
                 response = requests.post(
@@ -261,7 +264,7 @@ def run_diary_job(job_id, poll_timeout=None, poll_interval=None):
                 image = (diary.get('assets') or {}).get('image') or {}
                 poster_url = proxy.petgif_public(image.get('publicUrl'))
                 if not poster_url:
-                    _set_terminal(job_id, 'failed', '日记已生成，但海报地址无效')
+                    _set_terminal(job_id, 'unknown', '日记已生成，但海报暂不可用；可稍后查询')
                     return
                 _set_terminal(job_id, 'completed', result={
                     'posterUrl': poster_url, 'stats': diary.get('stats') or {},
@@ -279,7 +282,8 @@ def run_diary_job(job_id, poll_timeout=None, poll_interval=None):
         _set_terminal(job_id, 'unknown' if upstream_attempted else 'failed',
                       'PetGIF 连接中断，任务状态不确定' if upstream_attempted else '读取个人形象失败，请重试')
     except Exception:
-        _set_terminal(job_id, 'failed', '日记任务处理失败，请稍后重试')
+        _set_terminal(job_id, 'unknown' if upstream_attempted or diary_id else 'failed',
+                      'PetGIF 任务状态不确定，可稍后查询' if upstream_attempted or diary_id else '日记任务处理失败，请稍后重试')
     finally:
         remove_photos(paths)
 
@@ -295,7 +299,7 @@ def recover_diary_jobs():
             remove_photos(json.loads(old.photo_paths_json or '[]'))
             session.delete(old)
         jobs = session.execute(select(PetgifDiaryJob).where(
-            PetgifDiaryJob.status.in_(('queued', 'running')),
+            PetgifDiaryJob.status.in_(('queued', 'running', 'unknown')),
         )).scalars().all()
         recover = []
         for job in jobs:

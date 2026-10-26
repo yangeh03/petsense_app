@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from flask import Flask
 
 from petsense import db
-from petsense.db.models import AuthSession, Pet, Reading, User
+from petsense.db.models import AuthSession, Pet, PetgifIdentity, Reading, User
 from petsense.pets import routes as pets_routes
 from petsense.petgif import proxy as petgif_proxy
 from helpers import fresh_db
@@ -89,6 +89,8 @@ class PetsTests(unittest.TestCase):
             pet = s.query(Pet).filter_by(user_id=1).one()
             pet.petgif_id = 'personal-001'
             pet.avatar_template_id = 'marni'
+            s.add(PetgifIdentity(petgif_id='personal-001', user_id=pet.user_id,
+                                 created_at=db.utc_now()))
         personal = {'id': 'personal-001', 'characterCardUrl': 'https://media.test/personal.png',
                     'behaviors': {'walk': {'gifUrl': 'https://media.test/personal-walk.gif'}}}
         template = {'id': 'marni', 'name': 'Marni', 'characterCardUrl': 'https://media.test/marni.png',
