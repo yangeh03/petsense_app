@@ -21,7 +21,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { useObservations } from '@/hooks/use-observations';
 import { useTelemetry } from '@/hooks/use-telemetry';
 import { useTheme } from '@/hooks/use-theme';
-import { clockTime, currentPrediction, duration } from '@/services/observation-view';
+import { clockTime, duration } from '@/services/observation-view';
 import { parseTelemetryMessage } from '@/services/telemetry-service';
 import type { ObservationPeriod } from '@/types/observations';
 
@@ -60,7 +60,6 @@ export default function DashboardScreen() {
   const age = frame ? now - Date.parse(frame.receivedAt) : Infinity;
   const current = !!frame && age >= -5000 && age < 10_000 && !replay;
   const health = current && frame?.health?.valid ? frame.health : null;
-  const prediction = currentPrediction(frame, current);
   const battery = frame?.battery?.found ? frame.battery.percent : null;
   const summary = data?.summary;
   const hasCoverage = !!summary?.firstObservedAt;
@@ -195,10 +194,9 @@ export default function DashboardScreen() {
               statusLabel={
                 !pet.device_id ? '等待绑定项圈' : frame ? '项圈暂未在线' : '等待首次观测'
               }
-              sound={prediction.sound}
-              experimental={prediction.experimental}
               refreshVersion={mediaRefresh}
               onEdit={() => router.push('/pet-profile')}
+              onSoundPress={() => router.push(pet.device_id ? '/monitor' : '/setup')}
             />
             <Pressable
               accessibilityRole="button"
@@ -284,13 +282,11 @@ export default function DashboardScreen() {
                   value={hasCoverage ? duration(summary!.stationarySeconds) : '—'}
                   compact
                 />
-                <Metric
-                  label="叫声片段"
-                  value={hasCoverage ? `${summary!.soundEpisodeCount}段` : '—'}
-                  compact
-                />
               </View>
-              <SoundTimeline events={data?.events ?? []} hasCoverage={hasCoverage} />
+            </View>
+            <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
+              <ThemedText style={styles.sectionTitle}>声音记录</ThemedText>
+              <SoundTimeline events={data?.events ?? []} />
             </View>
             <TrendPanel data={data} period={period} onPeriod={setPeriod} busy={busy} />
             {pet.petgif_id && (

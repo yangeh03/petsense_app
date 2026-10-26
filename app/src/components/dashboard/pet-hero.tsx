@@ -8,6 +8,7 @@ import { Fonts, Shadows } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { absoluteUrl } from '@/services/api';
 import { selectPetAvatar } from '@/services/pet-avatar';
+import { soundStatus } from '@/services/sound-view';
 import type { PetgifPet, SocialPet } from '@/types/social';
 import type { TelemetryFrame } from '@/types/telemetry';
 
@@ -18,20 +19,18 @@ export function PetHero({
   frame,
   current,
   statusLabel,
-  sound,
-  experimental,
   refreshVersion,
   onEdit,
+  onSoundPress,
 }: {
   pet: SocialPet;
   petgif: PetgifPet | null | undefined;
   frame: TelemetryFrame | null;
   current: boolean;
   statusLabel: string;
-  sound: string;
-  experimental: boolean;
   refreshVersion: number;
   onEdit: () => void;
+  onSoundPress: () => void;
 }) {
   const theme = useTheme();
   // Retry failed media on pull-to-refresh or the explicit retry button; keep good GIFs mounted.
@@ -51,6 +50,7 @@ export function PetHero({
   const still = media.staticUrl;
   const uri = animation || still;
   const color = current ? theme.online : theme.textSecondary;
+  const sound = soundStatus(frame, current, !!pet.device_id);
   const actionLabel =
     media.label ??
     (current
@@ -102,35 +102,41 @@ export function PetHero({
           <ThemedText type="smallBold">{actionLabel}</ThemedText>
         </View>
       </Pressable>
-      {(current || failed.length > 0) && (
-        <View style={styles.caption}>
-          {current && (
-            <View style={[styles.sound, { backgroundColor: theme.tintBackground }]}>
-              <SymbolView
-                name={{ ios: 'waveform', android: 'graphic_eq', web: 'graphic_eq' }}
-                size={14}
-                tintColor={theme.tint}
-              />
-              <ThemedText type="small" style={{ color: theme.tint }}>
-                {sound}
-                {experimental ? ' · 实验性' : ''}
-              </ThemedText>
-            </View>
-          )}
-          {failed.length > 0 && (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="重试宠物形象"
-              hitSlop={8}
-              onPress={() => setFailures({ petId: pet.id, refreshVersion, urls: [] })}
-            >
-              <ThemedText type="small" style={{ color: theme.tint }}>
-                重试形象
-              </ThemedText>
-            </Pressable>
-          )}
-        </View>
-      )}
+      <View style={styles.caption}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`${sound.label}，查看声音诊断`}
+          onPress={onSoundPress}
+          style={[
+            styles.sound,
+            { backgroundColor: sound.available ? theme.tintBackground : theme.backgroundElement },
+          ]}
+        >
+          <SymbolView
+            name={{ ios: 'waveform', android: 'graphic_eq', web: 'graphic_eq' }}
+            size={16}
+            tintColor={sound.available ? theme.tint : theme.textSecondary}
+          />
+          <ThemedText
+            type="small"
+            style={{ color: sound.available ? theme.tint : theme.textSecondary }}
+          >
+            {sound.label}
+          </ThemedText>
+        </Pressable>
+        {failed.length > 0 && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="重试宠物形象"
+            hitSlop={8}
+            onPress={() => setFailures({ petId: pet.id, refreshVersion, urls: [] })}
+          >
+            <ThemedText type="small" style={{ color: theme.tint }}>
+              重试形象
+            </ThemedText>
+          </Pressable>
+        )}
+      </View>
     </View>
   );
 }
