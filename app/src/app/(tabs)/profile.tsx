@@ -6,7 +6,7 @@ import { useCallback, useRef, useState } from 'react';
 
 import { DeviceCard } from '@/components/device-card';
 import { FollowListModal } from '@/components/social/follow-list-modal';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
@@ -53,6 +53,17 @@ export default function ProfileScreen() {
     }, [load]),
   );
   usePetChanges(load);
+
+  const confirmLogout = () => {
+    Alert.alert('退出登录', '确定要退出当前账号吗？', [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '退出',
+        style: 'destructive',
+        onPress: () => void logout().then(() => setProfile(null)),
+      },
+    ]);
+  };
 
   if (loading) {
     return (
@@ -110,7 +121,12 @@ export default function ProfileScreen() {
               @{user.username}
             </ThemedText>
           </View>
-          <Pressable onPress={() => void logout().then(() => setProfile(null))} hitSlop={8}>
+          <Pressable
+            onPress={confirmLogout}
+            hitSlop={8}
+            accessibilityRole="button"
+            accessibilityLabel="退出登录"
+          >
             <ThemedText type="small" style={{ color: theme.textSecondary }}>
               退出
             </ThemedText>
@@ -122,7 +138,7 @@ export default function ProfileScreen() {
           <StatCell
             value={profile?.posts_count ?? 0}
             label="帖子"
-            onPress={() => router.push('/community')}
+            onPress={() => router.push(`/user?id=${user.id}`)}
           />
           <StatCell value={profile?.followers ?? 0} label="粉丝" />
           <StatCell value={profile?.following ?? 0} label="关注" />

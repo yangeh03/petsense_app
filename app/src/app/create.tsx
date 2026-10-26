@@ -105,7 +105,6 @@ function PostForm() {
   const router = useRouter();
   const [image, setImage] = useState<{ uri: string; name: string; type: string } | null>(null);
   const [caption, setCaption] = useState('');
-  const [location, setLocation] = useState('');
   const [pets, setPets] = useState<SocialPet[]>([]);
   const [petId, setPetId] = useState<number | null>(null);
   const [sending, setSending] = useState(false);
@@ -160,7 +159,6 @@ function PostForm() {
       await createPost({
         image,
         caption: caption.trim(),
-        location: location.trim(),
         petId: petId ?? undefined,
       });
       router.back();
@@ -231,22 +229,6 @@ function PostForm() {
       <ThemedText type="small" themeColor="textSecondary" style={styles.counter}>
         {caption.length}/500
       </ThemedText>
-
-      <View style={[styles.locationRow, { borderColor: theme.backgroundSelected }]}>
-        <SymbolView
-          name={{ ios: 'mappin.and.ellipse', android: 'place', web: 'place' }}
-          size={16}
-          tintColor={theme.tint}
-        />
-        <TextInput
-          value={location}
-          onChangeText={setLocation}
-          placeholder="添加位置（可选）"
-          placeholderTextColor={theme.textSecondary}
-          maxLength={80}
-          style={styles.locationInput}
-        />
-      </View>
 
       {error ? (
         <ThemedText type="small" style={{ color: theme.danger }}>
@@ -360,20 +342,6 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-end',
     marginTop: -Spacing.two,
     fontSize: 11,
-  },
-  locationRow: {
-    width: '100%',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.two,
-    borderWidth: 1,
-    borderRadius: 14,
-    paddingHorizontal: Spacing.three,
-  },
-  locationInput: {
-    flex: 1,
-    paddingVertical: 12,
-    fontSize: 15,
   },
 
   primaryButton: {

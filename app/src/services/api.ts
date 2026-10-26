@@ -264,14 +264,12 @@ export function fetchFeed(userId?: number): Promise<{ posts: Post[] }> {
 export async function createPost(input: {
   image: { uri: string; name: string; type: string };
   caption: string;
-  location: string;
   petId?: number;
 }): Promise<{ postId: number }> {
   return uploadRequest('/posts', {
     method: 'POST',
     fields: {
       caption: input.caption,
-      location: input.location,
       ...(input.petId ? { pet_id: String(input.petId) } : {}),
     },
     files: [{ field: 'image', ...input.image }],
