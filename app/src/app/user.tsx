@@ -336,7 +336,9 @@ export default function UserScreen() {
                             ),
                           );
                         })
-                        .catch(() => { if (currentRequest === sequence.current) void load(); });
+                        .catch(() => {
+                          if (currentRequest === sequence.current) void load();
+                        });
                     }}
                     onOpenComments={setCommentsFor}
                     onOpenPost={(item) => router.push(`/post?id=${item.id}`)}

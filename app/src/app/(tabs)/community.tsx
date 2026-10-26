@@ -45,6 +45,7 @@ export default function CommunityScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState('');
+  const [storyError, setStoryError] = useState('');
   const [pageError, setPageError] = useState('');
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [commentsFor, setCommentsFor] = useState<Post | null>(null);
@@ -57,14 +58,21 @@ export default function CommunityScreen() {
 
   const load = useCallback(async () => {
     const current = ++sequence.current;
+    // 故事环只是头部装饰内容，加载失败不能连坐整个 Feed。
+    void fetchStoryTray()
+      .then((tray) => {
+        if (current !== sequence.current) return;
+        setStories(tray.groups);
+        setStoryError('');
+      })
+      .catch((exc) => {
+        if (current !== sequence.current) return;
+        setStoryError(exc instanceof Error ? exc.message : '故事加载失败');
+      });
     try {
-      const [feed, tray] = await Promise.all([
-        fetchFeed(undefined, { limit: 20, scope }),
-        fetchStoryTray(),
-      ]);
+      const feed = await fetchFeed(undefined, { limit: 20, scope });
       if (current !== sequence.current) return;
       setPosts(feed.posts);
-      setStories(tray.groups);
       setLoadedKey(currentKey);
       setUnread(0);
       setNextCursor(feed.page.nextCursor);
@@ -211,6 +219,7 @@ export default function CommunityScreen() {
             label={loadedKey === currentKey && unread ? `互动通知，${unread} 条未读` : '互动通知'}
             name={{ ios: 'bell', android: 'notifications_none', web: 'notifications_none' }}
             onPress={() => router.push('/social-inbox')}
+            badge={loadedKey === currentKey ? unread : 0}
           />
         </View>
       </View>
@@ -233,12 +242,35 @@ export default function CommunityScreen() {
           </Pressable>
         ))}
       </View>
+      {!!error && visiblePosts.length > 0 && (
+        <Pressable
+          onPress={() => void load()}
+          style={[styles.banner, { backgroundColor: theme.backgroundSelected }]}
+          accessibilityLabel="刷新失败，点击重试"
+        >
+          <ThemedText type="small" style={{ color: theme.danger }}>
+            刷新失败：{error}
+          </ThemedText>
+          <ThemedText type="smallBold" style={{ color: theme.tint }}>
+            重试
+          </ThemedText>
+        </Pressable>
+      )}
       <View style={styles.storyHeader}>
         <ThemedText type="smallBold">故事</ThemedText>
         {!!user && (
-          <Pressable onPress={() => router.push('/story-create')}>
+          <Pressable
+            onPress={() => router.push('/story-create')}
+            style={styles.storyCreate}
+            accessibilityLabel="发布故事"
+          >
+            <SymbolView
+              name={{ ios: 'plus.circle', android: 'add_circle', web: 'add_circle' }}
+              size={18}
+              tintColor={theme.tint}
+            />
             <ThemedText type="smallBold" style={{ color: theme.tint }}>
-              ＋ 发布故事
+              发布故事
             </ThemedText>
           </Pressable>
         )}
@@ -270,6 +302,10 @@ export default function CommunityScreen() {
             </Pressable>
           )}
         />
+      ) : storyError ? (
+        <ThemedText type="small" style={{ color: theme.danger }}>
+          {storyError}
+        </ThemedText>
       ) : (
         <ThemedText type="small" themeColor="textSecondary">
           暂无有效故事
@@ -364,15 +400,24 @@ function HeaderButton({
   label,
   name,
   onPress,
+  badge = 0,
 }: {
   label: string;
   name: Parameters<typeof SymbolView>[0]['name'];
   onPress: () => void;
+  badge?: number;
 }) {
   const theme = useTheme();
   return (
     <Pressable onPress={onPress} accessibilityLabel={label} style={styles.iconButton}>
       <SymbolView name={name} size={21} tintColor={theme.tint} />
+      {badge > 0 && (
+        <View style={[styles.badge, { backgroundColor: theme.danger }]}>
+          <ThemedText style={[styles.badgeText, { color: '#ffffff' }]}>
+            {badge > 99 ? '99+' : badge}
+          </ThemedText>
+        </View>
+      )}
     </Pressable>
   );
 }
@@ -392,9 +437,31 @@ const styles = StyleSheet.create({
   title: { fontSize: 30, fontWeight: '700', lineHeight: 38 },
   headerActions: { flexDirection: 'row', gap: Spacing.one },
   iconButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  badge: {
+    position: 'absolute',
+    top: 4,
+    right: 2,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    paddingHorizontal: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  badgeText: { fontSize: 10, lineHeight: 12, fontWeight: '700' },
+  banner: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: Spacing.two,
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.two,
+    borderRadius: 12,
+  },
   scopeRow: { flexDirection: 'row', gap: Spacing.two },
   scopeButton: { paddingHorizontal: Spacing.four, paddingVertical: Spacing.two, borderRadius: 18 },
-  storyHeader: { flexDirection: 'row', justifyContent: 'space-between' },
+  storyHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  storyCreate: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one },
   storyTray: { gap: Spacing.three },
   storyItem: { alignItems: 'center', width: 68, gap: Spacing.one },
   storyRing: {
