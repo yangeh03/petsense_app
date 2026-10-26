@@ -17,9 +17,9 @@ export function SoundTimeline({
   const [expanded, setExpanded] = useState<number | null>(null);
   return (
     <View style={styles.list}>
-      {!events.length && (
+      {!events.length && hasCoverage && (
         <ThemedText type="small" themeColor="textSecondary">
-          {hasCoverage ? '已观测时段内，暂无叫声片段。' : '收到项圈数据后，这里会记录叫声片段。'}
+          暂无叫声片段
         </ThemedText>
       )}
       {(showAll ? events : events.slice(0, 3)).map((event) => (
@@ -53,8 +53,7 @@ export function SoundTimeline({
                 {Math.round(event.confidence * 100)}%
               </ThemedText>
               <ThemedText type="small" themeColor="textSecondary">
-                相邻识别合并为一段，不代表单声次数。
-                {event.experimental ? '呜咽识别仍处于实验阶段。' : ''}当前上报不包含可播放录音。
+                连续识别合并为片段。 无录音。
               </ThemedText>
             </View>
           )}

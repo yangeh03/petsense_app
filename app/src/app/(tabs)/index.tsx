@@ -115,9 +115,6 @@ export default function DashboardScreen() {
                 ? `${greeting(now)}，${pet.name}！`
                 : '和它一起，好好生活'}
           </ThemedText>
-          <ThemedText type="small" themeColor="textSecondary">
-            {pet ? '今天也一起好好照顾它 🐾' : '从一份宠物档案，开启健康记录'}
-          </ThemedText>
         </View>
         {error ? (
           <Pressable
@@ -136,7 +133,7 @@ export default function DashboardScreen() {
             <View style={[styles.card, { backgroundColor: theme.tintBackground }]}>
               <ThemedText style={styles.sectionTitle}>真实实验数据 · 循环回放</ThemedText>
               <ThemedText type="small" themeColor="textSecondary">
-                这是已录制的实验数据，不代表项圈当前状态，也不会写入今日记录。
+                录制数据，不计入今日记录。
               </ThemedText>
             </View>
             <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
@@ -158,9 +155,6 @@ export default function DashboardScreen() {
                   unit="℃"
                 />
               </View>
-              <ThemedText type="small" themeColor="textSecondary">
-                此回放片段未包含端侧声音与动作分类，不补造这些结果。
-              </ThemedText>
             </View>
           </>
         ) : authLoading || (user && !dashboard && busy) ? (
@@ -168,9 +162,6 @@ export default function DashboardScreen() {
         ) : !user ? (
           <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
             <ThemedText style={styles.sectionTitle}>从认识你的宠物开始</ThemedText>
-            <ThemedText themeColor="textSecondary">
-              登录后连接项圈，查看它的状态和每天的记录。
-            </ThemedText>
             <Pressable
               accessibilityRole="button"
               onPress={() => router.push('/login')}
@@ -184,9 +175,6 @@ export default function DashboardScreen() {
         ) : dashboard && !pet ? (
           <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
             <ThemedText style={styles.sectionTitle}>先建立一份宠物档案</ThemedText>
-            <ThemedText themeColor="textSecondary">
-              添加名字、连接项圈后，这里会显示真实观测。
-            </ThemedText>
             <Pressable
               accessibilityRole="button"
               onPress={() => router.push('/setup')}
@@ -223,7 +211,7 @@ export default function DashboardScreen() {
                 {statusLabel}
               </ThemedText>
               <ThemedText type="small" themeColor="textSecondary">
-                {battery !== null ? `${Math.round(battery)}% · ` : ''}详情 ›
+                {battery !== null ? `${Math.round(battery)}% · ` : ''}›
               </ThemedText>
             </Pressable>
             <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
@@ -248,12 +236,12 @@ export default function DashboardScreen() {
                 </View>
               ) : (
                 <ThemedText type="small" themeColor="textSecondary">
-                  暂无实时读数，恢复连接后自动更新。
+                  暂无实时读数
                 </ThemedText>
               )}
               {current && !health && (
                 <ThemedText type="small" themeColor="textSecondary">
-                  暂未获得有效读数，请确认传感器佩戴与接触情况。
+                  暂无有效读数，请检查佩戴。
                 </ThemedText>
               )}
               {health && health.bodyTemp >= 42 && (
@@ -264,10 +252,7 @@ export default function DashboardScreen() {
               {vitalsOpen && (
                 <View style={[styles.explanation, { backgroundColor: theme.background }]}>
                   <ThemedText type="small" themeColor="textSecondary">
-                    温度是项圈传感器上报值，不能独立判断宠物是否发热。无效、未更新的读数不会作为当前值显示。
-                  </ThemedText>
-                  <ThemedText type="small" themeColor="textSecondary">
-                    呼吸、HRV和环境温度等参数可在设备诊断中查看。
+                    温度来自项圈传感器，不等同于体温。
                   </ThemedText>
                   <Pressable
                     accessibilityRole="button"
@@ -283,7 +268,7 @@ export default function DashboardScreen() {
             </View>
             <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
               <View style={styles.rowBetween}>
-                <ThemedText style={styles.sectionTitle}>今天发生了什么</ThemedText>
+                <ThemedText style={styles.sectionTitle}>今日记录</ThemedText>
                 <ThemedText type="small" themeColor="textSecondary">
                   {hasCoverage ? `已观测${duration(summary!.observedSeconds)}` : '尚未开始观测'}
                 </ThemedText>
@@ -305,15 +290,7 @@ export default function DashboardScreen() {
                   compact
                 />
               </View>
-              <ThemedText type="small" themeColor="textSecondary">
-                仅统计实际观测时段；静止不等于睡眠，片段不等于单声次数。
-              </ThemedText>
               <SoundTimeline events={data?.events ?? []} hasCoverage={hasCoverage} />
-              {data && (
-                <ThemedText type="small" themeColor="textSecondary">
-                  统计更新于 {clockTime(data.range.endAt)}
-                </ThemedText>
-              )}
             </View>
             <TrendPanel data={data} period={period} onPeriod={setPeriod} busy={busy} />
             {pet.petgif_id && (
@@ -323,14 +300,8 @@ export default function DashboardScreen() {
                 style={[styles.card, { backgroundColor: theme.backgroundElement }]}
               >
                 <ThemedText type="smallBold">制作运动日记 ›</ThemedText>
-                <ThemedText type="small" themeColor="textSecondary">
-                  用今天真实的行走记录，留下和它的回忆。
-                </ThemedText>
               </Pressable>
             )}
-            <ThemedText type="small" themeColor="textSecondary" style={styles.footer}>
-              识别结果是观测记录，不替代对宠物状态的实际观察。
-            </ThemedText>
           </>
         ) : (
           !busy && (
@@ -430,5 +401,4 @@ const styles = StyleSheet.create({
   button: { alignSelf: 'flex-start', paddingHorizontal: 18, paddingVertical: 12, borderRadius: 14 },
   notice: { padding: 16, borderRadius: 16, gap: 8 },
   tap: { paddingVertical: 6 },
-  footer: { textAlign: 'center', paddingHorizontal: 12 },
 });

@@ -4,7 +4,7 @@ import Svg, { Circle, Line, Path, Text as SvgText } from 'react-native-svg';
 
 import { ThemedText } from '@/components/themed-text';
 import { useTheme } from '@/hooks/use-theme';
-import { chartSegments, clockTime, trendScale } from '@/services/observation-view';
+import { chartSegments, trendScale } from '@/services/observation-view';
 import type { MetricKey, ObservationPeriod, Observations } from '@/types/observations';
 
 const METRICS: { key: MetricKey; name: string; unit: string; decimals: number }[] = [
@@ -62,13 +62,8 @@ export function TrendPanel({
       >
         <View style={styles.titleGroup}>
           <ThemedText style={styles.title}>健康趋势</ThemedText>
-          {!open && (
-            <ThemedText type="small" themeColor="textSecondary">
-              按需查看历史变化
-            </ThemedText>
-          )}
         </View>
-        <ThemedText style={{ color: theme.tint }}>{open ? '收起 −' : '查看 ＋'}</ThemedText>
+        <ThemedText style={{ color: theme.tint }}>{open ? '−' : '＋'}</ThemedText>
       </Pressable>
       {open && (
         <View style={styles.body}>
@@ -242,14 +237,9 @@ export function TrendPanel({
             </View>
           )}
           <ThemedText type="small" themeColor="textSecondary">
-            {period === 'day' ? '每点为小时均值' : '每点为日均值'} · 缺失时段留空
+            {period === 'day' ? '小时均值' : '日均值'}
             {summary?.count ? ` · ${summary.count}个有效读数` : ''}
           </ThemedText>
-          {validPeriod && (
-            <ThemedText type="small" themeColor="textSecondary">
-              截至 {clockTime(data.range.endAt)} · 历史保留{data.retentionDays}天
-            </ThemedText>
-          )}
         </View>
       )}
     </View>

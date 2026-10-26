@@ -102,49 +102,40 @@ export function PetHero({
           <ThemedText type="smallBold">{actionLabel}</ThemedText>
         </View>
       </Pressable>
-      <View style={styles.caption}>
-        {current ? (
-          <View style={[styles.sound, { backgroundColor: theme.tintBackground }]}>
-            <SymbolView
-              name={{ ios: 'waveform', android: 'graphic_eq', web: 'graphic_eq' }}
-              size={14}
-              tintColor={theme.tint}
-            />
-            <ThemedText type="small" style={{ color: theme.tint }}>
-              {sound}
-              {experimental ? ' · 实验性' : ''}
-            </ThemedText>
-          </View>
-        ) : (
-          <ThemedText type="small" themeColor="textSecondary" style={styles.centered}>
-            {pet.device_id ? '等它重新连接，再看看它在做什么' : '连接项圈，让它的动作同步到这里'}
-          </ThemedText>
-        )}
-        {current && media.actionKey && !animation && (
-          <ThemedText type="small" themeColor="textSecondary" style={styles.centered}>
-            {media.animationAvailable
-              ? '动作动画暂时无法加载，显示头像'
-              : '这个动作还没有动画，先用头像陪伴你'}
-          </ThemedText>
-        )}
-        {failed.length > 0 && (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="重试宠物形象"
-            hitSlop={8}
-            onPress={() => setFailures({ petId: pet.id, refreshVersion, urls: [] })}
-          >
-            <ThemedText type="small" style={{ color: theme.tint }}>
-              重试形象
-            </ThemedText>
-          </Pressable>
-        )}
-      </View>
+      {(current || failed.length > 0) && (
+        <View style={styles.caption}>
+          {current && (
+            <View style={[styles.sound, { backgroundColor: theme.tintBackground }]}>
+              <SymbolView
+                name={{ ios: 'waveform', android: 'graphic_eq', web: 'graphic_eq' }}
+                size={14}
+                tintColor={theme.tint}
+              />
+              <ThemedText type="small" style={{ color: theme.tint }}>
+                {sound}
+                {experimental ? ' · 实验性' : ''}
+              </ThemedText>
+            </View>
+          )}
+          {failed.length > 0 && (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="重试宠物形象"
+              hitSlop={8}
+              onPress={() => setFailures({ petId: pet.id, refreshVersion, urls: [] })}
+            >
+              <ThemedText type="small" style={{ color: theme.tint }}>
+                重试形象
+              </ThemedText>
+            </Pressable>
+          )}
+        </View>
+      )}
     </View>
   );
 }
 const styles = StyleSheet.create({
-  hero: { alignItems: 'center', gap: 18, paddingTop: 4, paddingBottom: 2 },
+  hero: { alignItems: 'center', gap: 18, paddingTop: 4, paddingBottom: 12 },
   ring: {
     width: 176,
     height: 176,
@@ -185,5 +176,4 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 5,
   },
-  centered: { textAlign: 'center', fontSize: 12 },
 });
