@@ -1,4 +1,5 @@
 import { Image } from 'expo-image';
+import { SymbolView } from 'expo-symbols';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 import {
@@ -42,6 +43,7 @@ export default function UserScreen() {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [commentsFor, setCommentsFor] = useState<Post | null>(null);
   const [followListKind, setFollowListKind] = useState<'followers' | 'following' | null>(null);
@@ -49,7 +51,11 @@ export default function UserScreen() {
 
   const sequence = useRef(0);
   const load = useCallback(async () => {
-    if (!Number.isFinite(userId)) return;
+    if (!Number.isFinite(userId)) {
+      setLoadError('用户不存在或已注销');
+      setLoading(false);
+      return;
+    }
     const current = ++sequence.current;
     try {
       const [profileData, feedData] = await Promise.all([
@@ -59,8 +65,9 @@ export default function UserScreen() {
       if (current !== sequence.current) return;
       setProfile(profileData.profile);
       setPosts(feedData.posts);
+      setLoadError('');
     } catch {
-      // 下拉重试
+      if (current === sequence.current) setLoadError('资料加载失败，请检查网络后重试');
     } finally {
       if (current === sequence.current) {
         setLoading(false);
@@ -134,11 +141,52 @@ export default function UserScreen() {
       }
     >
       <ThemedView style={[styles.container, { paddingTop: insets.top + Spacing.three }]}>
-        <Pressable onPress={() => router.back()} hitSlop={10} style={styles.back}>
-          <ThemedText type="smallBold">← 返回</ThemedText>
+        <Pressable
+          onPress={() => router.back()}
+          hitSlop={10}
+          accessibilityRole="button"
+          accessibilityLabel="返回"
+          style={styles.back}
+        >
+          <SymbolView
+            name={{ ios: 'chevron.left', android: 'arrow_back', web: 'arrow_back' }}
+            size={20}
+            tintColor={theme.tint}
+          />
+          <ThemedText type="smallBold" style={{ color: theme.tint }}>
+            返回
+          </ThemedText>
         </Pressable>
 
-        {loading || !profile ? (
+        {loading ? (
+          <View style={styles.center}>
+            <ActivityIndicator color={theme.tint} />
+          </View>
+        ) : loadError && !profile ? (
+          <View style={styles.center}>
+            <ThemedText style={styles.errorEmoji}>🐾</ThemedText>
+            <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
+              {loadError}
+            </ThemedText>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="重试加载"
+              onPress={() => {
+                setLoading(true);
+                void load();
+              }}
+              style={({ pressed }) => [
+                styles.retryButton,
+                { backgroundColor: theme.tint },
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <ThemedText type="smallBold" style={{ color: '#ffffff' }}>
+                重试
+              </ThemedText>
+            </Pressable>
+          </View>
+        ) : !profile ? (
           <View style={styles.center}>
             <ActivityIndicator color={theme.tint} />
           </View>
@@ -211,9 +259,7 @@ export default function UserScreen() {
                     ) : (
                       <ThemedText style={{ fontSize: 22 }}>{pet.avatar_emoji}</ThemedText>
                     )}
-                    <ThemedText type="small" style={styles.petName}>
-                      {pet.name}
-                    </ThemedText>
+                    <ThemedText type="small">{pet.name}</ThemedText>
                   </View>
                 ))}
               </ScrollView>
@@ -314,8 +360,22 @@ const styles = StyleSheet.create({
     paddingBottom: Spacing.six,
     gap: Spacing.three,
   },
-  back: { alignSelf: 'flex-start', marginBottom: -Spacing.two },
+  back: {
+    alignSelf: 'flex-start',
+    marginBottom: -Spacing.two,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
   center: { alignItems: 'center', paddingVertical: Spacing.six },
+  errorEmoji: { fontSize: 38 },
+  centerText: { textAlign: 'center', paddingVertical: Spacing.two },
+  retryButton: {
+    borderRadius: 14,
+    paddingHorizontal: Spacing.five,
+    paddingVertical: 8,
+    marginTop: Spacing.two,
+  },
   headerCard: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
   avatar: {
     width: 64,
@@ -339,7 +399,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.three,
     paddingVertical: 8,
   },
-  petName: { color: '#3A2E26' },
   feed: { gap: Spacing.four },
   empty: { textAlign: 'center', paddingVertical: Spacing.five },
 });

@@ -42,7 +42,12 @@ export default function MonitorScreen() {
   return (
     <ScrollView style={{ backgroundColor: theme.background }} contentContainerStyle={styles.scroll}>
       <View style={[styles.container, { paddingTop: insets.top + 20 }]}>
-        <Pressable accessibilityRole="button" onPress={() => router.back()} style={styles.tap}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="返回"
+          onPress={() => router.back()}
+          style={styles.tap}
+        >
           <ThemedText style={{ color: theme.tint }}>‹ 返回</ThemedText>
         </Pressable>
         <ThemedText style={styles.title}>项圈诊断</ThemedText>
