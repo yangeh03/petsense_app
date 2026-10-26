@@ -1,7 +1,9 @@
 """PetGIF 外部服务代理（API key 只存服务端）：形象生成 / 日记 / 户型图 / 一键发帖。"""
 
 import os
+import json
 import secrets
+import shutil
 import time
 
 import requests
@@ -11,7 +13,7 @@ from sqlalchemy import select
 from petsense import config
 from petsense.auth.routes import require_app_user
 from petsense.db import session_scope, utc_now
-from petsense.db.models import Pet, Post
+from petsense.db.models import Pet, PetgifDiaryJob, Post
 
 bp = Blueprint('petgif', __name__, url_prefix='/api/app/petgif')
 
@@ -20,6 +22,10 @@ try:
 except OSError:
     PETGIF_KEY = ''
 PETGIF_CACHE = {'at': 0.0, 'pets': {}}
+PETGIF_AVATAR_TEMPLATES = {
+    'marni': {'petgif_id': '0104965e-0ea3-4b79-92a6-975af775950b', 'name': 'Marni'},
+    'donggua': {'petgif_id': 'f02154ee-193d-4c6c-98e7-26d86ebf67ba', 'name': '冬瓜'},
+}
 
 
 def petgif_headers():
@@ -45,11 +51,20 @@ def petgif_simplify(pet):
         assets = info.get('assets') or {}
         gif = petgif_public((assets.get('colorGif') or {}).get('publicUrl'))
         if gif:
-            behaviors[key] = {
+            behavior = {
                 'status': info.get('status'),
                 'gifUrl': gif,
                 'videoUrl': petgif_public((assets.get('video') or {}).get('publicUrl')),
             }
+            states = {}
+            for state, state_info in (info.get('states') or {}).items():
+                state_assets = state_info.get('assets') or {}
+                state_gif = petgif_public((state_assets.get('colorGif') or {}).get('publicUrl'))
+                if state_gif:
+                    states[state] = {'gifUrl': state_gif}
+            if states:
+                behavior['states'] = states
+            behaviors[key] = behavior
     card = petgif_public((pet.get('characterCard') or {}).get('publicUrl'))
     diaries = []
     for diary in pet.get('diaries') or []:
@@ -100,6 +115,108 @@ def app_petgif_pet_route(petgif_id):
         return {'success': True, 'pet': app_petgif_pet(petgif_id)}
     except requests.RequestException as exc:
         return {'success': False, 'message': f'PetGIF 服务不可达：{exc}'}, 502
+
+
+@bp.route('/avatar-templates')
+def app_petgif_avatar_templates():
+    """返回可复用动画目录；客户端只接触本地模板键，不接触上游 ID。"""
+    user, error = require_app_user()
+    if error:
+        return error
+    templates = []
+    try:
+        for template_id in PETGIF_AVATAR_TEMPLATES:
+            templates.append(app_petgif_avatar_template(template_id))
+    except requests.RequestException:
+        return {'success': False, 'message': '动画模板暂时不可用'}, 502
+    return {'success': True, 'templates': templates}
+
+
+def app_petgif_avatar_template(template_id):
+    metadata = PETGIF_AVATAR_TEMPLATES.get(template_id)
+    if metadata is None:
+        return None
+    pet = app_petgif_pet(metadata['petgif_id'])
+    return {
+        'id': template_id,
+        'name': metadata['name'],
+        'previewUrl': pet.get('characterCardUrl'),
+        'characterCardUrl': pet.get('characterCardUrl'),
+        'behaviors': pet.get('behaviors') or {},
+    }
+
+
+@bp.route('/pets/<int:pet_id>/diaries', methods=['POST'])
+def app_petgif_diary_job_create(pet_id):
+    user, error = require_app_user()
+    if error:
+        return error
+    from petsense.petgif import diary_jobs
+
+    try:
+        key = diary_jobs.validate_idempotency_key(request.headers.get('Idempotency-Key', ''))
+    except ValueError as exc:
+        return {'success': False, 'message': str(exc)}, 400
+    with session_scope() as session:
+        pet = session.execute(select(Pet).where(
+            Pet.id == pet_id, Pet.user_id == user['id'],
+        )).scalar_one_or_none()
+        if pet is None:
+            return {'success': False, 'message': '宠物档案不存在'}, 404
+        existing = session.execute(select(PetgifDiaryJob).where(
+            PetgifDiaryJob.user_id == user['id'], PetgifDiaryJob.pet_id == pet_id,
+            PetgifDiaryJob.idempotency_key == key,
+        )).scalar_one_or_none()
+        if existing is not None:
+            return {'success': True, **diary_jobs.job_dict(existing)}, 202
+        preset_ids = {value['petgif_id'] for value in PETGIF_AVATAR_TEMPLATES.values()}
+        if not pet.petgif_id or pet.petgif_id in preset_ids:
+            return {'success': False, 'message': '运动日记需要你自己的 PetGIF 数字形象'}, 409
+        petgif_id = pet.petgif_id
+    source = request.form if request.mimetype == 'multipart/form-data' else (request.get_json(silent=True) or {})
+    try:
+        fields = diary_jobs.validate_input(source)
+        paths = diary_jobs.store_photos(request.files.getlist('photos'))
+    except ValueError as exc:
+        return {'success': False, 'message': str(exc)}, 400
+    try:
+        job, reused = diary_jobs.create_job(user['id'], pet_id, petgif_id, key, fields, paths)
+    except Exception:
+        diary_jobs.remove_photos(paths)
+        raise
+    if not reused:
+        diary_jobs.enqueue_diary_job(job.id)
+    return {'success': True, **diary_jobs.job_dict(job)}, 202
+
+
+@bp.route('/diary-jobs/<job_id>')
+def app_petgif_diary_job_get(job_id):
+    user, error = require_app_user()
+    if error:
+        return error
+    from petsense.petgif.diary_jobs import job_dict
+    with session_scope() as session:
+        job = session.execute(select(PetgifDiaryJob).where(
+            PetgifDiaryJob.id == job_id, PetgifDiaryJob.user_id == user['id'],
+        )).scalar_one_or_none()
+    if job is None:
+        return {'success': False, 'message': '日记任务不存在'}, 404
+    return {'success': True, **job_dict(job)}
+
+
+@bp.route('/pets/<int:pet_id>/diary-jobs')
+def app_petgif_diary_job_history(pet_id):
+    user, error = require_app_user()
+    if error:
+        return error
+    with session_scope() as session:
+        owned = session.execute(select(Pet.id).where(
+            Pet.id == pet_id, Pet.user_id == user['id'],
+        )).scalar_one_or_none()
+    if owned is None:
+        return {'success': False, 'message': '宠物档案不存在'}, 404
+    from petsense.petgif.diary_jobs import diary_job_history
+    return {'success': True, 'jobs': diary_job_history(user['id'], pet_id)}
 
 
 @bp.route('/pets', methods=['POST'])
@@ -169,82 +286,9 @@ def app_petgif_create_sync():
 
 
 @bp.route('/pet/<petgif_id>/diary', methods=['POST'])
-def app_petgif_diary(petgif_id):
-    """运动日记生成：兼容 JSON / form / multipart（App 端 JSON 无照片时自动用宠物形象照兜底）。
-
-    外部服务要求 multipart 且至少一张照片；实测全流程约 2 分钟，轮询上限 200 秒。
-    """
-    payload_json = request.get_json(silent=True) or {}
-    fields = {}
-    for source in (request.form, payload_json):
-        for key in ('durationMin', 'steps', 'places', 'notes'):
-            if source.get(key) is not None:
-                fields[key] = source[key]
-    try:
-        duration = max(1, min(600, int(float(fields.get('durationMin', 30) or 30))))
-        steps = max(0, min(100000, int(float(fields.get('steps', 0) or 0))))
-    except (TypeError, ValueError):
-        return {'success': False, 'message': '时长与步数需为数字'}, 400
-    places = str(fields.get('places', ''))[:200]
-    notes = str(fields.get('notes', ''))[:200]
-
-    forward_files = []
-    for index, photo in enumerate(request.files.getlist('photos')[:6]):
-        forward_files.append(
-            ('photos', (photo.filename or f'photo_{index}.jpg', photo.stream, photo.mimetype or 'image/jpeg'))
-        )
-
-    # 无照片兜底：用宠物形象（角色卡 → 行为首帧）作为日记底图，保证一键可生成
-    if not forward_files:
-        fallback_url = None
-        try:
-            petgif = app_petgif_pet(petgif_id)
-            fallback_url = petgif.get('characterCardUrl')
-        except requests.RequestException:
-            pass
-        if not fallback_url:
-            fallback_url = config.PETGIF_STORAGE_PUBLIC + f'pets/{petgif_id}/character-card.png'
-        try:
-            image = requests.get(fallback_url, timeout=30)
-            image.raise_for_status()
-            forward_files.append(('photos', ('cover.png', image.content, 'image/png')))
-        except requests.RequestException:
-            return {'success': False, 'message': '生成失败：缺少照片且兜底图不可用'}, 502
-
-    data = {'durationMin': duration, 'steps': steps, 'places': places, 'notes': notes, 'petId': petgif_id}
-    try:
-        response = requests.post(
-            config.PETGIF_BASE + f'/pets/{petgif_id}/diaries', headers=petgif_headers(),
-            files=forward_files, data=data, timeout=120,
-        )
-        created = response.json() if response.ok else {}
-    except (requests.RequestException, ValueError):
-        created = {}
-    diary_id = (created.get('diary') or {}).get('id') or created.get('id')
-    if not diary_id:
-        message = created.get('error') or f'日记生成任务创建失败（HTTP {response.status_code}）'
-        return {'success': False, 'message': message}, 502
-
-    deadline = time.time() + 200
-    diary = {}
-    while time.time() < deadline:
-        try:
-            raw = petgif_get(f'/pets/{petgif_id}/diaries/{diary_id}')
-        except requests.RequestException:
-            raw = {}
-        # 响应为 {diary: {...}, active: ...} 嵌套结构
-        diary = raw.get('diary') or raw
-        if str(diary.get('status', '')) in ('complete', 'failed'):
-            break
-        time.sleep(4)
-    image = (diary.get('assets') or {}).get('image') or {}
-    success = str(diary.get('status', '')) == 'complete' and bool(image.get('publicUrl'))
-    return {
-        'success': success,
-        'status': diary.get('status') or 'unknown',
-        'posterUrl': petgif_public(image.get('publicUrl')),
-        'stats': diary.get('stats') or {},
-    }
+def app_petgif_diary_legacy(petgif_id):
+    """Disable the old unauthenticated blocking route; use account-scoped job APIs."""
+    return {'success': False, 'message': '请通过宠物档案创建运动日记'}, 410
 
 
 @bp.route('/diary-post', methods=['POST'])
@@ -257,23 +301,28 @@ def app_petgif_diary_post():
     poster_url = str(body.get('posterUrl', ''))
     caption = str(body.get('caption', '')).strip()[:500]
     location = str(body.get('location', '')).strip()[:80]
-    pet_id = body.get('pet_id')
+    try:
+        pet_id = int(body.get('petId', body.get('pet_id')))
+    except (TypeError, ValueError):
+        return {'success': False, 'message': '缺少有效的宠物档案'}, 400
     if not poster_url.startswith(config.PETGIF_STORAGE_PUBLIC):
         return {'success': False, 'message': '海报地址不受支持'}, 400
+    with session_scope() as session:
+        owned = session.execute(select(Pet.id).where(
+            Pet.id == pet_id, Pet.user_id == user['id'],
+        )).scalar_one_or_none()
+    if not owned:
+        return {'success': False, 'message': '宠物档案不存在'}, 404
     try:
         response = requests.get(poster_url, timeout=30)
         response.raise_for_status()
     except requests.RequestException:
         return {'success': False, 'message': '海报下载失败'}, 502
     filename = f'diary_{secrets.token_hex(6)}_{int(time.time())}.png'
+    os.makedirs(config.UPLOADS_DIR, exist_ok=True)
     with open(os.path.join(config.UPLOADS_DIR, filename), 'wb') as handle:
         handle.write(response.content)
     with session_scope() as s:
-        if pet_id:
-            owned = s.execute(select(Pet.id).where(Pet.id == pet_id,
-                                                   Pet.user_id == user['id'])).scalar_one_or_none()
-            if not owned:
-                pet_id = None
         post = Post(user_id=user['id'], pet_id=pet_id, image_path=filename,
                     caption=caption or '今天的运动日记 🏃', location_text=location,
                     created_at=utc_now())

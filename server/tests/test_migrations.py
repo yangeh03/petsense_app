@@ -11,7 +11,8 @@ from petsense import db
 
 EXPECTED_TABLES = {'users', 'auth_sessions', 'pets', 'daily_stats', 'home_layout', 'posts',
                    'post_likes', 'comments', 'follows', 'readings', 'action_predictions',
-                   'collection_sessions', 'collection_frames', 'collection_videos', 'journal_crc', 'devices', 'telemetry_latest', 'telemetry_minutes', 'telemetry_events'}
+                   'collection_sessions', 'collection_frames', 'collection_videos', 'journal_crc', 'devices',
+                   'telemetry_latest', 'telemetry_minutes', 'telemetry_events', 'petgif_diary_jobs'}
 
 
 class MigrationTests(unittest.TestCase):
@@ -23,6 +24,8 @@ class MigrationTests(unittest.TestCase):
     def test_upgrade_creates_all_tables(self):
         db.init_db()
         self.assertTrue(EXPECTED_TABLES <= set(inspect(db.engine()).get_table_names()))
+        self.assertIn('avatar_template_id', {column['name'] for column in
+                                              inspect(db.engine()).get_columns('pets')})
 
     def test_downgrade_base_is_clean(self):
         from alembic import command

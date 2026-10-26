@@ -189,6 +189,7 @@ export default function DashboardScreen() {
             <PetHero
               pet={pet}
               petgif={dashboard?.petgif}
+              avatarTemplate={dashboard?.avatarTemplate}
               frame={frame}
               current={current}
               statusLabel={
@@ -289,15 +290,20 @@ export default function DashboardScreen() {
               <SoundTimeline events={data?.events ?? []} />
             </View>
             <TrendPanel data={data} period={period} onPeriod={setPeriod} busy={busy} />
-            {pet.petgif_id && (
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => setDiaryVisible(true)}
-                style={[styles.card, { backgroundColor: theme.backgroundElement }]}
-              >
-                <ThemedText type="smallBold">制作运动日记 ›</ThemedText>
-              </Pressable>
-            )}
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setDiaryVisible(true)}
+              style={[styles.card, { backgroundColor: theme.backgroundElement }]}
+            >
+              <ThemedText type="smallBold">
+                {pet.petgif_id ? '制作运动日记 ›' : '运动日记暂不可用'}
+              </ThemedText>
+              {!pet.petgif_id && (
+                <ThemedText type="small" themeColor="textSecondary">
+                  预设动画仅用于首页展示；需要个人 PetGIF 数字形象才能生成日记。
+                </ThemedText>
+              )}
+            </Pressable>
           </>
         ) : (
           !busy && (
@@ -317,6 +323,7 @@ export default function DashboardScreen() {
           onClose={() => setDiaryVisible(false)}
           petName={pet.name}
           petId={pet.id}
+          userId={user?.id ?? -1}
           petgifId={pet.petgif_id ?? null}
           activeMinutes={Math.floor((summary?.walkingSeconds ?? 0) / 60)}
         />

@@ -73,6 +73,8 @@ def create_app(start_background=True):
         db.Session.remove()
 
     if start_background:
+        from petsense.petgif.diary_jobs import recover_diary_jobs
+        recover_diary_jobs()
         telemetry_realtime.start_ws_ping_loop()
         mqtt_ingest.start_mqtt()
     return app

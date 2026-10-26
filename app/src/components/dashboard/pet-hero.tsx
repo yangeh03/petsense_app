@@ -9,13 +9,14 @@ import { useTheme } from '@/hooks/use-theme';
 import { absoluteUrl } from '@/services/api';
 import { selectPetAvatar } from '@/services/pet-avatar';
 import { soundStatus } from '@/services/sound-view';
-import type { PetgifPet, SocialPet } from '@/types/social';
+import type { PetAvatarTemplate, PetgifPet, SocialPet } from '@/types/social';
 import type { TelemetryFrame } from '@/types/telemetry';
 
 /** Central digital pet. Exact action asset or static avatar; never a different action. */
 export function PetHero({
   pet,
   petgif,
+  avatarTemplate,
   frame,
   current,
   statusLabel,
@@ -25,6 +26,7 @@ export function PetHero({
 }: {
   pet: SocialPet;
   petgif: PetgifPet | null | undefined;
+  avatarTemplate?: PetAvatarTemplate | null;
   frame: TelemetryFrame | null;
   current: boolean;
   statusLabel: string;
@@ -45,7 +47,14 @@ export function PetHero({
   });
   const failed =
     failures.petId === pet.id && failures.refreshVersion === refreshVersion ? failures.urls : [];
-  const media = selectPetAvatar({ pet, petgif, frame, fresh: current, failedUrls: failed });
+  const media = selectPetAvatar({
+    pet,
+    petgif,
+    avatarTemplate,
+    frame,
+    fresh: current,
+    failedUrls: failed,
+  });
   const animation = media.animationUrl;
   const still = media.staticUrl;
   const uri = animation || still;
@@ -73,6 +82,8 @@ export function PetHero({
               source={{ uri: absoluteUrl(uri) }}
               contentFit={animation ? 'contain' : 'cover'}
               autoplay={!!animation}
+              cachePolicy="memory-disk"
+              transition={120}
               recyclingKey={`${pet.id}:${uri}`}
               style={styles.image}
               onError={() =>

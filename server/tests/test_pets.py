@@ -15,6 +15,7 @@ from flask import Flask
 from petsense import db
 from petsense.db.models import AuthSession, Pet, Reading, User
 from petsense.pets import routes as pets_routes
+from petsense.petgif import proxy as petgif_proxy
 from helpers import fresh_db
 from PIL import Image
 
@@ -39,6 +40,7 @@ class PetsTests(unittest.TestCase):
         fresh_db(self)
         app = Flask(__name__)
         app.register_blueprint(pets_routes.bp)
+        app.register_blueprint(petgif_proxy.bp)
         self.client = app.test_client()
 
     def register_and_header(self):
@@ -81,6 +83,35 @@ class PetsTests(unittest.TestCase):
         self.assertRegex(reply['latest']['receivedAt'], r'Z$')
         self.assertEqual(reply['pet']['name'], 'Max')
 
+    def test_dashboard_keeps_personal_identity_and_preset_assets_separate(self):
+        headers = self.register_and_header()
+        with db.session_scope() as s:
+            pet = s.query(Pet).filter_by(user_id=1).one()
+            pet.petgif_id = 'personal-001'
+            pet.avatar_template_id = 'marni'
+        personal = {'id': 'personal-001', 'characterCardUrl': 'https://media.test/personal.png',
+                    'behaviors': {'walk': {'gifUrl': 'https://media.test/personal-walk.gif'}}}
+        template = {'id': 'marni', 'name': 'Marni', 'characterCardUrl': 'https://media.test/marni.png',
+                    'behaviors': {'walk': {'gifUrl': 'https://media.test/marni-walk.gif'}}}
+        with patch.object(pets_routes, 'app_petgif_pet', return_value=personal), \
+             patch.object(pets_routes, 'app_petgif_avatar_template', return_value=template):
+            response = self.client.get('/api/app/dashboard', headers=headers)
+        self.assertEqual(response.json['petgif'], personal)
+        self.assertEqual(response.json['avatarTemplate'], template)
+
+    def test_petgif_simplify_preserves_exact_action_state_media(self):
+        source = {'id': 'fixture', 'behaviors': {'walk': {
+            'status': 'complete',
+            'assets': {'colorGif': {'publicUrl': 'https://qioyo.site/petsenseIMG/storage/walk.gif'}},
+            'states': {'barking': {'assets': {'colorGif': {
+                'publicUrl': 'https://qioyo.site/petsenseIMG/storage/walk-barking.gif'}}}},
+        }}}
+        simplified = petgif_proxy.petgif_simplify(source)
+        self.assertEqual(simplified['behaviors']['walk']['gifUrl'],
+                         'https://qioyo.site/petsenseIMG/storage/walk.gif')
+        self.assertEqual(simplified['behaviors']['walk']['states']['barking']['gifUrl'],
+                         'https://qioyo.site/petsenseIMG/storage/walk-barking.gif')
+
     def test_patch_profile_persists_name_without_changing_device(self):
         headers = self.register_and_header()
         pet_id = self.client.get('/api/app/pets', headers=headers).json['pets'][0]['id']
@@ -100,6 +131,62 @@ class PetsTests(unittest.TestCase):
             with self.subTest(body=body):
                 self.assertEqual(self.client.patch(f'/api/app/pets/{pet_id}',
                                  headers=headers, json=body).status_code, 400)
+
+    def test_patch_persists_and_clears_approved_avatar_template(self):
+        headers = self.register_and_header()
+        pet_id = self.client.get('/api/app/pets', headers=headers).json['pets'][0]['id']
+        selected = self.client.patch(f'/api/app/pets/{pet_id}', headers=headers,
+                                     json={'avatarTemplateId': 'marni'})
+        self.assertEqual(selected.status_code, 200)
+        self.assertEqual(selected.json['pet']['avatar_template_id'], 'marni')
+        self.assertEqual(self.client.get('/api/app/pets', headers=headers).json['pets'][0]
+                         ['avatar_template_id'], 'marni')
+        cleared = self.client.patch(f'/api/app/pets/{pet_id}', headers=headers,
+                                    json={'avatarTemplateId': None})
+        self.assertEqual(cleared.status_code, 200)
+        self.assertIsNone(cleared.json['pet']['avatar_template_id'])
+
+    def test_patch_rejects_unknown_preset_and_preset_for_non_dog(self):
+        headers = self.register_and_header()
+        pet_id = self.client.get('/api/app/pets', headers=headers).json['pets'][0]['id']
+        self.assertEqual(self.client.patch(f'/api/app/pets/{pet_id}', headers=headers,
+                                           json={'avatarTemplateId': 'forged-id'}).status_code, 400)
+        with __import__('petsense.db', fromlist=['session_scope']).session_scope() as session:
+            from petsense.db.models import Pet
+            pet = session.get(Pet, pet_id)
+            pet.species = 'cat'
+        self.assertEqual(self.client.patch(f'/api/app/pets/{pet_id}', headers=headers,
+                                           json={'avatarTemplateId': 'marni'}).status_code, 400)
+
+    def test_multipart_avatar_upload_can_clear_template_with_empty_field(self):
+        headers = self.register_and_header()
+        pet_id = self.client.get('/api/app/pets', headers=headers).json['pets'][0]['id']
+        with db.session_scope() as session:
+            session.get(Pet, pet_id).avatar_template_id = 'marni'
+        result = self.client.patch(
+            f'/api/app/pets/{pet_id}', headers=headers,
+            data={'avatarTemplateId': '', 'avatarMode': 'photo', 'photo': self.photo()},
+        )
+        self.assertEqual(result.status_code, 200)
+        self.assertIsNone(result.json['pet']['avatar_template_id'])
+
+    def test_avatar_template_catalog_is_authenticated_and_allowlisted(self):
+        self.assertEqual(self.client.get('/api/app/petgif/avatar-templates').status_code, 401)
+        headers = self.register_and_header()
+        with patch.object(petgif_proxy, 'app_petgif_pet', side_effect=[
+            {'id': '0104965e-0ea3-4b79-92a6-975af775950b', 'name': 'Marni',
+             'characterCardUrl': 'https://qioyo.site/petsenseIMG/storage/pets/marni/card.png',
+             'behaviors': {'walk': {'gifUrl': 'https://qioyo.site/petsenseIMG/storage/walk.gif'}}},
+            {'id': 'f02154ee-193d-4c6c-98e7-26d86ebf67ba', 'name': '冬瓜',
+             'characterCardUrl': 'https://qioyo.site/petsenseIMG/storage/pets/donggua/card.png',
+             'behaviors': {}}]):
+            response = self.client.get('/api/app/petgif/avatar-templates', headers=headers)
+        self.assertEqual(response.status_code, 200)
+        templates = response.json['templates']
+        self.assertEqual([item['id'] for item in templates], ['marni', 'donggua'])
+        self.assertEqual(templates[0]['behaviors']['walk']['gifUrl'],
+                         'https://qioyo.site/petsenseIMG/storage/walk.gif')
+        self.assertNotIn('petgifId', templates[0])
 
     def test_patch_requires_owner_and_login(self):
         from test_devices import seed_user, make_session_token

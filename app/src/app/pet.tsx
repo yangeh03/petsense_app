@@ -17,6 +17,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { PetProfileForm } from '@/components/pets/pet-profile-form';
+import { AvatarTemplatePicker } from '@/components/pets/avatar-template-picker';
 import { ThemedText } from '@/components/themed-text';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
@@ -264,6 +265,15 @@ export default function PetScreen() {
                     }}
                     onPickPhoto={() => void pickPhoto()}
                   />
+                  {draft.species === 'dog' && (
+                    <AvatarTemplatePicker
+                      selectedId={draft.avatarTemplateId}
+                      disabled={saving}
+                      onChange={(avatarTemplateId) =>
+                        setDraft((current) => (current ? { ...current, avatarTemplateId } : null))
+                      }
+                    />
+                  )}
                   {!!error && (
                     <ThemedText
                       accessibilityRole="alert"

@@ -27,6 +27,7 @@ AUDIO_DIR = str(RUNTIME_ROOT / 'audio_files')
 CLOUD_DATA_DIR = str(RUNTIME_ROOT / 'cloud_data')
 ACTION_DASHBOARD_DIR = str(RUNTIME_ROOT / 'action-dashboard')
 UPLOADS_DIR = str(RUNTIME_ROOT / 'uploads')
+PETGIF_TEMP_DIR = str(RUNTIME_ROOT / 'petgif_tmp')
 COLLECTION_ROOT = str(RUNTIME_ROOT / 'collection_data')
 ACTION_MODEL_PATH = os.environ.get('PETSENSE_ACTION_MODEL',
                                    str(RUNTIME_ROOT / 'models' / 'random_forest_1s.joblib'))
@@ -47,5 +48,9 @@ ACTIVE_DELTA_G = 0.25
 SLEEP_UTC_HOURS = set(range(14, 24)) | {0}  # 北京时间 22:00–08:00
 
 # ── PetGIF 外部服务（key 只存服务端）──
-PETGIF_BASE = 'https://qioyo.site/petsenseIMG/api'
-PETGIF_STORAGE_PUBLIC = 'https://qioyo.site/petsenseIMG/storage/'
+PETGIF_BASE = os.environ.get('PETSENSE_PETGIF_BASE', 'https://qioyo.site/petsenseIMG/api').rstrip('/')
+PETGIF_STORAGE_PUBLIC = os.environ.get(
+    'PETSENSE_PETGIF_STORAGE_PUBLIC', 'https://qioyo.site/petsenseIMG/storage/'
+).rstrip('/') + '/'
+PETGIF_DIARY_POLL_INTERVAL_S = float(os.environ.get('PETSENSE_PETGIF_DIARY_POLL_INTERVAL', '4'))
+PETGIF_DIARY_POLL_TIMEOUT_S = float(os.environ.get('PETSENSE_PETGIF_DIARY_POLL_TIMEOUT', '220'))
