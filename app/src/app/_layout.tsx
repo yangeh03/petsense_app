@@ -21,6 +21,7 @@ export default function RootLayout() {
           <Stack.Screen name="user" />
           <Stack.Screen name="monitor" />
           <Stack.Screen name="pet" />
+          <Stack.Screen name="collect" options={{ gestureEnabled: false }} />
         </Stack>
       </AuthProvider>
     </ThemeProvider>

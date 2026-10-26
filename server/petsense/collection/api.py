@@ -5,6 +5,7 @@ from datetime import datetime, timezone, timedelta
 import hashlib
 import hmac
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -12,12 +13,13 @@ import subprocess
 import threading
 import time
 
-from flask import Blueprint, request, abort, send_file
+from flask import Blueprint, request, abort, send_file, g
 from sqlalchemy import func, select, update
 
 from petsense import db
+from petsense.auth.routes import app_user_from_request
 from petsense.db import session_scope
-from petsense.db.models import CollectionFrame, CollectionSession, CollectionVideo, JournalCrc
+from petsense.db.models import CollectionFrame, CollectionSession, CollectionVideo, JournalCrc, Device
 
 EVENTS = ['01_standing', '02_sitting', '03_resting', '04_sleeping', '05_walking',
           '06_running', '07_eating', '08_rolling', '09_toilet', '10_jumping', 'calibration']
@@ -146,7 +148,7 @@ class CollectionStore:
         def collection_headers(response):
             response.headers['Cache-Control'] = 'no-store'
             response.headers['Access-Control-Allow-Origin'] = '*'
-            response.headers['Access-Control-Allow-Headers'] = 'Authorization, Content-Type, X-Chunk-SHA256'
+            response.headers['Access-Control-Allow-Headers'] = 'Authorization, Content-Type, X-Chunk-SHA256, X-Petsense-Session'
             response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, OPTIONS'
             return response
 
@@ -154,9 +156,35 @@ class CollectionStore:
             @functools.wraps(fn)
             def wrapper(*args, **kwargs):
                 credential = request.headers.get('Authorization', '').removeprefix('Bearer ')
-                if not self.token or not hmac.compare_digest(credential, self.token):
-                    abort(401)
                 try:
+                    g.collection_user = None
+                    is_admin = bool(self.token and hmac.compare_digest(credential, self.token))
+                    if not is_admin:
+                        user = app_user_from_request()
+                        if not user:
+                            abort(401)
+                        g.collection_user = user['id']
+                        device = kwargs.get('device')
+                        sid = kwargs.get('sid')
+                        if fn.__name__ == 'create_session':
+                            body = request.get_json() or {}
+                            device, sid = body.get('device'), body.get('id')
+                        with session_scope() as s:
+                            if sid:
+                                row = s.get(CollectionSession, self.ident(sid))
+                                if row:
+                                    doc = json.loads(row.document)
+                                    if doc.get('owner_id') != user['id']:
+                                        abort(404)
+                                    # Existing recordings stay private to their creator after transfer.
+                                    if fn.__name__ == 'control':
+                                        device = doc['device']
+                                elif fn.__name__ != 'create_session':
+                                    abort(404)
+                            if device:
+                                owned = s.get(Device, self.ident(device))
+                                if not owned or owned.owner_id != user['id']:
+                                    abort(404)
                     return fn(*args, **kwargs)
                 except (ValueError, KeyError, TypeError) as error:
                     return {'error': str(error)}, 400
@@ -179,7 +207,8 @@ class CollectionStore:
             sid = self.ident(body['id'])
             device = self.ident(body['device'])
             doc = dict(schema_version=2, id=sid, device=device, state='created',
-                       created_utc_ms=time.time_ns() // 1000000, clock=body.get('clock'))
+                       created_utc_ms=time.time_ns() // 1000000, clock=body.get('clock'),
+                       owner_id=g.collection_user)
             with self.lock, session_scope() as s:
                 previous = s.execute(select(CollectionSession.document)
                                      .where(CollectionSession.id == sid)).scalar_one_or_none()
@@ -230,9 +259,13 @@ class CollectionStore:
         def quality(sid):
             self.ident(sid)
             with session_scope() as s:
+                session = s.get(CollectionSession, sid)
+                if not session:
+                    abort(404)
+                session_device = json.loads(session.document)['device']
                 rows = s.execute(select(CollectionFrame.boot, CollectionFrame.seq,
                                         CollectionFrame.mono_us, CollectionFrame.document)
-                                 .where(CollectionFrame.session == sid)
+                                 .where(CollectionFrame.session == sid, CollectionFrame.device == session_device)
                                  .order_by(CollectionFrame.boot, CollectionFrame.seq)).fetchall()
             gaps = []
             previous = None
@@ -255,6 +288,8 @@ class CollectionStore:
                 statuses = copy.deepcopy(list(self.latest.items()))
             with session_scope() as s:
                 for device, status in statuses:
+                    if device != session_device:
+                        continue
                     for file in (status.get('audit') or {}).get('files', []):
                         name = Path(file['path']).name
                         if not name.startswith(sid + '_'):
@@ -383,11 +418,13 @@ class CollectionStore:
                 folder, doc, complete = video_folder(sid, vid)
                 body = request.get_json()
                 position = float(body['video_ms'])
-                if not complete or position < 0 or position > (doc.get('duration_ms') or 0):
+                if not complete or not math.isfinite(position) or position < 0 or position > (doc.get('duration_ms') or 0):
                     raise ValueError('invalid video position')
                 with session_scope() as s:
+                    session_device = json.loads(s.get(CollectionSession, sid).document)['device']
                     row = s.execute(select(CollectionFrame.document)
                                     .where(CollectionFrame.session == sid,
+                                           CollectionFrame.device == session_device,
                                            CollectionFrame.boot == body['boot'],
                                            CollectionFrame.seq == int(body['seq']))).scalar_one_or_none()
                     if not row:
@@ -395,12 +432,20 @@ class CollectionStore:
                     frame = json.loads(row)
                     if not frame.get('marker_id') or not frame.get('utc_us'):
                         raise ValueError('marker has no synchronized UTC')
+                    if doc.get('calibration_marker') and doc['calibration_marker'] != frame['marker_id']:
+                        raise ValueError('marker belongs to another calibration clip')
                     doc['alignment'] = dict(method='manual_visual_imu_marker', sensor_boot=body['boot'],
                         sensor_seq=body['seq'], marker_id=frame['marker_id'], video_ms=position,
                         aligned_start_utc_ms=frame['utc_us'] / 1000 - position,
                         sensor_clock_uncertainty_us=frame.get('clock_uncertainty_us'),
                         sample_quantization_ms=100, visual_error_ms='not_measured')
                     doc['time_alignment'] = 'manual_marker_confirmed'
+                    anchor = doc['alignment']['aligned_start_utc_ms']
+                    doc['aligned_labels'] = [
+                        {**label, 'start_utc_ms': anchor + label['start_ms'],
+                         'end_utc_ms': anchor + label['end_ms']}
+                        for label in doc.get('labels', [])
+                    ]
                     s.execute(update(CollectionVideo).where(CollectionVideo.id == vid)
                               .values(document=json.dumps(doc)))
                 self.atomic_json(folder / 'annotation.json', doc)
