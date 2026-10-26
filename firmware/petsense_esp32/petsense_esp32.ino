@@ -5,83 +5,18 @@
 #include <math.h>
 #include <string.h>
 #include "driver/i2s.h"
-
-// =====================================================
-// 调试输出：UART0
-// ESP32-S3 默认 UART0: TX=GPIO43, RX=GPIO44
-// =====================================================
-HardwareSerial DebugUart(0);
-
-class DualDebugSerial : public Print {
-public:
-  explicit DualDebugSerial(HardwareSerial &uart) : _uart(uart) {}
-
-  void begin(unsigned long baud, uint32_t config, int8_t rxPin, int8_t txPin) {
-    Serial.begin(baud);
-    _uart.begin(baud, config, rxPin, txPin);
-  }
-
-  size_t write(uint8_t value) override {
-    size_t written = _uart.write(value);
-    if (Serial) {
-      Serial.write(value);
-    }
-    return written;
-  }
-
-  size_t write(const uint8_t *buffer, size_t size) override {
-    size_t written = _uart.write(buffer, size);
-    if (Serial) {
-      Serial.write(buffer, size);
-    }
-    return written;
-  }
-
-  int available() {
-    return (Serial ? Serial.available() : 0) + _uart.available();
-  }
-
-  int read() {
-    if (Serial && Serial.available()) {
-      return Serial.read();
-    }
-    return _uart.read();
-  }
-
-  void flush() {
-    if (Serial) {
-      Serial.flush();
-    }
-    _uart.flush();
-  }
-
-  int printf(const char *format, ...) {
-    char buffer[256];
-    va_list args;
-    va_start(args, format);
-    int len = vsnprintf(buffer, sizeof(buffer), format, args);
-    va_end(args);
-
-    if (len <= 0) {
-      return len;
-    }
-
-    size_t toWrite = (len < (int)sizeof(buffer)) ? (size_t)len : sizeof(buffer) - 1;
-    write((const uint8_t *)buffer, toWrite);
-    return len;
-  }
-
-private:
-  HardwareSerial &_uart;
-};
-
-DualDebugSerial DebugSerial(DebugUart);
-
 #include "board_config.h"
+#include "uwb_protocol.h"
+
+// =====================================================
+// UART0: BU03 input on RX, USB-UART debug output on TX
+// =====================================================
+HardwareSerial DebugSerial(0);
 
 TwoWire BatteryWire = TwoWire(1);
 HardwareSerial HealthSerial(1);       // UART1, RX=GPIO40, TX=GPIO41
 HardwareSerial ModemSerial(2);
+UwbProtocolParser UwbParser;
 
 // =====================================================
 // 模式切换
@@ -174,6 +109,7 @@ imu_measurement_t imuData;
 bool imuFound = false;
 bool imuHasMag = true;
 bool imuHasBaro = true;
+unsigned long lastImuUploadLogMs = 0;
 
 // =====================================================
 // 健康模块：24字节协议
@@ -258,6 +194,7 @@ unsigned long lastAudioFileUploadAttemptMs = 0;
 unsigned long lastExperimentCommandMs = 0;
 unsigned long lastRecordCommandMs = 0;
 unsigned long lastEventCommandMs = 0;
+unsigned long lastUwbStatusMs = 0;
 
 bool modemReady = false;
 bool mqttConnected = false;
@@ -331,6 +268,8 @@ static float toFloatLE(const uint8_t *bytes) {
 }
 
 void serviceHealthModule();
+void serviceUwbSerial();
+void logUwbStatus();
 bool readMicFrame(size_t &sampleCountOut);
 bool computeAudioFeatures(const int16_t *samples, int n, float &rmsOut, float &zcrOut, float melOut[AUDIO_MEL_BANDS]);
 bool IMU_I2C_ReadAllFlexible(imu_measurement_t *out);
@@ -356,7 +295,40 @@ void stopEventCapture();
 static void appendModemAsyncChar(char ch);
 static bool handleModemAsyncCommands();
 
+void serviceUwbSerial() {
+  while (DebugSerial.available()) {
+    int byteValue = DebugSerial.read();
+    if (byteValue < 0) {
+      break;
+    }
+    UwbParser.push((uint8_t)byteValue, millis());
+  }
+}
+
+void logUwbStatus() {
+  uint32_t now = millis();
+  if (now - lastUwbStatusMs < 5000) {
+    return;
+  }
+  lastUwbStatusMs = now;
+
+  const UwbPacket &packet = UwbParser.latest();
+  DebugSerial.printf(
+      "UWB fresh=%s frames=%lu invalid=%lu dropped=%lu tag=%u seq=%u mask=0x%02X d=[%ld,%ld,%ld]\n",
+      UwbParser.isFresh(now, UWB_STALE_MS) ? "true" : "false",
+      (unsigned long)UwbParser.parsedFrames(),
+      (unsigned long)UwbParser.invalidFrames(),
+      (unsigned long)UwbParser.droppedBytes(),
+      packet.tagId,
+      packet.sequence,
+      packet.anchorMask,
+      (long)packet.distanceMm[0],
+      (long)packet.distanceMm[1],
+      (long)packet.distanceMm[2]);
+}
+
 static void serviceLocalCaptureDuringModemWait() {
+  serviceUwbSerial();
   if (sdLoggingActive) {
     sdLogStep();
   } else {
@@ -996,6 +968,15 @@ void appendFloatArray(String &out, const float *values, int count, int precision
   out += ']';
 }
 
+void appendInt32Array(String &out, const int32_t *values, size_t count) {
+  out += '[';
+  for (size_t i = 0; i < count; i++) {
+    if (i > 0) out += ',';
+    out += String((long)values[i]);
+  }
+  out += ']';
+}
+
 bool batteryReadRegister16(uint8_t reg, uint16_t &value) {
   BatteryWire.beginTransmission(BATTERY_I2C_ADDRESS);
   BatteryWire.write(reg);
@@ -1074,6 +1055,7 @@ void logBatteryReading() {
 }
 
 String buildCloudPayload() {
+  serviceUwbSerial();
   serviceHealthModule();
   updateBatteryReading();
 
@@ -1209,6 +1191,32 @@ String buildCloudPayload() {
   payload += String(healthData.valid ? healthData.bodyTemp : 0.0f, 1);
   payload += ",\"envTemp\":";
   payload += String(healthData.valid ? healthData.envTemp : 0.0f, 1);
+  payload += '}';
+
+  const uint32_t uwbNow = millis();
+  const UwbPacket &uwb = UwbParser.latest();
+  payload += ",\"uwb\":{\"valid\":";
+  payload += UwbParser.isFresh(uwbNow, UWB_STALE_MS) ? "true" : "false";
+  payload += ",\"receivedMs\":";
+  payload += uwb.receivedMs;
+  payload += ",\"timer\":";
+  payload += uwb.timer;
+  payload += ",\"tagId\":";
+  payload += String((unsigned int)uwb.tagId);
+  payload += ",\"anchorId\":";
+  payload += String((unsigned int)uwb.anchorId);
+  payload += ",\"sequence\":";
+  payload += String((unsigned int)uwb.sequence);
+  payload += ",\"anchorMask\":";
+  payload += String((unsigned int)uwb.anchorMask);
+  payload += ",\"kalmanEnabled\":";
+  payload += uwb.kalmanEnabled ? "true" : "false";
+  payload += ",\"distanceMm\":";
+  appendInt32Array(payload, uwb.distanceMm, UWB_DISTANCE_COUNT);
+  payload += ",\"rawMm\":";
+  appendInt32Array(payload, uwb.rawMm, UWB_DISTANCE_COUNT);
+  payload += ",\"kalmanMm\":";
+  appendInt32Array(payload, uwb.kalmanMm, UWB_DISTANCE_COUNT);
   payload += "}}";
 
   return payload;
@@ -1236,6 +1244,7 @@ static bool appendCloudBatchSample() {
     cloudBatchPayload += ',';
   }
 
+  serviceUwbSerial();
   serviceHealthModule();
   updateBatteryReading();
 
@@ -1253,6 +1262,19 @@ static bool appendCloudBatchSample() {
 
   bool imuOk = IMU_I2C_ReadAllFlexible(&imuData);
   serviceHealthModule();
+
+  const unsigned long imuLogNow = millis();
+  if (imuLogNow - lastImuUploadLogMs >= 5000) {
+    lastImuUploadLogMs = imuLogNow;
+    DebugSerial.printf(
+      "IMU upload sample: ok=%d accel=[%.4f,%.4f,%.4f] "
+      "gyro=[%.4f,%.4f,%.4f] euler=[%.2f,%.2f,%.2f]\n",
+      imuOk ? 1 : 0,
+      imuData.accel[0], imuData.accel[1], imuData.accel[2],
+      imuData.gyro[0], imuData.gyro[1], imuData.gyro[2],
+      imuData.euler[0], imuData.euler[1], imuData.euler[2]
+    );
+  }
 
   cloudBatchPayload += "{\"t\":";
   cloudBatchPayload += millis();
@@ -1357,6 +1379,32 @@ static bool appendCloudBatchSample() {
   cloudBatchPayload += String(healthData.valid ? healthData.bodyTemp : 0.0f, 1);
   cloudBatchPayload += ',';
   cloudBatchPayload += String(healthData.valid ? healthData.envTemp : 0.0f, 1);
+  cloudBatchPayload += ']';
+
+  const uint32_t uwbNow = millis();
+  const UwbPacket &uwb = UwbParser.latest();
+  cloudBatchPayload += ",\"u\":[";
+  cloudBatchPayload += UwbParser.isFresh(uwbNow, UWB_STALE_MS) ? "true" : "false";
+  cloudBatchPayload += ',';
+  cloudBatchPayload += uwb.receivedMs;
+  cloudBatchPayload += ',';
+  cloudBatchPayload += uwb.timer;
+  cloudBatchPayload += ',';
+  cloudBatchPayload += String((unsigned int)uwb.tagId);
+  cloudBatchPayload += ',';
+  cloudBatchPayload += String((unsigned int)uwb.anchorId);
+  cloudBatchPayload += ',';
+  cloudBatchPayload += String((unsigned int)uwb.sequence);
+  cloudBatchPayload += ',';
+  cloudBatchPayload += String((unsigned int)uwb.anchorMask);
+  cloudBatchPayload += ',';
+  cloudBatchPayload += uwb.kalmanEnabled ? "true" : "false";
+  cloudBatchPayload += ',';
+  appendInt32Array(cloudBatchPayload, uwb.distanceMm, UWB_DISTANCE_COUNT);
+  cloudBatchPayload += ',';
+  appendInt32Array(cloudBatchPayload, uwb.rawMm, UWB_DISTANCE_COUNT);
+  cloudBatchPayload += ',';
+  appendInt32Array(cloudBatchPayload, uwb.kalmanMm, UWB_DISTANCE_COUNT);
   cloudBatchPayload += "]}";
 
   cloudBatchCount++;
@@ -3283,50 +3331,6 @@ void serviceHealthModule() {
 }
 
 // =====================================================
-// 串口命令
-// UART0 输入命令
-// =====================================================
-void handleDebugCommand() {
-  while (DebugSerial.available()) {
-    char c = DebugSerial.read();
-
-    if (c == 'm' || c == 'M') {
-      plotMode = MODE_MIC;
-      DebugSerial.println("# mode=MIC");
-    } else if (c == 'i' || c == 'I') {
-      plotMode = MODE_IMU;
-      DebugSerial.println("# mode=IMU");
-    } else if (c == 'h' || c == 'H') {
-      plotMode = MODE_HEALTH;
-      DebugSerial.println("# mode=HEALTH");
-    } else if (c == 'a' || c == 'A') {
-      plotMode = MODE_ALL;
-      DebugSerial.println("# mode=ALL");
-    } else if (c == 's' || c == 'S') {
-      stopHealthModule();
-    } else if (c == 'r' || c == 'R') {
-      initHealthModule();
-    } else if (c == 'b' || c == 'B') {
-      startAudioRecording();
-    } else if (c == 'u' || c == 'U') {
-      stopAudioRecording();
-    } else if (c == '1') {
-      healthPlotField = HEALTH_PLOT_HR;
-      DebugSerial.println("Health plot field = HeartRate");
-    } else if (c == '2') {
-      healthPlotField = HEALTH_PLOT_SPO2;
-      DebugSerial.println("Health plot field = SpO2");
-    } else if (c == '3') {
-      healthPlotField = HEALTH_PLOT_BODY_TEMP;
-      DebugSerial.println("Health plot field = BodyTemp");
-    } else if (c == '4') {
-      healthPlotField = HEALTH_PLOT_RESP;
-      DebugSerial.println("Health plot field = Respiration");
-    }
-  }
-}
-
-// =====================================================
 // 输出到 Serial Plotter
 // =====================================================
 void printMicPlot() {
@@ -3437,10 +3441,19 @@ void printAllPlot() {
 // setup / loop
 // =====================================================
 void setup() {
-  DebugSerial.begin(921600, SERIAL_8N1, 44, 43);
-  delay(2000);
+  DebugSerial.setRxBufferSize(UWB_UART_RX_BUFFER_SIZE);
+  DebugSerial.begin(UWB_BAUD, SERIAL_8N1, UWB_RX_PIN, DEBUG_TX_PIN);
+  uint32_t bootWaitStartedMs = millis();
+  while (millis() - bootWaitStartedMs < 500) {
+    serviceUwbSerial();
+    delay(5);
+  }
 
   DebugSerial.println("ESP32-S3 PetSense 4G MQTT sensor node start");
+  DebugSerial.printf("UWB: RX GPIO%d @ %lu baud; debug TX GPIO%d\n",
+                     UWB_RX_PIN,
+                     (unsigned long)UWB_BAUD,
+                     DEBUG_TX_PIN);
 
   initAudioFeatureExtractor();
   bool micOK = initMicrophone();
@@ -3498,13 +3511,14 @@ void setup() {
   }
 
   DebugSerial.printf("Cloud upload interval: %u ms\n", CLOUD_PUBLISH_INTERVAL_MS);
-  DebugSerial.println("Commands: s=stop health / r=restart health / b=begin audio / u=upload audio");
+  DebugSerial.println("UART0 RX is reserved for BU03; runtime controls use MQTT commands");
 }
 
 void loop() {
-  handleDebugCommand();
+  serviceUwbSerial();
   processModemAsyncInput();
   serviceHealthModule();
+  logUwbStatus();
   logBatteryReading();
 
   if (LOCAL_SD_CAPTURE_MODE) {

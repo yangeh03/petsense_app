@@ -1,0 +1,11 @@
+{
+  "deviceId": "petsense-esp32-001",
+  "topic": "petsense/sensor/petsense-esp32-001",
+  "commandTopic": "petsense/device/petsense-esp32-001/command",
+  "u": [
+    true, 100, 123456, 7, 2, 31, 7, true,
+    [1100, 2000, 2900, 0, 0, 0, 0, 0],
+    [1000, 2000, 3000, 0, 0, 0, 0, 0],
+    [1100, 0, 2900, 0, 0, 0, 0, 0]
+  ]
+}

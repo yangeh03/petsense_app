@@ -49,6 +49,14 @@ static const int HEALTH_RX_PIN = 40;  // ESP32 RX <- health module TX
 static const int HEALTH_TX_PIN = 41;  // ESP32 TX -> health module RX
 static const uint32_t HEALTH_BAUD = 9600;
 
+// ---------- BU03 UWB / UART0 debug ----------
+// UART0 RX receives BU03 frames while UART0 TX continues to feed the USB-UART bridge.
+static const int UWB_RX_PIN = 42;      // ESP32 RX <- BU03 TX1
+static const int DEBUG_TX_PIN = 43;    // ESP32 TX -> onboard USB-UART bridge
+static const uint32_t UWB_BAUD = 115200;
+static const uint32_t UWB_STALE_MS = 2000;
+static const size_t UWB_UART_RX_BUFFER_SIZE = 4096;
+
 // ---------- A7670E 4G MQTT ----------
 static const int MODEM_RX_PIN = 17;   // ESP32 RX <- A7670E TX
 static const int MODEM_TX_PIN = 18;   // ESP32 TX -> A7670E RX
@@ -57,15 +65,19 @@ static const uint32_t MODEM_BAUD = 115200;
 static const char *CELLULAR_APN = "ctnet";
 static const char *MQTT_BROKER = "81.71.71.31";
 static const uint16_t MQTT_PORT = 80;
-static const char *MQTT_TOPIC = "petsense/sensor/esp32-001";
+#ifndef PETSENSE_DEVICE_ID
+#define PETSENSE_DEVICE_ID "petsense-esp32-001"
+#endif
+// One identity for payloads, telemetry routing, ownership and commands.
+static const char *MQTT_TOPIC = "petsense/sensor/" PETSENSE_DEVICE_ID;
 static const char *MQTT_AUDIO_TOPIC = "petsense/sensor/audio";
 static const char *MQTT_AUDIO_FILE_TOPIC = "petsense/sensor/audio_file";
 static const char *MQTT_AUDIO_WAV_TOPIC = "petsense/sensor/audio_wav";
-static const char *MQTT_COMMAND_TOPIC = "petsense/device/esp32-001/command";
+static const char *MQTT_COMMAND_TOPIC = "petsense/device/" PETSENSE_DEVICE_ID "/command";
 static const char *MQTT_USERNAME = "petsense-device";
 static const char *MQTT_PASSWORD = PETSENSE_MQTT_PASSWORD;
-static const char *MQTT_CLIENT_ID = "esp32-001";
-static const char *DEVICE_ID = "petsense-esp32-001";
+static const char *MQTT_CLIENT_ID = PETSENSE_DEVICE_ID;
+static const char *DEVICE_ID = PETSENSE_DEVICE_ID;
 static const uint32_t MQTT_RETRY_INTERVAL_MS = 60000;
 static const bool AUDIO_STREAM_ENABLED = false;
 static const bool AUDIO_FILE_ENABLED = true;
