@@ -58,5 +58,21 @@ class EdgeTests(unittest.TestCase):
     def test_static_page_has_no_device_data(self):
         result = self.client.get('/edge')
         self.assertEqual(result.status_code, 200)
-        self.assertIn(b'X-Petsense-Session', result.data)
+        self.assertIn(b'/api/debug/edge/latest', result.data)
+        self.assertNotIn(b'id="token"', result.data)
         result.close()
+
+    def test_public_debug_is_fixed_to_lab_device(self):
+        self.ingest()
+        url = '/api/debug/edge/latest'
+        self.assertIsNone(self.client.get(url + '?deviceId=test-edge').json['payload'])
+        with db.session_scope() as s:
+            s.add(Device(device_id=edge.DEBUG_DEVICE_ID, owner_id=self.other, name='', claimed_at=db.utc_now()))
+            s.add(Reading(device_id=edge.DEBUG_DEVICE_ID, topic=edge.TOPIC,
+                          payload=json.dumps(dict(self.payload, deviceId=edge.DEBUG_DEVICE_ID)),
+                          received_at=db.utc_now()))
+        result = self.client.get(url)
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json['payload']['deviceId'], edge.DEBUG_DEVICE_ID)
+        self.assertEqual(result.headers['Cache-Control'], 'no-store')
+        self.assertEqual(self.client.get('/api/app/edge/latest').status_code, 401)
