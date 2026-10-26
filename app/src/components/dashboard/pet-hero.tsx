@@ -1,0 +1,189 @@
+import { Image } from 'expo-image';
+import { SymbolView } from 'expo-symbols';
+import { useState } from 'react';
+import { Pressable, StyleSheet, View } from 'react-native';
+
+import { ThemedText } from '@/components/themed-text';
+import { Fonts, Shadows } from '@/constants/theme';
+import { useTheme } from '@/hooks/use-theme';
+import { absoluteUrl } from '@/services/api';
+import { selectPetAvatar } from '@/services/pet-avatar';
+import type { PetgifPet, SocialPet } from '@/types/social';
+import type { TelemetryFrame } from '@/types/telemetry';
+
+/** Central digital pet. Exact action asset or static avatar; never a different action. */
+export function PetHero({
+  pet,
+  petgif,
+  frame,
+  current,
+  statusLabel,
+  sound,
+  experimental,
+  refreshVersion,
+  onEdit,
+}: {
+  pet: SocialPet;
+  petgif: PetgifPet | null | undefined;
+  frame: TelemetryFrame | null;
+  current: boolean;
+  statusLabel: string;
+  sound: string;
+  experimental: boolean;
+  refreshVersion: number;
+  onEdit: () => void;
+}) {
+  const theme = useTheme();
+  // Retry failed media on pull-to-refresh or the explicit retry button; keep good GIFs mounted.
+  const [failures, setFailures] = useState<{
+    petId: number;
+    refreshVersion: number;
+    urls: string[];
+  }>({
+    petId: pet.id,
+    refreshVersion,
+    urls: [],
+  });
+  const failed =
+    failures.petId === pet.id && failures.refreshVersion === refreshVersion ? failures.urls : [];
+  const media = selectPetAvatar({ pet, petgif, frame, fresh: current, failedUrls: failed });
+  const animation = media.animationUrl;
+  const still = media.staticUrl;
+  const uri = animation || still;
+  const color = current ? theme.online : theme.textSecondary;
+  const actionLabel =
+    media.label ??
+    (current
+      ? frame?.edge?.action?.label === 'warming_up'
+        ? '识别准备中'
+        : '暂未识别动作'
+      : statusLabel);
+  return (
+    <View style={styles.hero}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${pet.name}的${animation ? `${actionLabel}动画` : '头像'}，编辑宠物档案`}
+        onPress={onEdit}
+        style={[styles.ring, { borderColor: color, backgroundColor: theme.tintBackground }]}
+      >
+        <View style={[styles.portrait, { borderColor: theme.backgroundElement }]}>
+          {uri ? (
+            <Image
+              key={`${pet.id}:${uri}`}
+              source={{ uri: absoluteUrl(uri) }}
+              contentFit={animation ? 'contain' : 'cover'}
+              autoplay={!!animation}
+              recyclingKey={`${pet.id}:${uri}`}
+              style={styles.image}
+              onError={() =>
+                setFailures((old) => ({
+                  petId: pet.id,
+                  refreshVersion,
+                  urls: [
+                    ...(old.petId === pet.id && old.refreshVersion === refreshVersion
+                      ? old.urls
+                      : []),
+                    uri,
+                  ],
+                }))
+              }
+            />
+          ) : (
+            <ThemedText style={styles.emoji}>{pet.avatar_emoji || '🐾'}</ThemedText>
+          )}
+        </View>
+        <View
+          style={[
+            styles.badge,
+            { backgroundColor: theme.backgroundElement, boxShadow: Shadows.chip },
+          ]}
+        >
+          <View style={[styles.dot, { backgroundColor: color }]} />
+          <ThemedText type="smallBold">{actionLabel}</ThemedText>
+        </View>
+      </Pressable>
+      <View style={styles.caption}>
+        {current ? (
+          <View style={[styles.sound, { backgroundColor: theme.tintBackground }]}>
+            <SymbolView
+              name={{ ios: 'waveform', android: 'graphic_eq', web: 'graphic_eq' }}
+              size={14}
+              tintColor={theme.tint}
+            />
+            <ThemedText type="small" style={{ color: theme.tint }}>
+              {sound}
+              {experimental ? ' · 实验性' : ''}
+            </ThemedText>
+          </View>
+        ) : (
+          <ThemedText type="small" themeColor="textSecondary" style={styles.centered}>
+            {pet.device_id ? '等它重新连接，再看看它在做什么' : '连接项圈，让它的动作同步到这里'}
+          </ThemedText>
+        )}
+        {current && media.actionKey && !animation && (
+          <ThemedText type="small" themeColor="textSecondary" style={styles.centered}>
+            {media.animationAvailable
+              ? '动作动画暂时无法加载，显示头像'
+              : '这个动作还没有动画，先用头像陪伴你'}
+          </ThemedText>
+        )}
+        {failed.length > 0 && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="重试宠物形象"
+            hitSlop={8}
+            onPress={() => setFailures({ petId: pet.id, refreshVersion, urls: [] })}
+          >
+            <ThemedText type="small" style={{ color: theme.tint }}>
+              重试形象
+            </ThemedText>
+          </Pressable>
+        )}
+      </View>
+    </View>
+  );
+}
+const styles = StyleSheet.create({
+  hero: { alignItems: 'center', gap: 18, paddingTop: 4, paddingBottom: 2 },
+  ring: {
+    width: 176,
+    height: 176,
+    borderRadius: 88,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  portrait: {
+    width: 164,
+    height: 164,
+    borderRadius: 82,
+    borderWidth: 5,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  image: { width: '100%', height: '100%' },
+  emoji: { fontSize: 78, lineHeight: 98, fontFamily: Fonts.rounded },
+  badge: {
+    position: 'absolute',
+    bottom: -10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    maxWidth: 260,
+  },
+  dot: { width: 6, height: 6, borderRadius: 3 },
+  caption: { alignItems: 'center', gap: 6, paddingTop: 4 },
+  sound: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+  },
+  centered: { textAlign: 'center', fontSize: 12 },
+});

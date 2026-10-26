@@ -1,5 +1,3 @@
-import { Image } from 'expo-image';
-import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import {
@@ -12,16 +10,17 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { PetHero } from '@/components/dashboard/pet-hero';
+import { NotificationBell } from '@/components/alerts/notification-bell';
 import { DiaryModal } from '@/components/dashboard/diary-modal';
 import { SoundTimeline } from '@/components/observations/sound-timeline';
 import { TrendPanel } from '@/components/observations/trend-panel';
 import { ThemedText } from '@/components/themed-text';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
+import { BottomTabInset, Fonts, MaxContentWidth, Shadows, Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useObservations } from '@/hooks/use-observations';
 import { useTelemetry } from '@/hooks/use-telemetry';
 import { useTheme } from '@/hooks/use-theme';
-import { absoluteUrl } from '@/services/api';
 import { clockTime, currentPrediction, duration } from '@/services/observation-view';
 import { parseTelemetryMessage } from '@/services/telemetry-service';
 import type { ObservationPeriod } from '@/types/observations';
@@ -41,6 +40,7 @@ export default function DashboardScreen() {
     reload,
   } = useObservations(period, displayState !== 'replaying');
   const [pullRefreshing, setPullRefreshing] = useState(false);
+  const [mediaRefresh, setMediaRefresh] = useState(0);
   const [vitalsOpen, setVitalsOpen] = useState(false);
   const [diaryVisible, setDiaryVisible] = useState(false);
   const pet = dashboard?.pet ?? null;
@@ -76,7 +76,6 @@ export default function DashboardScreen() {
             ? `最近更新 ${clockTime(matchingSnapshot.receivedAt)}`
             : '等待项圈数据';
   const color = current ? theme.online : theme.textSecondary;
-  const avatar = pet?.avatarImageUrl ? absoluteUrl(pet.avatarImageUrl) : null;
   const format = (value: number | undefined, decimals = 0) =>
     value !== undefined && Number.isFinite(value) && value > 0 ? value.toFixed(decimals) : '—';
 
@@ -89,6 +88,7 @@ export default function DashboardScreen() {
           refreshing={pullRefreshing}
           onRefresh={() => {
             setPullRefreshing(true);
+            setMediaRefresh((version) => version + 1);
             void reload().finally(() => setPullRefreshing(false));
           }}
           tintColor={theme.tint}
@@ -102,28 +102,22 @@ export default function DashboardScreen() {
         ]}
       >
         <View style={styles.heading}>
-          <View style={styles.titleGroup}>
-            <ThemedText type="small" themeColor="textSecondary">
-              {new Date(now).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })} · 今日
-            </ThemedText>
-            <ThemedText style={styles.pageTitle}>
-              {replay ? '实验数据回放' : pet ? `${pet.name}的今天` : '和它一起，好好生活'}
-            </ThemedText>
-          </View>
-          {pet && (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="编辑宠物档案"
-              onPress={() => router.push('/pet-profile')}
-              style={[styles.avatar, { backgroundColor: theme.tintBackground }]}
-            >
-              {avatar ? (
-                <Image source={{ uri: avatar }} style={styles.avatarImage} />
-              ) : (
-                <ThemedText style={styles.avatarEmoji}>{pet.avatar_emoji}</ThemedText>
-              )}
-            </Pressable>
-          )}
+          <ThemedText type="small" themeColor="textSecondary">
+            {new Date(now).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })}
+          </ThemedText>
+          <NotificationBell />
+        </View>
+        <View style={styles.welcome}>
+          <ThemedText style={[styles.pageTitle, { fontFamily: Fonts.rounded }]}>
+            {replay
+              ? '实验数据回放'
+              : pet
+                ? `${greeting(now)}，${pet.name}！`
+                : '和它一起，好好生活'}
+          </ThemedText>
+          <ThemedText type="small" themeColor="textSecondary">
+            {pet ? '今天也一起好好照顾它 🐾' : '从一份宠物档案，开启健康记录'}
+          </ThemedText>
         </View>
         {error ? (
           <Pressable
@@ -205,6 +199,19 @@ export default function DashboardScreen() {
           </View>
         ) : pet ? (
           <>
+            <PetHero
+              pet={pet}
+              petgif={dashboard?.petgif}
+              frame={frame}
+              current={current}
+              statusLabel={
+                !pet.device_id ? '等待绑定项圈' : frame ? '项圈暂未在线' : '等待首次观测'
+              }
+              sound={prediction.sound}
+              experimental={prediction.experimental}
+              refreshVersion={mediaRefresh}
+              onEdit={() => router.push('/pet-profile')}
+            />
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="查看项圈连接与诊断"
@@ -212,57 +219,16 @@ export default function DashboardScreen() {
               style={styles.status}
             >
               <View style={[styles.dot, { backgroundColor: color }]} />
-              <ThemedText type="small" style={[styles.statusText, { color }]}>
+              <ThemedText type="small" style={{ color }}>
                 {statusLabel}
               </ThemedText>
               <ThemedText type="small" themeColor="textSecondary">
                 {battery !== null ? `${Math.round(battery)}% · ` : ''}详情 ›
               </ThemedText>
             </Pressable>
-            <View style={[styles.nowCard, { backgroundColor: theme.tintBackground }]}>
-              <View style={styles.rowBetween}>
-                <ThemedText type="smallBold" style={{ color: theme.tint }}>
-                  {current ? '此刻的它' : '项圈状态'}
-                </ThemedText>
-                {current && (
-                  <ThemedText type="small" themeColor="textSecondary">
-                    项圈识别
-                  </ThemedText>
-                )}
-              </View>
-              <ThemedText style={current ? styles.currentTitle : styles.sectionTitle}>
-                {current
-                  ? prediction.action
-                  : replay
-                    ? '正在回放实验数据'
-                    : frame
-                      ? '项圈暂未在线'
-                      : '等待首次观测'}
-              </ThemedText>
-              {current && (
-                <View style={styles.soundRow}>
-                  <SymbolView
-                    name={{ ios: 'waveform', android: 'graphic_eq', web: 'graphic_eq' }}
-                    size={18}
-                    tintColor={theme.tint}
-                  />
-                  <ThemedText>
-                    {prediction.sound}
-                    {prediction.experimental ? ' · 实验性识别' : ''}
-                  </ThemedText>
-                </View>
-              )}
-              {!current && (
-                <ThemedText type="small" themeColor="textSecondary">
-                  {replay
-                    ? '回放数据不会混入宠物的实时状态和今日统计。'
-                    : '恢复连接后自动更新，今天的记录仍可查看。'}
-                </ThemedText>
-              )}
-            </View>
             <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
               <View style={styles.rowBetween}>
-                <ThemedText style={styles.sectionTitle}>最近读数</ThemedText>
+                <ThemedText style={styles.sectionTitle}>健康体征</ThemedText>
                 <Pressable
                   accessibilityRole="button"
                   accessibilityState={{ expanded: vitalsOpen }}
@@ -392,6 +358,15 @@ export default function DashboardScreen() {
   );
 }
 
+function greeting(now: number) {
+  const hour = new Date(now).getHours();
+  if (hour < 5) return '夜深了';
+  if (hour < 11) return '早上好';
+  if (hour < 14) return '中午好';
+  if (hour < 18) return '下午好';
+  return '晚上好';
+}
+
 function Metric({
   label,
   value,
@@ -424,25 +399,20 @@ function Metric({
 }
 const styles = StyleSheet.create({
   scroll: { alignItems: 'center' },
-  container: { width: '100%', maxWidth: MaxContentWidth, paddingHorizontal: Spacing.four, gap: 18 },
-  heading: { flexDirection: 'row', alignItems: 'center', gap: 16 },
-  titleGroup: { flex: 1, gap: 8 },
-  pageTitle: { fontSize: 28, lineHeight: 36, fontWeight: '700' },
-  avatar: {
-    width: 56,
-    height: 56,
-    borderRadius: 20,
+  container: { width: '100%', maxWidth: MaxContentWidth, paddingHorizontal: Spacing.four, gap: 12 },
+  heading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  welcome: { alignItems: 'center', gap: 4 },
+  pageTitle: { fontSize: 26, lineHeight: 34, fontWeight: '700', textAlign: 'center' },
+  status: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    overflow: 'hidden',
+    gap: 7,
+    paddingVertical: 4,
+    flexWrap: 'wrap',
   },
-  avatarImage: { width: '100%', height: '100%' },
-  avatarEmoji: { fontSize: 30, lineHeight: 38 },
-  status: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
-  dot: { width: 7, height: 7, borderRadius: 4 },
-  statusText: { flex: 1 },
-  card: { padding: 20, borderRadius: 22, gap: 16 },
-  nowCard: { padding: 24, borderRadius: 26, gap: 14 },
+  dot: { width: 6, height: 6, borderRadius: 3 },
+  card: { padding: 16, borderRadius: 22, gap: 12, boxShadow: Shadows.card },
   rowBetween: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -450,8 +420,6 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 8,
   },
-  currentTitle: { fontSize: 34, lineHeight: 44, fontWeight: '700' },
-  soundRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   sectionTitle: { fontSize: 18, lineHeight: 24, fontWeight: '700' },
   metrics: { flexDirection: 'row', gap: 12 },
   metric: { flex: 1, gap: 5 },
