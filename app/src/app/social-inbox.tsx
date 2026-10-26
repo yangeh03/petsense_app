@@ -81,8 +81,10 @@ export default function SocialInboxScreen() {
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : '标记已读失败');
     }
-    if (item.postId && item.targetAvailable) router.push(`/post?id=${item.postId}`);
-    else if (item.kind === 'follow') router.push(`/user?id=${item.actorId}`);
+    if (item.postId && item.targetAvailable) {
+      const anchor = item.commentId ? `&commentId=${item.commentId}` : '';
+      router.push(`/post?id=${item.postId}${anchor}`);
+    } else if (item.kind === 'follow') router.push(`/user?id=${item.actorId}`);
   };
 
   const readAll = async () => {

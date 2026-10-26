@@ -630,6 +630,19 @@ def app_comment_replies(root_id):
                      'nextCursor': str(comments[-1]['id']) if has_more and comments else None}}
 
 
+@bp.route('/comments/<int:comment_id>/context')
+def app_comment_context(comment_id):
+    """通知定位用：告诉客户端这条评论属于哪个帖子、是根评论还是哪一楼的回复。"""
+    viewer = app_user_from_request()
+    with session_scope() as s:
+        comment = s.get(Comment, comment_id)
+        if not comment or not get_visible_post(s, comment.post_id,
+                                                viewer['id'] if viewer else -1):
+            return {'success': False, 'message': '评论不存在'}, 404
+        context = {'commentId': comment.id, 'rootId': comment.root_id, 'postId': comment.post_id}
+    return {'success': True, 'context': context}
+
+
 @bp.route('/comments/<int:comment_id>', methods=['DELETE'])
 def app_delete_comment(comment_id):
     user, error = require_app_user()

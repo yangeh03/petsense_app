@@ -161,6 +161,19 @@ export default function ProfileScreen() {
 
         {/* 我的设备（认领/解绑项圈） */}
         <DeviceCard />
+        <Pressable onPress={() => router.push('/social-inbox')} accessibilityRole="button">
+          <ThemedView type="backgroundElement" style={styles.menuRow}>
+            <SymbolView
+              name={{ ios: 'bell', android: 'notifications_none', web: 'notifications_none' }}
+              size={20}
+              tintColor={theme.tint}
+            />
+            <ThemedText type="default" style={styles.menuLabel}>
+              互动通知
+            </ThemedText>
+            <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
+          </ThemedView>
+        </Pressable>
         <Pressable onPress={() => router.push('/bookmarks')} accessibilityRole="button">
           <ThemedView type="backgroundElement" style={styles.menuRow}>
             <SymbolView

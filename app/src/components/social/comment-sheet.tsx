@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'expo-router';
 import {
   Alert,
@@ -18,18 +18,29 @@ import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
-import { addReply, deleteComment, fetchComments, fetchReplies } from '@/services/api';
+import {
+  addReply,
+  deleteComment,
+  fetchCommentContext,
+  fetchComments,
+  fetchReplies,
+} from '@/services/api';
 import type { Post, PostComment } from '@/types/social';
+
+// 从通知定位评论时最多向后翻这么多页；再找不到就提示用户手动翻看。
+const FOCUS_PAGE_LIMIT = 5;
 
 /** 帖子评论抽屉：列表 + 发送框。 */
 export function CommentSheet({
   post,
   onClose,
   onCommented,
+  focusCommentId,
 }: {
   post: Post | null;
   onClose: () => void;
   onCommented: (postId: number, delta?: number) => void;
+  focusCommentId?: number;
 }) {
   const theme = useTheme();
   const router = useRouter();
@@ -39,37 +50,111 @@ export function CommentSheet({
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
+  const [loadError, setLoadError] = useState('');
   const [loading, setLoading] = useState(true);
   const [replies, setReplies] = useState<Record<number, PostComment[]>>({});
   const [replyCursors, setReplyCursors] = useState<Record<number, string | null>>({});
   const [loadingReplies, setLoadingReplies] = useState<number | null>(null);
   const [replyTarget, setReplyTarget] = useState<PostComment | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [highlightId, setHighlightId] = useState<number | null>(null);
+  const [focusNote, setFocusNote] = useState('');
   const pendingMutation = useRef<string | null>(null);
+  const listRef = useRef<ScrollView>(null);
+  const highlightY = useRef<number | null>(null);
+  const sequence = useRef(0);
+  const invalidate = () => {
+    sequence.current++;
+  };
+
+  const load = useCallback(() => {
+    if (!post) return;
+    const postId = post.id;
+    const current = ++sequence.current;
+    const stale = () => current !== sequence.current;
+    // 纯数据拉取，不碰 state；需要定位评论时顺着游标翻到目标所在的根评论和楼层。
+    const gather = async () => {
+      const first = await fetchComments(postId);
+      let roots = first.comments;
+      let cursor = first.page?.nextCursor ?? null;
+      let loadedReplies: PostComment[] | null = null;
+      let replyCursor: string | null = null;
+      let rootId: number | null = null;
+      if (focusCommentId) {
+        const { context } = await fetchCommentContext(focusCommentId).catch(() => ({
+          context: null,
+        }));
+        if (context && context.postId === postId) {
+          rootId = context.rootId ?? context.commentId;
+          let pages = 0;
+          while (!roots.some((item) => item.id === rootId) && cursor && pages < FOCUS_PAGE_LIMIT) {
+            const more = await fetchComments(postId, cursor);
+            roots = [...roots, ...more.comments.filter((c) => !roots.some((r) => r.id === c.id))];
+            cursor = more.page?.nextCursor ?? null;
+            pages += 1;
+          }
+          if (context.rootId && roots.some((item) => item.id === rootId)) {
+            const replyPage = await fetchReplies(context.rootId);
+            loadedReplies = replyPage.comments;
+            replyCursor = replyPage.page.nextCursor;
+            pages = 0;
+            while (
+              !loadedReplies.some((item) => item.id === focusCommentId) &&
+              replyCursor &&
+              pages < FOCUS_PAGE_LIMIT
+            ) {
+              const more = await fetchReplies(context.rootId, replyCursor);
+              loadedReplies = [...loadedReplies, ...more.comments];
+              replyCursor = more.page.nextCursor;
+              pages += 1;
+            }
+          }
+        }
+      }
+      return { roots, cursor, loadedReplies, replyCursor, rootId };
+    };
+    return gather()
+      .then(({ roots, cursor, loadedReplies, replyCursor, rootId }) => {
+        if (stale()) return;
+        setComments(roots);
+        setNextCursor(cursor);
+        if (rootId !== null && loadedReplies) {
+          setReplies({ [rootId]: loadedReplies });
+          setReplyCursors({ [rootId]: replyCursor });
+        }
+        if (focusCommentId) {
+          const found =
+            roots.some((item) => item.id === focusCommentId) ||
+            (loadedReplies ?? []).some((item) => item.id === focusCommentId);
+          setHighlightId(found ? focusCommentId : null);
+          setFocusNote(found ? '' : '这条评论可能已删除，或在更早的评论中');
+        }
+        setLoadError('');
+      })
+      .catch(() => {
+        if (!stale()) setLoadError('评论加载失败');
+      })
+      .finally(() => {
+        if (!stale()) setLoading(false);
+      });
+  }, [post, focusCommentId]);
 
   // 父组件用 key={post.id} 重挂载，这里只需异步拉取评论
   useEffect(() => {
-    if (!post) return;
-    let cancelled = false;
-    fetchComments(post.id)
-      .then((data) => {
-        if (!cancelled) {
-          setComments(data.comments);
-          setNextCursor(data.page?.nextCursor ?? null);
-          setError('');
-          setLoading(false);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setError('评论加载失败，请关闭后重试');
-          setLoading(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [post]);
+    void load();
+    return invalidate;
+  }, [load]);
+
+  const retryLoad = () => {
+    setLoading(true);
+    setLoadError('');
+    void load();
+  };
+
+  const openAuthor = (comment: PostComment) => {
+    onClose();
+    router.push(`/user?id=${comment.user_id}`);
+  };
 
   const submit = async () => {
     if (!post || !draft.trim() || sending) return;
@@ -196,38 +281,54 @@ export function CommentSheet({
     ]);
   };
 
-  const renderComment = (comment: PostComment, nested = false) => (
-    <View key={comment.id} style={[styles.row, nested && styles.nested]}>
-      <View style={[styles.avatar, { backgroundColor: theme.tintBackground }]}>
-        <ThemedText style={{ fontSize: 16 }}>{comment.avatar_emoji || '🙂'}</ThemedText>
-      </View>
-      <View style={styles.texts}>
-        <ThemedText type="smallBold">{comment.display_name}</ThemedText>
-        <ThemedText type="small" themeColor="textSecondary">
-          {comment.deleted ? '原评论已删除' : comment.body}
-        </ThemedText>
-        <View style={styles.actions}>
+  const renderComment = (comment: PostComment, nested = false) => {
+    const highlighted = highlightId === comment.id;
+    return (
+      <View
+        key={comment.id}
+        style={[
+          styles.row,
+          nested && styles.nested,
+          highlighted && [styles.highlighted, { backgroundColor: theme.tintBackground }],
+        ]}
+      >
+        <Pressable
+          onPress={() => openAuthor(comment)}
+          style={[styles.avatar, { backgroundColor: theme.tintBackground }]}
+          accessibilityLabel={`查看 ${comment.display_name} 的主页`}
+        >
+          <ThemedText style={{ fontSize: 16 }}>{comment.avatar_emoji || '🙂'}</ThemedText>
+        </Pressable>
+        <View style={styles.texts}>
+          <Pressable onPress={() => openAuthor(comment)}>
+            <ThemedText type="smallBold">{comment.display_name}</ThemedText>
+          </Pressable>
           <ThemedText type="small" themeColor="textSecondary">
-            {new Date(comment.created_at).toLocaleString()}
+            {comment.deleted ? '原评论已删除' : comment.body}
           </ThemedText>
-          {!comment.deleted && (
-            <Pressable onPress={() => setReplyTarget(comment)}>
-              <ThemedText type="small" style={{ color: theme.tint }}>
-                回复
-              </ThemedText>
-            </Pressable>
-          )}
-          {user?.id === comment.user_id && !comment.deleted && (
-            <Pressable onPress={() => remove(comment)}>
-              <ThemedText type="small" style={{ color: theme.danger }}>
-                删除
-              </ThemedText>
-            </Pressable>
-          )}
+          <View style={styles.actions}>
+            <ThemedText type="small" themeColor="textSecondary">
+              {new Date(comment.created_at).toLocaleString()}
+            </ThemedText>
+            {!comment.deleted && (
+              <Pressable onPress={() => setReplyTarget(comment)}>
+                <ThemedText type="small" style={{ color: theme.tint }}>
+                  回复
+                </ThemedText>
+              </Pressable>
+            )}
+            {user?.id === comment.user_id && !comment.deleted && (
+              <Pressable onPress={() => remove(comment)}>
+                <ThemedText type="small" style={{ color: theme.danger }}>
+                  删除
+                </ThemedText>
+              </Pressable>
+            )}
+          </View>
         </View>
       </View>
-    </View>
-  );
+    );
+  };
 
   return (
     <Modal visible={post !== null} animationType="slide" transparent onRequestClose={onClose}>
@@ -246,40 +347,83 @@ export function CommentSheet({
             <ThemedText type="smallBold" style={styles.title}>
               评论
             </ThemedText>
-            <ScrollView style={styles.list} contentContainerStyle={{ gap: Spacing.two }}>
+            {!!focusNote && (
+              <ThemedText type="small" themeColor="textSecondary">
+                {focusNote}
+              </ThemedText>
+            )}
+            <ScrollView
+              ref={listRef}
+              style={styles.list}
+              contentContainerStyle={{ gap: Spacing.two }}
+            >
               {loading ? (
                 <ThemedText type="small" themeColor="textSecondary">
                   加载中…
                 </ThemedText>
-              ) : comments.length === 0 && !error ? (
+              ) : loadError ? (
+                <Pressable
+                  onPress={retryLoad}
+                  style={styles.empty}
+                  accessibilityLabel="重新加载评论"
+                >
+                  <ThemedText type="small" style={{ color: theme.danger }}>
+                    {loadError}
+                  </ThemedText>
+                  <ThemedText type="small" style={{ color: theme.tint }}>
+                    点击重试
+                  </ThemedText>
+                </Pressable>
+              ) : comments.length === 0 ? (
                 <ThemedText type="small" themeColor="textSecondary" style={styles.empty}>
                   还没有评论，来说点什么吧
                 </ThemedText>
               ) : (
-                comments.map((comment) => (
-                  <View key={comment.id}>
-                    {renderComment(comment)}
-                    <Pressable
-                      onPress={() => void toggleReplies(comment.id)}
-                      style={styles.replyToggle}
+                comments.map((comment) => {
+                  const containsHighlight =
+                    highlightId !== null &&
+                    (highlightId === comment.id ||
+                      (replies[comment.id] ?? []).some((reply) => reply.id === highlightId));
+                  return (
+                    <View
+                      key={comment.id}
+                      onLayout={
+                        containsHighlight
+                          ? (event) => {
+                              // 只滚一次；包裹 View 直接挂在列表内容下，y 才是相对列表的。
+                              if (highlightY.current !== null) return;
+                              highlightY.current = event.nativeEvent.layout.y;
+                              listRef.current?.scrollTo({
+                                y: Math.max(0, highlightY.current - Spacing.two),
+                                animated: true,
+                              });
+                            }
+                          : undefined
+                      }
                     >
-                      <ThemedText type="small" style={{ color: theme.tint }}>
-                        {replies[comment.id] ? '收起回复' : '查看回复'}
-                      </ThemedText>
-                    </Pressable>
-                    {(replies[comment.id] ?? []).map((reply) => renderComment(reply, true))}
-                    {!!replyCursors[comment.id] && (
+                      {renderComment(comment)}
                       <Pressable
-                        onPress={() => void loadMoreReplies(comment.id)}
+                        onPress={() => void toggleReplies(comment.id)}
                         style={styles.replyToggle}
                       >
                         <ThemedText type="small" style={{ color: theme.tint }}>
-                          {loadingReplies === comment.id ? '加载中…' : '加载更多回复'}
+                          {replies[comment.id] ? '收起回复' : '查看回复'}
                         </ThemedText>
                       </Pressable>
-                    )}
-                  </View>
-                ))
+                      {(replies[comment.id] ?? []).map((reply) => renderComment(reply, true))}
+                      {!!replyCursors[comment.id] && (
+                        <Pressable
+                          onPress={() => void loadMoreReplies(comment.id)}
+                          style={styles.replyToggle}
+                        >
+                          <ThemedText type="small" style={{ color: theme.tint }}>
+                            {loadingReplies === comment.id ? '加载中…' : '加载更多回复'}
+                          </ThemedText>
+                        </Pressable>
+                      )}
+                    </View>
+                  );
+                })
               )}
               {!!nextCursor && (
                 <Pressable
@@ -375,6 +519,7 @@ const styles = StyleSheet.create({
   list: { flexGrow: 0 },
   empty: { textAlign: 'center', paddingVertical: Spacing.four },
   row: { flexDirection: 'row', gap: Spacing.three },
+  highlighted: { padding: Spacing.two, borderRadius: 12 },
   nested: { marginLeft: Spacing.four, marginTop: Spacing.two },
   actions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
   replyToggle: { marginLeft: Spacing.five, marginVertical: Spacing.two },

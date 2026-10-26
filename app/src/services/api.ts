@@ -385,6 +385,12 @@ export function deleteComment(commentId: number): Promise<{ success: boolean }> 
   return request(`/comments/${commentId}`, { method: 'DELETE' });
 }
 
+export function fetchCommentContext(
+  commentId: number,
+): Promise<{ context: { commentId: number; rootId: number | null; postId: number } }> {
+  return request(`/comments/${commentId}/context`);
+}
+
 export function setLike(
   postId: number,
   liked: boolean,

@@ -31,27 +31,30 @@ import {
 } from '@/services/api';
 import type { Post } from '@/types/social';
 
+type Failure = { kind: 'invalid' | 'unavailable' | 'network'; message: string } | null;
+
 export default function PostScreen() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useAuth();
-  const params = useLocalSearchParams<{ id: string }>();
+  const params = useLocalSearchParams<{ id: string; commentId?: string }>();
   const id = Number(params.id);
+  const focusCommentId = Number(params.commentId) || undefined;
   const [loadedPost, setPost] = useState<Post | null>(null);
   const [loadedFor, setLoadedFor] = useState<number | null>(null);
   const viewerId = user?.id ?? 0;
   const post = loadedFor === viewerId ? loadedPost : null;
   const sequence = useRef(0);
-  const [error, setError] = useState('');
+  const [failure, setFailure] = useState<Failure>(null);
   const [loading, setLoading] = useState(true);
-  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [commentsOpen, setCommentsOpen] = useState(!!focusCommentId);
   const [fullImage, setFullImage] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const current = ++sequence.current;
     if (!Number.isSafeInteger(id) || id <= 0) {
-      setError('帖子链接无效');
+      setFailure({ kind: 'invalid', message: '帖子链接无效' });
       setLoadedFor(viewerId);
       setLoading(false);
       return;
@@ -61,12 +64,20 @@ export default function PostScreen() {
       if (current !== sequence.current) return;
       setPost(data.post);
       setLoadedFor(viewerId);
-      setError('');
+      setFailure(null);
     } catch (exc) {
       if (current !== sequence.current) return;
-      if (exc instanceof ApiError && exc.status === 404) setPost(null);
       setLoadedFor(viewerId);
-      setError(exc instanceof Error ? exc.message : '帖子加载失败，请重试');
+      // 404/410 是确定的终态：内容已删除、受众不包含当前访客，或从未存在。重试没有意义。
+      if (exc instanceof ApiError && (exc.status === 404 || exc.status === 410)) {
+        setPost(null);
+        setFailure({ kind: 'unavailable', message: '内容已删除或对你不可见' });
+      } else {
+        setFailure({
+          kind: 'network',
+          message: exc instanceof Error ? exc.message : '帖子加载失败，请重试',
+        });
+      }
     } finally {
       if (current === sequence.current) setLoading(false);
     }
@@ -126,19 +137,42 @@ export default function PostScreen() {
       </View>
       {loading || loadedFor !== viewerId ? (
         <ActivityIndicator color={theme.tint} />
-      ) : error && !post ? (
-        <Pressable
-          onPress={() => {
-            setLoading(true);
-            void load();
-          }}
-          style={styles.center}
-        >
-          <ThemedText style={{ color: theme.danger }}>{error}</ThemedText>
-          <ThemedText type="small" style={{ color: theme.tint }}>
-            点击重试
-          </ThemedText>
-        </Pressable>
+      ) : failure && !post ? (
+        failure.kind === 'network' ? (
+          <Pressable
+            onPress={() => {
+              setLoading(true);
+              void load();
+            }}
+            style={styles.center}
+            accessibilityLabel="重新加载帖子"
+          >
+            <ThemedText style={{ color: theme.danger }}>{failure.message}</ThemedText>
+            <ThemedText type="small" style={{ color: theme.tint }}>
+              点击重试
+            </ThemedText>
+          </Pressable>
+        ) : (
+          <View style={styles.center}>
+            <SymbolView
+              name={{
+                ios: failure.kind === 'invalid' ? 'link.badge.plus' : 'eye.slash',
+                android: failure.kind === 'invalid' ? 'link_off' : 'visibility_off',
+                web: failure.kind === 'invalid' ? 'link_off' : 'visibility_off',
+              }}
+              size={32}
+              tintColor={theme.textSecondary}
+            />
+            <ThemedText themeColor="textSecondary">{failure.message}</ThemedText>
+            <Pressable
+              onPress={() => router.back()}
+              style={[styles.backButton, { backgroundColor: theme.backgroundSelected }]}
+              accessibilityLabel="返回"
+            >
+              <ThemedText type="smallBold">返回</ThemedText>
+            </Pressable>
+          </View>
+        )
       ) : post ? (
         <ScrollView contentContainerStyle={styles.content}>
           <PostCard
@@ -183,6 +217,7 @@ export default function PostScreen() {
       <CommentSheet
         key={`${commentsOpen ? id : 'closed'}:${viewerId}`}
         post={commentsOpen ? post : null}
+        focusCommentId={focusCommentId}
         onClose={() => setCommentsOpen(false)}
         onCommented={(postId, delta = 1) =>
           setPost((current) =>
@@ -196,7 +231,7 @@ export default function PostScreen() {
         <ThemedView style={[styles.fullscreen, { backgroundColor: theme.background }]}>
           <Pressable
             onPress={() => setFullImage(null)}
-            style={styles.closeImage}
+            style={[styles.closeImage, { top: insets.top + Spacing.two }]}
             accessibilityLabel="关闭图片"
           >
             <SymbolView
@@ -230,6 +265,12 @@ const styles = StyleSheet.create({
   },
   headerSpacer: { width: 24 },
   center: { alignItems: 'center', padding: Spacing.four, gap: Spacing.two },
+  backButton: {
+    marginTop: Spacing.two,
+    paddingHorizontal: Spacing.four,
+    paddingVertical: Spacing.two,
+    borderRadius: 14,
+  },
   content: {
     padding: Spacing.four,
     gap: Spacing.three,

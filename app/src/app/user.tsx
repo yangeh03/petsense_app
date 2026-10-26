@@ -27,6 +27,7 @@ import {
   deletePost,
   fetchFeed,
   fetchUserProfile,
+  fetchUserStories,
   setFollow,
   setLike,
   setBookmark,
@@ -47,6 +48,11 @@ export default function UserScreen() {
   const viewerId = user?.id ?? 0;
   const profile = loadedFor === viewerId ? storedProfile : null;
   const visiblePosts = loadedFor === viewerId ? posts : [];
+  const [storyState, setStoryState] = useState<{ owner: number; count: number }>({
+    owner: -1,
+    count: 0,
+  });
+  const storyCount = storyState.owner === viewerId ? storyState.count : 0;
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
@@ -66,6 +72,13 @@ export default function UserScreen() {
       return;
     }
     const current = ++sequence.current;
+    // 故事入口是附属信息：失败只是不显示入口，不影响资料和帖子。
+    void fetchUserStories(userId)
+      .then((data) => {
+        if (current === sequence.current)
+          setStoryState({ owner: viewerId, count: data.stories.length });
+      })
+      .catch(() => {});
     try {
       const [profileData, feedData] = await Promise.all([
         fetchUserProfile(userId),
@@ -118,23 +131,34 @@ export default function UserScreen() {
   const handleFollow = () => {
     if (requireLogin() || !profile || followPending) return;
     const currentRequest = sequence.current;
+    const target = !profile.is_following;
+    const previous = { is_following: profile.is_following, followers: profile.followers };
     setFollowPending(true);
-    void setFollow(userId, !profile.is_following)
+    // 乐观更新：按钮立刻切换；失败时回滚到请求前的关系与计数。
+    setProfile((current) =>
+      current
+        ? { ...current, is_following: target, followers: current.followers + (target ? 1 : -1) }
+        : current,
+    );
+    void setFollow(userId, target)
       .then((data) => {
         if (currentRequest !== sequence.current) return;
+        // 以服务端最终状态校准（幂等接口重复请求不会反转）。
         setProfile((current) =>
-          current
+          current && current.is_following !== data.following
             ? {
                 ...current,
                 is_following: data.following,
-                followers:
-                  current.followers +
-                  (data.following === current.is_following ? 0 : data.following ? 1 : -1),
+                followers: current.followers + (data.following ? 1 : -1),
               }
             : current,
         );
       })
-      .catch((exc) => Alert.alert('关注失败', exc instanceof Error ? exc.message : '请重试'))
+      .catch((exc) => {
+        if (currentRequest === sequence.current)
+          setProfile((current) => (current ? { ...current, ...previous } : current));
+        Alert.alert('关注失败', exc instanceof Error ? exc.message : '请重试');
+      })
       .finally(() => setFollowPending(false));
   };
 
@@ -239,15 +263,27 @@ export default function UserScreen() {
         ) : (
           <>
             <View style={styles.headerCard}>
-              <View style={[styles.avatar, { backgroundColor: theme.tintBackground }]}>
+              <Pressable
+                onPress={storyCount > 0 ? () => router.push(`/story?userId=${userId}`) : undefined}
+                disabled={storyCount === 0}
+                accessibilityLabel={
+                  storyCount > 0 ? `查看 ${profile.displayName} 的 ${storyCount} 条故事` : undefined
+                }
+                style={[
+                  styles.avatar,
+                  { backgroundColor: theme.tintBackground },
+                  storyCount > 0 && { borderWidth: 2.5, borderColor: theme.tint },
+                ]}
+              >
                 <ThemedText style={{ fontSize: 34 }}>{profile.avatarEmoji}</ThemedText>
-              </View>
+              </Pressable>
               <View style={styles.headerTexts}>
                 <ThemedText type="smallBold" style={styles.name}>
                   {profile.displayName}
                 </ThemedText>
                 <ThemedText type="small" themeColor="textSecondary">
                   @{profile.username} · {profile.pets.length} 只宠物
+                  {storyCount > 0 ? ` · ${storyCount} 条故事` : ''}
                 </ThemedText>
               </View>
               {!isMe && (

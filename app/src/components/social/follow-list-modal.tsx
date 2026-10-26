@@ -31,11 +31,13 @@ export function FollowListModal({
   const { user } = useAuth();
   // null = 加载中
   const [users, setUsers] = useState<FollowListUser[] | null>(null);
-  const [error, setError] = useState('');
-  const [pendingId, setPendingId] = useState<number | null>(null);
+  const [loadError, setLoadError] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [pendingIds, setPendingIds] = useState<Set<number>>(new Set());
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [loadedKey, setLoadedKey] = useState('');
+  const [attempt, setAttempt] = useState(0);
   const currentKey = `${userId}:${kind}:${visible}`;
 
   useEffect(() => {
@@ -47,29 +49,38 @@ export function FollowListModal({
           setUsers(data.users);
           setNextCursor(data.page.nextCursor);
           setLoadedKey(currentKey);
-          setError('');
+          setLoadError('');
+          setActionError('');
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setUsers([]);
+          // 读失败不是“没有人”：不给空数组伪装成空态，由 loadError 分支接管。
+          setUsers(null);
           setNextCursor(null);
           setLoadedKey(currentKey);
-          setError('列表加载失败，请关闭后重试');
+          setLoadError('列表加载失败');
         }
       });
     return () => {
       cancelled = true;
     };
-  }, [visible, userId, kind, currentKey]);
+  }, [visible, userId, kind, currentKey, attempt]);
 
-  const loading = users === null || loadedKey !== currentKey;
+  const loading = !loadError && (users === null || loadedKey !== currentKey);
 
   const toggle = (target: FollowListUser) => {
-    if (!user || pendingId !== null) return;
-    setPendingId(target.id);
-    setError('');
-    setFollow(target.id, !target.is_following)
+    if (!user || pendingIds.has(target.id)) return;
+    const next = !target.is_following;
+    setPendingIds((current) => new Set(current).add(target.id));
+    setActionError('');
+    // 乐观更新：当前行立刻切换，失败回滚该行。
+    setUsers(
+      (current) =>
+        current?.map((item) => (item.id === target.id ? { ...item, is_following: next } : item)) ??
+        current,
+    );
+    setFollow(target.id, next)
       .then((result) =>
         setUsers(
           (current) =>
@@ -78,8 +89,22 @@ export function FollowListModal({
             ) ?? current,
         ),
       )
-      .catch(() => setError('关注操作失败，请重试'))
-      .finally(() => setPendingId(null));
+      .catch(() => {
+        setUsers(
+          (current) =>
+            current?.map((item) =>
+              item.id === target.id ? { ...item, is_following: target.is_following } : item,
+            ) ?? current,
+        );
+        setActionError('关注操作失败，请重试');
+      })
+      .finally(() =>
+        setPendingIds((current) => {
+          const copy = new Set(current);
+          copy.delete(target.id);
+          return copy;
+        }),
+      );
   };
 
   const loadMore = async () => {
@@ -92,9 +117,9 @@ export function FollowListModal({
         ...data.users.filter((item) => !current?.some((previous) => previous.id === item.id)),
       ]);
       setNextCursor(data.page.nextCursor);
-      setError('');
+      setActionError('');
     } catch {
-      setError('更多用户加载失败，请重试');
+      setActionError('更多用户加载失败，请重试');
     } finally {
       setLoadingMore(false);
     }
@@ -126,12 +151,29 @@ export function FollowListModal({
           </View>
 
           <ScrollView style={styles.list} contentContainerStyle={{ gap: Spacing.two }}>
-            {!!error && !loading && (
+            {!!actionError && (
               <ThemedText type="small" style={{ color: theme.danger }}>
-                {error}
+                {actionError}
               </ThemedText>
             )}
-            {loading ? (
+            {loadError ? (
+              <Pressable
+                onPress={() => {
+                  setLoadError('');
+                  setUsers(null);
+                  setAttempt((value) => value + 1);
+                }}
+                style={styles.empty}
+                accessibilityLabel="重新加载列表"
+              >
+                <ThemedText type="small" style={{ color: theme.danger }}>
+                  {loadError}
+                </ThemedText>
+                <ThemedText type="small" style={{ color: theme.tint }}>
+                  点击重试
+                </ThemedText>
+              </Pressable>
+            ) : loading || users === null ? (
               <ThemedText type="small" themeColor="textSecondary" style={styles.empty}>
                 加载中…
               </ThemedText>
@@ -142,6 +184,7 @@ export function FollowListModal({
             ) : (
               users.map((item) => {
                 const isSelf = user?.id === item.id;
+                const pending = pendingIds.has(item.id);
                 return (
                   <View
                     key={item.id}
@@ -167,13 +210,15 @@ export function FollowListModal({
                     {!isSelf && (
                       <Pressable
                         onPress={() => toggle(item)}
-                        disabled={pendingId !== null}
+                        disabled={pending}
+                        accessibilityLabel={item.is_following ? '取消关注' : '关注'}
                         style={({ pressed }) => [
                           styles.followButton,
                           {
                             backgroundColor: item.is_following
                               ? theme.backgroundSelected
                               : theme.tint,
+                            opacity: pending ? 0.6 : 1,
                           },
                           pressed && { opacity: 0.7 },
                         ]}

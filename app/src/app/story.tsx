@@ -50,6 +50,7 @@ export default function StoryScreen() {
   const story = visibleStories[index];
   const progressRef = useRef(0);
   const activeViewerKey = useRef(viewerKey);
+  const viewedIds = useRef(new Set<number>());
   const invalidUserId = !Number.isSafeInteger(userId) || userId <= 0;
 
   useEffect(() => {
@@ -100,6 +101,11 @@ export default function StoryScreen() {
     const timer = setInterval(() => {
       progressRef.current = Math.min(1, progressRef.current + 0.02);
       setProgress(progressRef.current);
+      // 真正可见且未暂停地展示满 1 秒（进度 0.2）才算已读；预加载、刚解码都不算。
+      if (progressRef.current >= 0.2 && user && !viewedIds.current.has(story.id)) {
+        viewedIds.current.add(story.id);
+        void markStoryViewed(story.id).catch(() => {});
+      }
       if (progressRef.current >= 1) {
         progressRef.current = 0;
         setProgress(0);
@@ -109,7 +115,7 @@ export default function StoryScreen() {
       }
     }, 100);
     return () => clearInterval(timer);
-  }, [ready, paused, story, index, visibleStories.length, router]);
+  }, [ready, paused, story, index, visibleStories.length, router, user]);
 
   const showStory = (nextIndex: number) => {
     progressRef.current = 0;
@@ -122,7 +128,6 @@ export default function StoryScreen() {
   const onLoaded = () => {
     if (!story || loadedFor !== viewerKey || activeViewerKey.current !== viewerKey) return;
     setReady(true);
-    if (user) void markStoryViewed(story.id).catch(() => setError('故事已过期或暂时不可查看'));
   };
 
   const removeStory = () => {

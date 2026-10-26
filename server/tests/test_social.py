@@ -508,6 +508,25 @@ class SocialTests(unittest.TestCase):
         self.assertEqual(replay.status_code, 410)
         self.assertEqual(self.client.get('/api/app/feed').get_json()['posts'], [])
 
+    def test_comment_context_locates_root_and_respects_visibility(self):
+        post_id = self.client.post('/api/app/posts', headers=self.header('alice'),
+                                   data={'caption': 'ctx', 'audience': 'followers'}).get_json()['postId']
+        root = self.client.post(f'/api/app/posts/{post_id}/comments', headers=self.header('alice'),
+                                json={'body': 'root'}).get_json()['comment']
+        reply = self.client.post(f'/api/app/posts/{post_id}/comments', headers=self.header('alice'),
+                                 json={'body': 'reply', 'replyToCommentId': root['id']}).get_json()['comment']
+        context = self.client.get(f"/api/app/comments/{reply['id']}/context",
+                                  headers=self.header('alice')).get_json()
+        self.assertEqual(context['context'], {'commentId': reply['id'], 'rootId': root['id'],
+                                              'postId': post_id})
+        root_context = self.client.get(f"/api/app/comments/{root['id']}/context",
+                                       headers=self.header('alice')).get_json()['context']
+        self.assertIsNone(root_context['rootId'])
+        # bob 不是粉丝，看不到仅粉丝帖，也就不能通过评论上下文探测到它。
+        self.assertEqual(self.client.get(f"/api/app/comments/{reply['id']}/context",
+                         headers=self.header('bob')).status_code, 404)
+        self.assertEqual(self.client.get('/api/app/comments/999/context').status_code, 404)
+
     def test_public_profile_edit_uses_version_and_safe_fields(self):
         profile = self.client.patch('/api/app/me/public-profile', headers=self.header('alice'),
                                     json={'displayName': '小橘', 'bio': '喜欢遛狗',
