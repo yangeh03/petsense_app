@@ -43,6 +43,7 @@ export function selectPetAvatar({
   avatarTemplate,
   frame,
   fresh,
+  previewAction,
   failedUrls = [],
 }: {
   pet: SocialPet;
@@ -50,12 +51,15 @@ export function selectPetAvatar({
   avatarTemplate?: PetAvatarTemplate | null;
   frame: TelemetryFrame | null;
   fresh: boolean;
+  previewAction?: PetActionKey | null;
   failedUrls?: readonly string[];
 }) {
   const ownAssets = pet.petgif_id && petgif?.id === pet.petgif_id ? petgif : null;
   const selectedTemplate = pet.avatar_template_id === avatarTemplate?.id ? avatarTemplate : null;
-  const actionKey =
+  const liveActionKey =
     fresh && pet.device_id && frame?.deviceId === pet.device_id ? inferPetAction(frame) : null;
+  const actionKey =
+    liveActionKey || (!fresh && selectedTemplate && previewAction ? previewAction : null);
   const actionCandidates = actionKey
     ? [ownAssets?.behaviors[actionKey]?.gifUrl, selectedTemplate?.behaviors[actionKey]?.gifUrl]
     : [];

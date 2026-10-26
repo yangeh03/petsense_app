@@ -128,6 +128,34 @@ test('a selected template replaces the profile photo with a standing preset whil
   assert.equal(result.staticUrl, '/template.png');
   assert.equal(result.label, '静止站立');
 });
+test('an offline template preview plays its selected action, but live telemetry wins', () => {
+  const avatarTemplate = {
+    id: 'marni',
+    characterCardUrl: '/template.png',
+    behaviors: { walk: { gifUrl: '/template-walk.gif' }, sit: { gifUrl: '/template-sit.gif' } },
+  };
+  const preview = selector().selectPetAvatar({
+    pet: { ...pet, petgif_id: null, avatar_template_id: 'marni' },
+    petgif: null,
+    avatarTemplate,
+    frame: null,
+    fresh: false,
+    previewAction: 'walk',
+  });
+  assert.equal(preview.animationUrl, '/template-walk.gif');
+  assert.equal(preview.label, '走动');
+
+  const live = selector().selectPetAvatar({
+    pet: { ...pet, petgif_id: null, avatar_template_id: 'marni' },
+    petgif: null,
+    avatarTemplate,
+    frame: frame('sitting'),
+    fresh: true,
+    previewAction: 'walk',
+  });
+  assert.equal(live.animationUrl, '/template-sit.gif');
+  assert.equal(live.label, '坐着');
+});
 test('legacy hook follows reported predictions and never invents movement or sleep', () => {
   const { inferPetAction } = selector();
   assert.equal(inferPetAction(null), null);

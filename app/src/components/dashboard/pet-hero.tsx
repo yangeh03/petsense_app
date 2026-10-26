@@ -7,7 +7,7 @@ import { ThemedText } from '@/components/themed-text';
 import { Fonts, Shadows } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { absoluteUrl } from '@/services/api';
-import { selectPetAvatar } from '@/services/pet-avatar';
+import { PET_ACTIONS, selectPetAvatar, type PetActionKey } from '@/services/pet-avatar';
 import { soundStatus } from '@/services/sound-view';
 import type { PetAvatarTemplate, PetgifPet, SocialPet } from '@/types/social';
 import type { TelemetryFrame } from '@/types/telemetry';
@@ -35,6 +35,7 @@ export function PetHero({
   onSoundPress: () => void;
 }) {
   const theme = useTheme();
+  const [previewAction, setPreviewAction] = useState<PetActionKey | null>(null);
   // Retry failed media on pull-to-refresh or the explicit retry button; keep good GIFs mounted.
   const [failures, setFailures] = useState<{
     petId: number;
@@ -47,12 +48,17 @@ export function PetHero({
   });
   const failed =
     failures.petId === pet.id && failures.refreshVersion === refreshVersion ? failures.urls : [];
+  const previewActions = (Object.keys(PET_ACTIONS) as PetActionKey[]).filter((action) =>
+    Boolean(avatarTemplate?.behaviors[action]?.gifUrl),
+  );
+  const canPreview = !current && previewActions.length > 0;
   const media = selectPetAvatar({
     pet,
     petgif,
     avatarTemplate,
     frame,
     fresh: current,
+    previewAction: canPreview ? previewAction : null,
     failedUrls: failed,
   });
   const animation = media.animationUrl;
@@ -71,8 +77,20 @@ export function PetHero({
     <View style={styles.hero}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`${pet.name}的${animation ? `${actionLabel}动画` : '头像'}，编辑宠物档案`}
-        onPress={onEdit}
+        accessibilityLabel={`${pet.name}的${animation ? `${actionLabel}动画` : '头像'}${
+          canPreview ? '，轻点切换预设动作，长按编辑宠物档案' : '，编辑宠物档案'
+        }`}
+        onLongPress={canPreview ? onEdit : undefined}
+        onPress={() => {
+          if (!canPreview) {
+            onEdit();
+            return;
+          }
+          setPreviewAction((previous) => {
+            const currentIndex = previous ? previewActions.indexOf(previous) : -1;
+            return previewActions[(currentIndex + 1) % previewActions.length];
+          });
+        }}
         style={[styles.ring, { borderColor: color, backgroundColor: theme.tintBackground }]}
       >
         <View style={[styles.portrait, { borderColor: theme.backgroundElement }]}>
