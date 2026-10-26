@@ -42,7 +42,16 @@
           "imageWidth": 76
         }
       ],
-      "expo-font"
+      "expo-font",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "允许 PetSense 录制宠物动作与时间校准视频。",
+          "microphonePermission": "允许 PetSense 同步记录校准视频的声音。",
+          "recordAudioAndroid": true
+        }
+      ],
+      "expo-video"
     ],
     "experiments": {
       "typedRoutes": true,

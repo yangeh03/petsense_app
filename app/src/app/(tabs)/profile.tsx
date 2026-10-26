@@ -130,6 +130,15 @@ export default function ProfileScreen() {
 
         {/* 我的设备（认领/解绑项圈） */}
         <DeviceCard />
+        <Pressable onPress={() => router.push('/collect')} accessibilityRole="button">
+          <ThemedView type="backgroundElement" style={styles.menuRow}>
+            <AppIcon name="video-outline" size={20} color={theme.tint} />
+            <ThemedText type="default" style={styles.menuLabel}>
+              录像标注与校准
+            </ThemedText>
+            <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
+          </ThemedView>
+        </Pressable>
 
         {/* 我的宠物 */}
         <View style={styles.sectionHeader}>
