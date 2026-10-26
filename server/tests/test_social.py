@@ -441,6 +441,73 @@ class SocialTests(unittest.TestCase):
         self.assertEqual(self.client.get('/api/app/me/bookmarks',
                          headers=self.header('bob')).get_json()['posts'], [])
 
+    def test_profile_posts_count_hides_followers_only_posts_from_strangers(self):
+        alice = self.tokens['alice'][0]
+        self.client.post('/api/app/posts', headers=self.header('alice'), data={'caption': 'public'})
+        self.client.post('/api/app/posts', headers=self.header('alice'),
+                         data={'caption': 'secret', 'audience': 'followers'})
+        self.assertEqual(self.client.get(f'/api/app/users/{alice}').get_json()['profile']['posts_count'], 1)
+        self.assertEqual(self.client.get(f'/api/app/users/{alice}', headers=self.header('bob'))
+                         .get_json()['profile']['posts_count'], 1)
+        self.assertEqual(self.client.get(f'/api/app/users/{alice}', headers=self.header('alice'))
+                         .get_json()['profile']['posts_count'], 2)
+        self.client.put(f'/api/app/users/{alice}/follow', headers=self.header('bob'))
+        self.assertEqual(self.client.get(f'/api/app/users/{alice}', headers=self.header('bob'))
+                         .get_json()['profile']['posts_count'], 2)
+
+    def test_mutation_key_race_loser_gets_replay_not_500(self):
+        first = self.client.post('/api/app/posts', headers=self.header('alice'),
+                                 data={'caption': 'race', 'client_mutation_id': 'race-1'})
+        self.assertEqual(first.status_code, 201)
+        post_id = first.get_json()['postId']
+        comment = self.client.post(f'/api/app/posts/{post_id}/comments', headers=self.header('bob'),
+                                   json={'body': 'hi', 'clientMutationId': 'race-c'})
+        self.assertEqual(comment.status_code, 201)
+        comment_id = comment.get_json()['comment']['id']
+        from PIL import Image
+        image_bytes = io.BytesIO()
+        Image.new('RGB', (3, 3), 'orange').save(image_bytes, format='PNG')
+        story = self.client.post('/api/app/stories', headers=self.header('alice'), data={
+            'caption': 's', 'client_mutation_id': 'race-s',
+            'image': (io.BytesIO(image_bytes.getvalue()), 'a.png')})
+        self.assertEqual(story.status_code, 201)
+        story_id = story.get_json()['story']['id']
+
+        # 模拟并发窗口：落败请求的幂等预检查没看到赢家行，插入时撞唯一约束。
+        original = social_routes.find_mutation_row
+        social_routes.find_mutation_row = lambda *args, **kwargs: None
+        try:
+            replay = self.client.post('/api/app/posts', headers=self.header('alice'),
+                                      data={'caption': 'race', 'client_mutation_id': 'race-1'})
+            self.assertEqual(replay.status_code, 200)
+            self.assertEqual(replay.get_json()['postId'], post_id)
+            conflict = self.client.post('/api/app/posts', headers=self.header('alice'),
+                                        data={'caption': 'other', 'client_mutation_id': 'race-1'})
+            self.assertEqual(conflict.status_code, 409)
+            comment_replay = self.client.post(f'/api/app/posts/{post_id}/comments',
+                                              headers=self.header('bob'),
+                                              json={'body': 'hi', 'clientMutationId': 'race-c'})
+            self.assertEqual(comment_replay.status_code, 200)
+            self.assertEqual(comment_replay.get_json()['comment']['id'], comment_id)
+            story_replay = self.client.post('/api/app/stories', headers=self.header('alice'), data={
+                'caption': 's', 'client_mutation_id': 'race-s',
+                'image': (io.BytesIO(image_bytes.getvalue()), 'b.png')})
+            self.assertEqual(story_replay.status_code, 200)
+            self.assertEqual(story_replay.get_json()['story']['id'], story_id)
+        finally:
+            social_routes.find_mutation_row = original
+        self.assertEqual(len(list(Path(config.SOCIAL_MEDIA_DIR).glob('story_*'))), 1)
+
+    def test_replaying_deleted_post_mutation_returns_gone(self):
+        first = self.client.post('/api/app/posts', headers=self.header('alice'),
+                                 data={'caption': 'gone', 'client_mutation_id': 'gone-1'})
+        post_id = first.get_json()['postId']
+        self.client.delete(f'/api/app/posts/{post_id}', headers=self.header('alice'))
+        replay = self.client.post('/api/app/posts', headers=self.header('alice'),
+                                  data={'caption': 'gone', 'client_mutation_id': 'gone-1'})
+        self.assertEqual(replay.status_code, 410)
+        self.assertEqual(self.client.get('/api/app/feed').get_json()['posts'], [])
+
     def test_public_profile_edit_uses_version_and_safe_fields(self):
         profile = self.client.patch('/api/app/me/public-profile', headers=self.header('alice'),
                                     json={'displayName': '小橘', 'bio': '喜欢遛狗',

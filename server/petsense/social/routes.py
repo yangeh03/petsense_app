@@ -12,6 +12,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 from flask import Blueprint, request, send_from_directory
 from sqlalchemy import delete, func, literal, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 
 from petsense import config
@@ -35,6 +36,40 @@ def visible_post_filter(viewer_id):
 def get_visible_post(session, post_id, viewer_id):
     return session.execute(select(Post).where(Post.id == post_id,
                     *visible_post_filter(viewer_id))).scalar_one_or_none()
+
+
+def find_mutation_row(session, model, user_id, mutation_id):
+    """按 (作者, 幂等键) 查已有写入；并发测试通过替换此函数模拟预检查未命中。"""
+    return session.execute(select(model).where(model.user_id == user_id,
+                    model.client_mutation_id == mutation_id)).scalar_one_or_none()
+
+
+def insert_with_mutation_key(session, row, model, user_id, mutation_id, lookup=find_mutation_row):
+    """在 SAVEPOINT 内插入；并发同键撞唯一约束时回滚到保存点并返回赢家行。
+
+    返回 (row, None) 表示插入成功；(None, winner) 表示应按幂等重放处理；
+    (None, None) 表示撞了约束但当前事务快照里还看不到赢家，调用方应返回可重试错误。
+    """
+    try:
+        with session.begin_nested():
+            session.add(row)
+            session.flush()
+        return row, None
+    except IntegrityError:
+        if not mutation_id:
+            raise
+    return None, lookup(session, model, user_id, mutation_id)
+
+
+MUTATION_RETRY = {'success': False, 'message': '操作正在处理，请稍后重试'}, 409
+
+
+def remove_social_media(*paths):
+    for path in paths:
+        try:
+            os.remove(os.path.join(config.SOCIAL_MEDIA_DIR, path))
+        except OSError:
+            pass
 
 
 def save_upload_image(file_storage, prefix):
@@ -289,32 +324,33 @@ def app_create_post():
                 path, _ = save_upload_image(image, 'post')
                 filenames.append(path)
         except ValueError as exc:
-            for path in filenames:
-                try:
-                    os.remove(os.path.join(config.SOCIAL_MEDIA_DIR, path))
-                except OSError:
-                    pass
+            remove_social_media(*filenames)
             return {'success': False, 'message': str(exc)}, 400
         filename = filenames[0] if filenames else None
+
+    def replay_response(old):
+        remove_social_media(*filenames)
+        if old.deleted_at is not None:
+            return {'success': False, 'message': '帖子已删除'}, 410
+        if old.caption != caption or old.audience != audience or old.pet_id != pet_id:
+            return {'success': False, 'message': '操作标识已用于其他帖子'}, 409
+        return {'success': True, 'postId': old.id}, 200
+
     with session_scope() as s:
         if mutation_id:
-            old = s.execute(select(Post).where(Post.user_id == user['id'],
-                    Post.client_mutation_id == mutation_id)).scalar_one_or_none()
+            old = find_mutation_row(s, Post, user['id'], mutation_id)
             if old:
-                for path in filenames:
-                    try:
-                        os.remove(os.path.join(config.SOCIAL_MEDIA_DIR, path))
-                    except OSError:
-                        pass
-                if old.caption != caption or old.audience != audience or old.pet_id != pet_id:
-                    return {'success': False, 'message': '操作标识已用于其他帖子'}, 409
-                return {'success': True, 'postId': old.id}, 200
+                return replay_response(old)
         post = Post(user_id=user['id'], pet_id=pet_id, image_path=filename or '',
                     caption=caption, location_text=location,
                     media_url=media_url or None, media_kind=media_kind, created_at=utc_now(),
                     audience=audience, client_mutation_id=mutation_id)
-        s.add(post)
-        s.flush()
+        post, winner = insert_with_mutation_key(s, post, Post, user['id'], mutation_id)
+        if post is None:
+            if winner is None:
+                remove_social_media(*filenames)
+                return MUTATION_RETRY
+            return replay_response(winner)
         for position, path in enumerate(filenames):
             s.add(PostMedia(post_id=post.id, position=position, path=path, kind='image'))
         post_id = post.id
@@ -522,18 +558,20 @@ def app_post_comments(post_id):
     reply_to_id = payload.get('replyToCommentId')
     if reply_to_id is not None and (not isinstance(reply_to_id, int) or reply_to_id <= 0):
         return {'success': False, 'message': '无效的回复目标'}, 400
+    def replay_response(old):
+        if old.post_id != post_id or old.body != body or old.reply_to_comment_id != reply_to_id:
+            return {'success': False, 'message': '操作标识已用于其他评论'}, 409
+        return {'success': True, 'comment': comment_dict(old, user['display_name'],
+                user['avatar_emoji'])}, 200
+
     with session_scope() as s:
         post = get_visible_post(s, post_id, user['id'])
         if not post:
             return {'success': False, 'message': '帖子不存在'}, 404
         if mutation_id:
-            old = s.execute(select(Comment).where(Comment.user_id == user['id'],
-                    Comment.client_mutation_id == mutation_id)).scalar_one_or_none()
+            old = find_mutation_row(s, Comment, user['id'], mutation_id)
             if old:
-                if old.post_id != post_id or old.body != body or old.reply_to_comment_id != reply_to_id:
-                    return {'success': False, 'message': '操作标识已用于其他评论'}, 409
-                return {'success': True, 'comment': comment_dict(old, user['display_name'],
-                        user['avatar_emoji'])}, 200
+                return replay_response(old)
         root_id = None
         if reply_to_id is not None:
             target = s.get(Comment, reply_to_id)
@@ -543,8 +581,9 @@ def app_post_comments(post_id):
         comment = Comment(post_id=post_id, user_id=user['id'], body=body,
                           root_id=root_id, reply_to_comment_id=reply_to_id,
                           client_mutation_id=mutation_id, created_at=utc_now())
-        s.add(comment)
-        s.flush()
+        comment, winner = insert_with_mutation_key(s, comment, Comment, user['id'], mutation_id)
+        if comment is None:
+            return MUTATION_RETRY if winner is None else replay_response(winner)
         queue_social_event(s, f'comment:{comment.id}:post', 'comment',
                            user['id'], post.user_id, post_id=post_id,
                            comment_id=comment.id)
@@ -624,7 +663,8 @@ def app_user_profile(user_id):
             profile['version'] = row.profile_version
         profile['posts_count'] = s.execute(select(func.count()).select_from(Post)
                                            .where(Post.user_id == user_id,
-                                                  Post.deleted_at.is_(None))).scalar_one()
+                                                  *visible_post_filter(viewer['id'] if viewer else -1))
+                                           ).scalar_one()
         profile['followers'] = s.execute(select(func.count()).select_from(Follow)
                                          .where(Follow.followee_id == user_id)).scalar_one()
         profile['following'] = s.execute(select(func.count()).select_from(Follow)
@@ -783,22 +823,28 @@ def app_create_story():
         path, _ = save_upload_image(image, 'story')
     except ValueError as exc:
         return {'success': False, 'message': str(exc)}, 400
+
+    def replay_response(s, old):
+        remove_social_media(path)
+        if old.caption != caption or old.audience != audience:
+            return {'success': False, 'message': '操作标识已用于其他故事'}, 409
+        return {'success': True, 'story': story_dict(old, s.get(User, user['id']))}, 200
+
     with session_scope() as s:
         if mutation_id:
-            old = s.execute(select(Story).where(Story.user_id == user['id'],
-                Story.client_mutation_id == mutation_id)).scalar_one_or_none()
+            old = find_mutation_row(s, Story, user['id'], mutation_id)
             if old:
-                os.remove(os.path.join(config.SOCIAL_MEDIA_DIR, path))
-                if old.caption != caption or old.audience != audience:
-                    return {'success': False, 'message': '操作标识已用于其他故事'}, 409
-                author = s.get(User, user['id'])
-                return {'success': True, 'story': story_dict(old, author)}, 200
+                return replay_response(s, old)
         now = utc_now()
         story = Story(user_id=user['id'], image_path=path, caption=caption,
                       audience=audience, created_at=now, expires_at=now + timedelta(hours=24),
                       client_mutation_id=mutation_id)
-        s.add(story)
-        s.flush()
+        story, winner = insert_with_mutation_key(s, story, Story, user['id'], mutation_id)
+        if story is None:
+            if winner is None:
+                remove_social_media(path)
+                return MUTATION_RETRY
+            return replay_response(s, winner)
         author = s.get(User, user['id'])
         result = story_dict(story, author)
     return {'success': True, 'story': result}, 201
