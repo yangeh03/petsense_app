@@ -269,6 +269,8 @@ export default function CommunitySearchScreen() {
                       router.push(`/post?id=${item.value.id}`);
                     }}
                     style={[styles.row, { borderColor: theme.backgroundSelected }]}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${item.value.display_name} 的帖子：${item.value.caption || '图片动态'}`}
                   >
                     <ThemedText type="smallBold">{item.value.display_name} · 帖子</ThemedText>
                     <ThemedText type="small" numberOfLines={2}>
@@ -284,6 +286,8 @@ export default function CommunitySearchScreen() {
                       router.push(`/user?id=${item.value.id}`);
                     }}
                     style={[styles.row, { borderColor: theme.backgroundSelected }]}
+                    accessibilityRole="button"
+                    accessibilityLabel={`查看 ${item.value.display_name} 的主页`}
                   >
                     <ThemedText type="smallBold">
                       {item.value.avatar_emoji} {item.value.display_name}
@@ -299,8 +303,17 @@ export default function CommunitySearchScreen() {
                     setSelectedPlace(item.value.name);
                   }}
                   style={[styles.row, { borderColor: theme.backgroundSelected }]}
+                  accessibilityRole="button"
+                  accessibilityLabel={`地点 ${item.value.name}，${item.value.postsCount} 条相关帖子`}
                 >
-                  <ThemedText type="smallBold">📍 {item.value.name}</ThemedText>
+                  <View style={styles.placeTitle}>
+                    <SymbolView
+                      name={{ ios: 'mappin.and.ellipse', android: 'place', web: 'place' }}
+                      size={16}
+                      tintColor={theme.tint}
+                    />
+                    <ThemedText type="smallBold">{item.value.name}</ThemedText>
+                  </View>
                   <ThemedText type="small" themeColor="textSecondary">
                     {item.value.postsCount} 条相关帖子
                   </ThemedText>
@@ -339,4 +352,5 @@ const styles = StyleSheet.create({
   recentRow: { flexDirection: 'row', justifyContent: 'space-between' },
   recentItem: { flex: 1 },
   row: { borderBottomWidth: 1, paddingVertical: Spacing.three, gap: Spacing.one },
+  placeTitle: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one },
 });

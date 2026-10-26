@@ -10,6 +10,26 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-26-community-upgrade-design.md`
 
+## 进度状态（2026-10-27 更新）
+
+Codex 完成了 Task 1–9 的绝大部分代码后因额度中断，未提交、未验证。之后的接手工作：
+
+- 全部代码已提交到 `codex/community-upgrade`；服务端 155 个单测、客户端 lint / typecheck / format / 44 个测试、Web 构建全部通过。
+- 用隔离服务端 + Expo Go 模拟器做了完整的端到端验收（Feed、点赞、收藏、两层评论、关注、通知与评论锚点、故事查看与发布、多图发帖、详情、编辑、删除、搜索三分类、地点筛选、收藏列表、公开资料编辑、附近宠友/动态、被发现开关）。验收中发现并修复了约 20 个问题，详见 git log 中 `fix:` 开头的提交。
+- Task 1–4、6–9 视为完成；Task 5 的服务端搜索与地点聚合完成，但 **Place/Topic 正规实体未建**（地点仍是 `location_text` 聚合）；Task 10 的独立代码审查未做。
+
+**仍未完成（设计明确要求）：**
+
+1. PetGIF 日记发布路径（`petgif/proxy.py`）仍直接创建 Post，未统一到带受众/幂等键/PostMedia/通知事件的社区写入路径。
+2. Place / Topic 正规实体与话题页。
+3. 逐张上传进度与单张重试（当前一次 multipart 全部提交）。
+4. 点赞通知按帖子/时间窗跨用户聚合（当前只做同人同帖去重）。
+5. 搜索输入法 composing 态处理；定位拒绝时的"同城模式"兜底。
+6. 附近查询频控；旧帖 `image_path` 仍走公开 `/uploads/`（有"legacy 媒体禁止改为仅粉丝"守卫补偿）。
+7. 正式附近功能的 PostgreSQL + PostGIS 路径（当前纯 haversine，符合首期设计）。
+
+**环境注意：** `expo-location` 与 `expo-image-manipulator` 是本分支新增的原生模块，Expo Go 自带可直接跑；现有 `com.yangeh03.petsense` 开发包是旧构建，需要重新 `expo run:ios` 才包含它们。
+
 ## Global Constraints
 
 - Do not alter the dirty original checkout or push to main. All code goes on `codex/community-upgrade` in this worktree.

@@ -82,6 +82,7 @@ export function PostCard({
               {post.pet_name ? `${post.pet_emoji || '🐾'} ${post.pet_name} · ` : ''}
               {post.location_text ? `${post.location_text} · ` : ''}
               {timeAgo(post.created_at)}
+              {post.updated_at ? ' · 已编辑' : ''}
             </ThemedText>
           </View>
         </Pressable>

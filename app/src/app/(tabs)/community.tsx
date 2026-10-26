@@ -291,7 +291,13 @@ export default function CommunityScreen() {
               <View
                 style={[
                   styles.storyRing,
-                  { borderColor: item.unseen ? theme.tint : theme.backgroundSelected },
+                  {
+                    // 自己的故事不存在“未读”，不用品牌色环误导成有新内容。
+                    borderColor:
+                      item.unseen && item.user_id !== user?.id
+                        ? theme.tint
+                        : theme.backgroundSelected,
+                  },
                 ]}
               >
                 <ThemedText style={styles.storyEmoji}>{item.avatar_emoji || '🙂'}</ThemedText>
