@@ -111,16 +111,23 @@ export default function ProfileScreen() {
         {/* 用户卡 */}
         <ThemedView type="backgroundElement" style={styles.userCard}>
           <View style={[styles.userAvatar, { backgroundColor: theme.tintBackground }]}>
-            <ThemedText style={{ fontSize: 32 }}>{user.avatarEmoji}</ThemedText>
+            <ThemedText style={{ fontSize: 32 }}>
+              {profile?.avatarEmoji ?? user.avatarEmoji}
+            </ThemedText>
           </View>
           <View style={styles.userTexts}>
             <ThemedText type="smallBold" style={styles.userName}>
-              {user.displayName}
+              {profile?.displayName ?? user.displayName}
             </ThemedText>
             <ThemedText type="small" themeColor="textSecondary">
               @{user.username}
             </ThemedText>
           </View>
+          <Pressable onPress={() => router.push('/profile-edit')} accessibilityLabel="编辑公开资料">
+            <ThemedText type="small" style={{ color: theme.tint }}>
+              编辑
+            </ThemedText>
+          </Pressable>
           <Pressable
             onPress={confirmLogout}
             hitSlop={8}
@@ -140,12 +147,46 @@ export default function ProfileScreen() {
             label="帖子"
             onPress={() => router.push(`/user?id=${user.id}`)}
           />
-          <StatCell value={profile?.followers ?? 0} label="粉丝" />
-          <StatCell value={profile?.following ?? 0} label="关注" />
+          <StatCell
+            value={profile?.followers ?? 0}
+            label="粉丝"
+            onPress={() => setFollowKind('followers')}
+          />
+          <StatCell
+            value={profile?.following ?? 0}
+            label="关注"
+            onPress={() => setFollowKind('following')}
+          />
         </ThemedView>
 
         {/* 我的设备（认领/解绑项圈） */}
         <DeviceCard />
+        <Pressable onPress={() => router.push('/social-inbox')} accessibilityRole="button">
+          <ThemedView type="backgroundElement" style={styles.menuRow}>
+            <SymbolView
+              name={{ ios: 'bell', android: 'notifications_none', web: 'notifications_none' }}
+              size={20}
+              tintColor={theme.tint}
+            />
+            <ThemedText type="default" style={styles.menuLabel}>
+              互动通知
+            </ThemedText>
+            <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
+          </ThemedView>
+        </Pressable>
+        <Pressable onPress={() => router.push('/bookmarks')} accessibilityRole="button">
+          <ThemedView type="backgroundElement" style={styles.menuRow}>
+            <SymbolView
+              name={{ ios: 'bookmark', android: 'bookmark_border', web: 'bookmark_border' }}
+              size={20}
+              tintColor={theme.tint}
+            />
+            <ThemedText type="default" style={styles.menuLabel}>
+              我的收藏
+            </ThemedText>
+            <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
+          </ThemedView>
+        </Pressable>
         <Pressable onPress={() => router.push('/collect')} accessibilityRole="button">
           <ThemedView type="backgroundElement" style={styles.menuRow}>
             <AppIcon name="video-outline" size={20} color={theme.tint} />

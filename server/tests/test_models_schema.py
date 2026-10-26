@@ -11,7 +11,9 @@ EXPECTED_TABLES = {'users', 'auth_sessions', 'pets', 'daily_stats', 'home_layout
                    'post_likes', 'comments', 'follows', 'readings', 'action_predictions',
                    'collection_sessions', 'collection_frames', 'collection_videos', 'journal_crc', 'devices',
                    'telemetry_latest', 'telemetry_minutes', 'telemetry_events', 'petgif_diary_jobs',
-                   'petgif_identities'}
+                   'petgif_identities', 'post_bookmarks', 'post_media', 'stories',
+                   'story_views', 'discovery_locations', 'discovery_queries',
+                   'social_notifications', 'social_outbox'}
 
 
 class ModelSchemaTests(unittest.TestCase):

@@ -27,6 +27,7 @@ AUDIO_DIR = str(RUNTIME_ROOT / 'audio_files')
 CLOUD_DATA_DIR = str(RUNTIME_ROOT / 'cloud_data')
 ACTION_DASHBOARD_DIR = str(RUNTIME_ROOT / 'action-dashboard')
 UPLOADS_DIR = str(RUNTIME_ROOT / 'uploads')
+SOCIAL_MEDIA_DIR = str(RUNTIME_ROOT / 'community_media')
 PETGIF_TEMP_DIR = str(RUNTIME_ROOT / 'petgif_tmp')
 COLLECTION_ROOT = str(RUNTIME_ROOT / 'collection_data')
 ACTION_MODEL_PATH = os.environ.get('PETSENSE_ACTION_MODEL',

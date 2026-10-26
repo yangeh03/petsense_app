@@ -32,6 +32,7 @@ type AuthContextValue = {
     avatarEmoji: string;
   }) => Promise<void>;
   logout: () => Promise<void>;
+  refreshUser: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -88,9 +89,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     reconnectTelemetry();
   }, []);
 
+  const refreshUser = useCallback(async () => {
+    const me = await fetchMe();
+    if (me) setUser((current) => (current?.id === me.id ? me : current));
+  }, []);
+
   const value = useMemo(
-    () => ({ user, loading, login, register, logout }),
-    [user, loading, login, register, logout],
+    () => ({ user, loading, login, register, logout, refreshUser }),
+    [user, loading, login, register, logout, refreshUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
