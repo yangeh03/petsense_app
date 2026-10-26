@@ -35,6 +35,7 @@ def create_app(start_background=True):
     os.makedirs(config.AUDIO_DIR, exist_ok=True)
     os.makedirs(config.CLOUD_DATA_DIR, exist_ok=True)
     os.makedirs(config.UPLOADS_DIR, exist_ok=True)
+    os.makedirs(config.SOCIAL_MEDIA_DIR, exist_ok=True)
     db.init_db()
     observations.backfill()
 
@@ -63,8 +64,8 @@ def create_app(start_background=True):
                        or request.path.startswith('/uploads/')):
             response.headers['Access-Control-Allow-Origin'] = origin
             response.headers['Access-Control-Allow-Credentials'] = 'true'
-            response.headers['Access-Control-Allow-Headers'] = f'{config.APP_TOKEN_HEADER}, Content-Type'
-            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PATCH, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = f'{config.APP_TOKEN_HEADER}, Content-Type, Idempotency-Key, If-Match'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
             response.headers['Vary'] = 'Origin'
         return response
 
@@ -73,6 +74,8 @@ def create_app(start_background=True):
         db.Session.remove()
 
     if start_background:
+        from petsense.social.jobs import start_social_worker
+        start_social_worker()
         from petsense.petgif.diary_jobs import recover_diary_jobs
         recover_diary_jobs()
         telemetry_realtime.start_ws_ping_loop()

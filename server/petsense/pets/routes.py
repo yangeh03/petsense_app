@@ -80,7 +80,7 @@ def pet_dict(pet, public=False):
     item['avatarImageUrl'] = '/uploads/' + pet.avatar_image if pet.avatar_image else None
     if public:
         item = {key: item[key] for key in ('id', 'name', 'species', 'breed', 'avatar_emoji',
-                                         'device_id', 'batteryPercent', 'online', 'avatarImageUrl')}
+                                         'avatarImageUrl')}
     return item
 
 

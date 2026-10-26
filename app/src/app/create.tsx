@@ -1,8 +1,10 @@
 import { Image } from 'expo-image';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Directory, File, Paths } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import { SymbolView } from 'expo-symbols';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -94,7 +96,7 @@ export default function CreateScreen() {
           </View>
         </ScrollView>
       ) : (
-        <PostForm />
+        <PostForm key={user.id} />
       )}
     </KeyboardAvoidingView>
   );
@@ -103,13 +105,71 @@ export default function CreateScreen() {
 function PostForm() {
   const theme = useTheme();
   const router = useRouter();
-  const [image, setImage] = useState<{ uri: string; name: string; type: string } | null>(null);
+  const [images, setImages] = useState<{ uri: string; name: string; type: string }[]>([]);
   const [caption, setCaption] = useState('');
+  const [location, setLocation] = useState('');
+  const [audience, setAudience] = useState<'public' | 'followers'>('public');
+  const [draftReady, setDraftReady] = useState(false);
+  const [mutationId, setMutationId] = useState('');
   const [pets, setPets] = useState<SocialPet[]>([]);
   const [petId, setPetId] = useState<number | null>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { user } = useAuth();
+  const draftKey = `petsense.community.draft.${user?.id ?? 'guest'}`;
+  const draftDirectory =
+    Platform.OS === 'web'
+      ? null
+      : new Directory(Paths.document, 'community-drafts', String(user?.id ?? 'guest'));
+
+  useEffect(() => {
+    let active = true;
+    void AsyncStorage.getItem(draftKey)
+      .then((value) => {
+        if (!active || !value) return;
+        const saved = JSON.parse(value) as {
+          caption?: string;
+          location?: string;
+          petId?: number | null;
+          audience?: 'public' | 'followers';
+          mutationId?: string;
+          images?: { uri: string; name: string; type: string }[];
+        };
+        setCaption(saved.caption ?? '');
+        setLocation(saved.location ?? '');
+        setPetId(saved.petId ?? null);
+        setAudience(saved.audience ?? 'public');
+        if (saved.mutationId) setMutationId(saved.mutationId);
+        if (Platform.OS !== 'web' && saved.images?.length) {
+          const available = saved.images.filter((item) => new File(item.uri).exists);
+          setImages(available);
+          if (available.length !== saved.images.length)
+            setError('部分草稿照片已丢失，请重新选择。');
+        }
+      })
+      .catch(() => setError('草稿读取失败，请稍后重试。'))
+      .finally(() => {
+        if (active) setDraftReady(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [draftKey]);
+
+  useEffect(() => {
+    if (!draftReady) return;
+    void AsyncStorage.setItem(
+      draftKey,
+      JSON.stringify({
+        caption,
+        location,
+        petId,
+        audience,
+        mutationId,
+        images: Platform.OS === 'web' ? [] : images,
+      }),
+    ).catch(() => setError('草稿保存失败，请检查设备存储空间。'));
+  }, [draftKey, draftReady, caption, location, petId, audience, mutationId, images]);
   const sequence = useRef(0);
   const loadPets = useCallback(async () => {
     const current = ++sequence.current;
@@ -135,64 +195,142 @@ function PostForm() {
     }, [loadPets]),
   );
 
-  const pickImage = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      quality: 0.8,
-      allowsMultipleSelection: false,
-    });
-    const asset = result.assets?.[0];
-    if (asset?.uri) {
-      setImage({
-        uri: asset.uri,
-        name: asset.fileName ?? 'photo.jpg',
-        type: asset.mimeType ?? 'image/jpeg',
-      });
+  const pickImages = async (camera: boolean) => {
+    try {
+      if (camera) {
+        const permission = await ImagePicker.requestCameraPermissionsAsync();
+        if (!permission.granted) {
+          setError('需要相机权限才能拍照');
+          return;
+        }
+      }
+      const result = camera
+        ? await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.8 })
+        : await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ['images'],
+            quality: 0.8,
+            allowsMultipleSelection: true,
+            selectionLimit: 10 - images.length,
+          });
+      const selected = (result.assets ?? [])
+        .filter((asset) => !!asset.uri)
+        .map((asset) => ({
+          uri: asset.uri,
+          name: asset.fileName ?? 'photo.jpg',
+          type: asset.mimeType ?? 'image/jpeg',
+        }));
+      if (selected.length) {
+        let durable = selected;
+        if (Platform.OS !== 'web') {
+          if (!draftDirectory) throw new Error('草稿目录不可用');
+          draftDirectory.create({ idempotent: true, intermediates: true });
+          durable = [];
+          for (const image of selected) {
+            const extension =
+              image.type === 'image/png' ? 'png' : image.type === 'image/webp' ? 'webp' : 'jpg';
+            const destination = new File(
+              draftDirectory,
+              `${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`,
+            );
+            await new File(image.uri).copy(destination);
+            durable.push({ ...image, uri: destination.uri });
+          }
+        }
+        setImages((current) => [...current, ...durable].slice(0, 10));
+        setMutationId('');
+        setError(null);
+      }
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : '选择照片失败');
     }
   };
 
   const submit = async () => {
-    if (!image || sending) return;
+    if (sending) return;
+    if (!images.length && !caption.trim()) {
+      setError('请先写点内容或选择照片');
+      return;
+    }
     setSending(true);
     setError(null);
+    const id = mutationId || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setMutationId(id);
     try {
       await createPost({
-        image,
+        images,
         caption: caption.trim(),
+        location: location.trim(),
         petId: petId ?? undefined,
+        audience,
+        mutationId: id,
       });
+      await AsyncStorage.removeItem(draftKey).catch(() => {});
+      try {
+        if (draftDirectory?.exists) draftDirectory.delete();
+      } catch {
+        // 发布已确认成功，草稿文件清理失败不改变发布结果。
+      }
       router.back();
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : '发布失败，请重试');
+    } finally {
       setSending(false);
     }
   };
 
   return (
     <ScrollView contentContainerStyle={styles.form}>
-      <Pressable
-        onPress={pickImage}
-        style={[styles.imagePicker, { borderColor: theme.backgroundSelected }]}
-      >
-        {image ? (
-          <Image source={{ uri: image.uri }} style={styles.imagePreview} contentFit="cover" />
-        ) : (
-          <View style={styles.imagePickerEmpty}>
-            <SymbolView
-              name={{
-                ios: 'photo.on.rectangle.angled',
-                android: 'photo_library',
-                web: 'photo_library',
-              }}
-              size={30}
-              tintColor={theme.textSecondary}
-            />
-            <ThemedText type="small" themeColor="textSecondary">
-              选择一张照片
-            </ThemedText>
-          </View>
-        )}
-      </Pressable>
+      <View style={[styles.imagePicker, { borderColor: theme.backgroundSelected }]}>
+        <View style={styles.imagePickerEmpty}>
+          <SymbolView
+            name={{
+              ios: 'photo.on.rectangle.angled',
+              android: 'photo_library',
+              web: 'photo_library',
+            }}
+            size={30}
+            tintColor={theme.textSecondary}
+          />
+          <ThemedText type="small" themeColor="textSecondary">
+            {images.length ? `已选择 ${images.length}/10 张照片` : '可选择照片，也可只发文字'}
+          </ThemedText>
+        </View>
+      </View>
+      <View style={styles.mediaButtons}>
+        <Pressable
+          onPress={() => void pickImages(false)}
+          style={[styles.mediaButton, { backgroundColor: theme.backgroundSelected }]}
+        >
+          <ThemedText type="smallBold">从相册选择</ThemedText>
+        </Pressable>
+        <Pressable
+          onPress={() => void pickImages(true)}
+          style={[styles.mediaButton, { backgroundColor: theme.backgroundSelected }]}
+        >
+          <ThemedText type="smallBold">拍照</ThemedText>
+        </Pressable>
+      </View>
+      {!!images.length && (
+        <ScrollView horizontal contentContainerStyle={styles.mediaRow}>
+          {images.map((image, index) => (
+            <View key={`${image.uri}-${index}`}>
+              <Image source={{ uri: image.uri }} style={styles.imagePreview} contentFit="cover" />
+              <Pressable
+                onPress={() => {
+                  setImages((current) => current.filter((_, i) => i !== index));
+                  setMutationId('');
+                  if (Platform.OS !== 'web' && new File(image.uri).exists)
+                    new File(image.uri).delete();
+                }}
+              >
+                <ThemedText type="small" style={{ color: theme.danger }}>
+                  移除
+                </ThemedText>
+              </Pressable>
+            </View>
+          ))}
+        </ScrollView>
+      )}
 
       {pets.length > 0 && (
         <ScrollView
@@ -205,7 +343,10 @@ function PostForm() {
             return (
               <Pressable
                 key={pet.id}
-                onPress={() => setPetId(pet.id === petId ? null : pet.id)}
+                onPress={() => {
+                  setPetId(pet.id === petId ? null : pet.id);
+                  setMutationId('');
+                }}
                 style={[styles.petChip, selected && { backgroundColor: theme.tint }]}
               >
                 <ThemedText type="small" style={selected ? { color: '#ffffff' } : undefined}>
@@ -219,7 +360,10 @@ function PostForm() {
 
       <TextInput
         value={caption}
-        onChangeText={setCaption}
+        onChangeText={(value) => {
+          setCaption(value);
+          setMutationId('');
+        }}
         placeholder="记录和它的这一刻…"
         placeholderTextColor={theme.textSecondary}
         multiline
@@ -230,6 +374,46 @@ function PostForm() {
         {caption.length}/500
       </ThemedText>
 
+      <TextInput
+        value={location}
+        onChangeText={(value) => {
+          setLocation(value);
+          setMutationId('');
+        }}
+        placeholder="地点名称（选填，不会使用你的实时位置）"
+        placeholderTextColor={theme.textSecondary}
+        maxLength={80}
+        style={[styles.locationInput, { color: theme.text, borderColor: theme.backgroundSelected }]}
+      />
+
+      <View style={styles.mediaButtons}>
+        {(['public', 'followers'] as const).map((item) => (
+          <Pressable
+            key={item}
+            onPress={() => {
+              setAudience(item);
+              setMutationId('');
+            }}
+            style={[
+              styles.mediaButton,
+              { backgroundColor: audience === item ? theme.tint : theme.backgroundSelected },
+            ]}
+          >
+            <ThemedText
+              type="smallBold"
+              style={{ color: audience === item ? '#ffffff' : theme.text }}
+            >
+              {item === 'public' ? '公开' : '仅粉丝可见'}
+            </ThemedText>
+          </Pressable>
+        ))}
+      </View>
+      <ThemedText type="small" themeColor="textSecondary">
+        {Platform.OS === 'web'
+          ? '草稿会保存文字和可见范围；网页刷新后照片需重新选择。'
+          : '草稿会保存文字、照片和可见范围，可稍后继续编辑。'}
+      </ThemedText>
+
       {error ? (
         <ThemedText type="small" style={{ color: theme.danger }}>
           {error}
@@ -238,17 +422,17 @@ function PostForm() {
 
       <Pressable
         onPress={submit}
-        disabled={!image || sending}
+        disabled={sending}
         style={({ pressed }) => [
           styles.primaryButton,
-          { backgroundColor: image ? theme.tint : theme.backgroundSelected },
+          { backgroundColor: theme.tint },
           pressed && { opacity: 0.85 },
         ]}
       >
         {sending ? (
           <ActivityIndicator color="#ffffff" />
         ) : (
-          <ThemedText type="smallBold" style={{ color: image ? '#ffffff' : theme.textSecondary }}>
+          <ThemedText type="smallBold" style={{ color: '#ffffff' }}>
             分享
           </ThemedText>
         )}
@@ -315,9 +499,13 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   imagePreview: {
-    width: '100%',
-    height: '100%',
+    width: 96,
+    height: 96,
+    borderRadius: 12,
   },
+  mediaButtons: { flexDirection: 'row', gap: Spacing.two },
+  mediaButton: { borderRadius: 14, padding: Spacing.two },
+  mediaRow: { gap: Spacing.two },
 
   petRow: {
     gap: Spacing.two,
@@ -336,6 +524,13 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     padding: Spacing.three,
     textAlignVertical: 'top',
+    fontSize: 15,
+  },
+  locationInput: {
+    width: '100%',
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: Spacing.three,
     fontSize: 15,
   },
   counter: {

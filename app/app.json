@@ -51,6 +51,12 @@
           "recordAudioAndroid": true
         }
       ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "允许 PetSense 在你打开附近功能时使用位置查找附近宠友。"
+        }
+      ],
       "expo-video"
     ],
     "experiments": {

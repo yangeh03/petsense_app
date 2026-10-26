@@ -6,7 +6,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Shadows, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import { absoluteUrl } from '@/services/api';
+import { isProtectedSocialMedia, socialImageSource } from '@/services/api';
 import type { Post } from '@/types/social';
 
 /** 点赞/评论数格式化：千位缩写（1.2k），对齐 ins 观感 */
@@ -24,12 +24,20 @@ export function PostCard({
   onLike,
   onOpenComments,
   onOpenAuthor,
+  onOpenPost,
+  onBookmark,
+  onEdit,
+  expanded = false,
   onDelete,
 }: {
   post: Post;
   onLike: (post: Post) => void;
   onOpenComments: (post: Post) => void;
   onOpenAuthor: (post: Post) => void;
+  onOpenPost?: (post: Post) => void;
+  onBookmark?: (post: Post) => void;
+  onEdit?: (post: Post) => void;
+  expanded?: boolean;
   onDelete?: (post: Post) => void;
 }) {
   const theme = useTheme();
@@ -39,7 +47,16 @@ export function PostCard({
   const openMenu = () => {
     if (!canDelete) return;
     Alert.alert(post.display_name, undefined, [
-      { text: '删除帖子', style: 'destructive', onPress: () => onDelete?.(post) },
+      ...(onEdit ? [{ text: '编辑帖子', onPress: () => onEdit(post) }] : []),
+      {
+        text: '删除帖子',
+        style: 'destructive',
+        onPress: () =>
+          Alert.alert('删除帖子？', '删除后无法恢复。', [
+            { text: '取消', style: 'cancel' },
+            { text: '删除', style: 'destructive', onPress: () => onDelete?.(post) },
+          ]),
+      },
       { text: '取消', style: 'cancel' },
     ]);
   };
@@ -56,6 +73,7 @@ export function PostCard({
           </ThemedText>
           <ThemedText type="small" themeColor="textSecondary" style={styles.meta}>
             {post.pet_name ? `${post.pet_emoji || '🐾'} ${post.pet_name} · ` : ''}
+            {post.location_text ? `${post.location_text} · ` : ''}
             {timeAgo(post.created_at)}
           </ThemedText>
         </View>
@@ -76,23 +94,27 @@ export function PostCard({
         )}
       </Pressable>
 
-      <Image
-        source={{
-          uri:
-            post.mediaKind === 'gif' && post.mediaUrl
-              ? absoluteUrl(post.mediaUrl)
-              : absoluteUrl(post.imageUrl),
-        }}
-        style={styles.image}
-        contentFit="cover"
-        transition={150}
-        autoplay={true}
-      />
+      {(post.imageUrl || post.mediaUrl) && (
+        <Pressable onPress={() => onOpenPost?.(post)} accessibilityLabel="查看帖子详情">
+          <Image
+            source={socialImageSource(
+              post.mediaKind === 'gif' && post.mediaUrl ? post.mediaUrl : post.imageUrl,
+            )}
+            cachePolicy={isProtectedSocialMedia(post.imageUrl) ? 'none' : 'memory-disk'}
+            style={styles.image}
+            contentFit="cover"
+            transition={150}
+            autoplay={true}
+          />
+        </Pressable>
+      )}
 
       {post.caption ? (
-        <ThemedText type="small" style={styles.caption} numberOfLines={4}>
-          {post.caption}
-        </ThemedText>
+        <Pressable onPress={() => onOpenPost?.(post)} accessibilityLabel="阅读帖子全文">
+          <ThemedText type="small" style={styles.caption} numberOfLines={expanded ? undefined : 4}>
+            {post.caption}
+          </ThemedText>
+        </Pressable>
       ) : null}
 
       <View style={styles.actionRow}>
@@ -120,6 +142,21 @@ export function PostCard({
             onPress={() => onOpenComments(post)}
           />
         </View>
+        {!!onBookmark && (
+          <View style={styles.bookmark}>
+            <ActionIcon
+              icon={{
+                ios: post.bookmarked_by_me ? 'bookmark.fill' : 'bookmark',
+                android: post.bookmarked_by_me ? 'bookmark' : 'bookmark_border',
+                web: post.bookmarked_by_me ? 'bookmark' : 'bookmark_border',
+              }}
+              label=""
+              color={post.bookmarked_by_me ? theme.tint : theme.textSecondary}
+              accessibilityLabel={post.bookmarked_by_me ? '取消收藏' : '收藏帖子'}
+              onPress={() => onBookmark(post)}
+            />
+          </View>
+        )}
       </View>
     </ThemedView>
   );
@@ -197,5 +234,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.three,
   },
   actionGroup: { flexDirection: 'row', gap: Spacing.four },
+  bookmark: { marginLeft: 'auto' },
   action: { flexDirection: 'row', alignItems: 'center', gap: 6 },
 });

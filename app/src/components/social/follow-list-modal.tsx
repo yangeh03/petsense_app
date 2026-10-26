@@ -1,5 +1,6 @@
 import { SymbolView } from 'expo-symbols';
 import { useEffect, useState } from 'react';
+import { useRouter } from 'expo-router';
 import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -7,7 +8,7 @@ import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
-import { fetchFollowList, toggleFollow } from '@/services/api';
+import { fetchFollowList, setFollow } from '@/services/api';
 import type { FollowListUser } from '@/types/social';
 
 type Kind = 'followers' | 'following';
@@ -25,36 +26,78 @@ export function FollowListModal({
   onClose: () => void;
 }) {
   const theme = useTheme();
+  const router = useRouter();
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   // null = 加载中
   const [users, setUsers] = useState<FollowListUser[] | null>(null);
+  const [error, setError] = useState('');
+  const [pendingId, setPendingId] = useState<number | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadedKey, setLoadedKey] = useState('');
+  const currentKey = `${userId}:${kind}:${visible}`;
 
   useEffect(() => {
+    if (!visible) return;
     let cancelled = false;
     fetchFollowList(userId, kind)
       .then((data) => {
-        if (!cancelled) setUsers(data.users);
+        if (!cancelled) {
+          setUsers(data.users);
+          setNextCursor(data.page.nextCursor);
+          setLoadedKey(currentKey);
+          setError('');
+        }
       })
       .catch(() => {
-        if (!cancelled) setUsers([]);
+        if (!cancelled) {
+          setUsers([]);
+          setNextCursor(null);
+          setLoadedKey(currentKey);
+          setError('列表加载失败，请关闭后重试');
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [visible, userId, kind]);
+  }, [visible, userId, kind, currentKey]);
 
-  const loading = users === null;
+  const loading = users === null || loadedKey !== currentKey;
 
   const toggle = (target: FollowListUser) => {
-    if (!user) return;
-    setUsers(
-      (current) =>
-        current?.map((item) =>
-          item.id === target.id ? { ...item, is_following: !item.is_following } : item,
-        ) ?? current,
-    );
-    toggleFollow(target.id).catch(() => {});
+    if (!user || pendingId !== null) return;
+    setPendingId(target.id);
+    setError('');
+    setFollow(target.id, !target.is_following)
+      .then((result) =>
+        setUsers(
+          (current) =>
+            current?.map((item) =>
+              item.id === target.id ? { ...item, is_following: result.following } : item,
+            ) ?? current,
+        ),
+      )
+      .catch(() => setError('关注操作失败，请重试'))
+      .finally(() => setPendingId(null));
+  };
+
+  const loadMore = async () => {
+    if (!nextCursor || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const data = await fetchFollowList(userId, kind, nextCursor);
+      setUsers((current) => [
+        ...(current ?? []),
+        ...data.users.filter((item) => !current?.some((previous) => previous.id === item.id)),
+      ]);
+      setNextCursor(data.page.nextCursor);
+      setError('');
+    } catch {
+      setError('更多用户加载失败，请重试');
+    } finally {
+      setLoadingMore(false);
+    }
   };
 
   const title = kind === 'followers' ? '粉丝' : '关注';
@@ -83,6 +126,11 @@ export function FollowListModal({
           </View>
 
           <ScrollView style={styles.list} contentContainerStyle={{ gap: Spacing.two }}>
+            {!!error && !loading && (
+              <ThemedText type="small" style={{ color: theme.danger }}>
+                {error}
+              </ThemedText>
+            )}
             {loading ? (
               <ThemedText type="small" themeColor="textSecondary" style={styles.empty}>
                 加载中…
@@ -99,15 +147,27 @@ export function FollowListModal({
                     key={item.id}
                     style={[styles.row, { backgroundColor: theme.backgroundElement }]}
                   >
-                    <View style={[styles.avatar, { backgroundColor: theme.tintBackground }]}>
-                      <ThemedText style={{ fontSize: 18 }}>{item.avatar_emoji || '🙂'}</ThemedText>
-                    </View>
-                    <ThemedText type="smallBold" style={styles.name}>
-                      {item.display_name}
-                    </ThemedText>
+                    <Pressable
+                      onPress={() => {
+                        onClose();
+                        router.push(`/user?id=${item.id}`);
+                      }}
+                      style={styles.userLink}
+                      accessibilityLabel={`查看 ${item.display_name} 的主页`}
+                    >
+                      <View style={[styles.avatar, { backgroundColor: theme.tintBackground }]}>
+                        <ThemedText style={{ fontSize: 18 }}>
+                          {item.avatar_emoji || '🙂'}
+                        </ThemedText>
+                      </View>
+                      <ThemedText type="smallBold" style={styles.name}>
+                        {item.display_name}
+                      </ThemedText>
+                    </Pressable>
                     {!isSelf && (
                       <Pressable
                         onPress={() => toggle(item)}
+                        disabled={pendingId !== null}
                         style={({ pressed }) => [
                           styles.followButton,
                           {
@@ -133,6 +193,13 @@ export function FollowListModal({
                   </View>
                 );
               })
+            )}
+            {!!nextCursor && (
+              <Pressable onPress={() => void loadMore()}>
+                <ThemedText type="small" style={{ color: theme.tint }}>
+                  {loadingMore ? '加载中…' : '加载更多'}
+                </ThemedText>
+              </Pressable>
             )}
           </ScrollView>
         </Pressable>
@@ -170,6 +237,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: Spacing.two + 4,
   },
+  userLink: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
   avatar: {
     width: 36,
     height: 36,

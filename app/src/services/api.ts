@@ -24,6 +24,11 @@ import type {
   TrendPeriod,
   TrendsResponse,
   UserProfile,
+  Page,
+  Story,
+  StoryGroup,
+  SocialNotification,
+  NearbyUser,
 } from '@/types/social';
 
 const TOKEN_KEY = 'petsense.session.token';
@@ -71,6 +76,18 @@ export async function saveToken(token: string | null) {
 export function absoluteUrl(path: string): string {
   if (/^https?:\/\//.test(path)) return path;
   return `${API_BASE_URL}${path}`;
+}
+
+export function isProtectedSocialMedia(path: string): boolean {
+  return path.startsWith('/api/app/posts/') || path.startsWith('/api/app/stories/');
+}
+
+export function socialImageSource(path: string) {
+  const token = getToken();
+  return {
+    uri: absoluteUrl(path),
+    ...(isProtectedSocialMedia(path) && token ? { headers: { 'X-Petsense-Session': token } } : {}),
+  };
 }
 
 export async function request<T>(
@@ -121,6 +138,14 @@ async function parseApiResponse<T>(status: number, body: string): Promise<T> {
         ? String((payload as { message: unknown }).message)
         : `请求失败（${status}）`;
     throw new ApiError(message, status);
+  }
+  if (
+    payload &&
+    typeof payload === 'object' &&
+    'success' in payload &&
+    (payload as { success: unknown }).success === false
+  ) {
+    throw new ApiError(String((payload as { message?: unknown }).message ?? '请求失败'), status);
   }
   return payload as T;
 }
@@ -262,23 +287,59 @@ export function fetchDashboard(petId?: number, signal?: AbortSignal): Promise<Da
 
 // ─── 社区 ───
 
-export function fetchFeed(userId?: number): Promise<{ posts: Post[] }> {
-  const query = userId ? `?user_id=${userId}` : '';
-  return request(`/feed${query}`);
+export function fetchFeed(
+  userId?: number,
+  options?: {
+    cursor?: string;
+    limit?: number;
+    scope?: 'discover' | 'following';
+    signal?: AbortSignal;
+  },
+): Promise<{ posts: Post[]; page: { hasMore: boolean; nextCursor: string | null } }> {
+  const params = new URLSearchParams();
+  if (userId) params.set('user_id', String(userId));
+  if (options?.cursor) params.set('cursor', options.cursor);
+  if (options?.limit) params.set('limit', String(options.limit));
+  if (options?.scope) params.set('scope', options.scope);
+  return request(`/feed${params.size ? `?${params.toString()}` : ''}`, { signal: options?.signal });
+}
+
+export function fetchPost(postId: number): Promise<{ post: Post }> {
+  return request(`/posts/${postId}`);
+}
+
+export function editPost(
+  postId: number,
+  input: {
+    caption: string;
+    location?: string;
+    audience: 'public' | 'followers';
+    version: number;
+  },
+): Promise<{ post: Post }> {
+  return request(`/posts/${postId}`, { method: 'PATCH', body: input });
 }
 
 export async function createPost(input: {
-  image: { uri: string; name: string; type: string };
+  image?: { uri: string; name: string; type: string };
+  images?: { uri: string; name: string; type: string }[];
   caption: string;
+  location?: string;
   petId?: number;
+  audience?: 'public' | 'followers';
+  mutationId?: string;
 }): Promise<{ postId: number }> {
+  const images = input.images ?? (input.image ? [input.image] : []);
   return uploadRequest('/posts', {
     method: 'POST',
     fields: {
       caption: input.caption,
+      location: input.location ?? '',
+      audience: input.audience ?? 'public',
+      ...(input.mutationId ? { client_mutation_id: input.mutationId } : {}),
       ...(input.petId ? { pet_id: String(input.petId) } : {}),
     },
-    files: [{ field: 'image', ...input.image }],
+    files: images.map((image) => ({ field: 'images', ...image })),
   });
 }
 
@@ -286,16 +347,203 @@ export function toggleLike(postId: number): Promise<{ liked: boolean; likes: num
   return request(`/posts/${postId}/like`, { method: 'POST' });
 }
 
-export function fetchComments(postId: number): Promise<{ comments: PostComment[] }> {
-  return request(`/posts/${postId}/comments`);
+export function fetchComments(
+  postId: number,
+  cursor?: string,
+): Promise<{ comments: PostComment[]; page: Page }> {
+  return request(
+    `/posts/${postId}/comments${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`,
+  );
 }
 
 export function addComment(postId: number, body: string): Promise<{ success: boolean }> {
   return request(`/posts/${postId}/comments`, { method: 'POST', body: { body } });
 }
 
+export function addReply(
+  postId: number,
+  body: string,
+  mutationId: string,
+  replyToCommentId?: number,
+): Promise<{ comment: PostComment }> {
+  return request(`/posts/${postId}/comments`, {
+    method: 'POST',
+    body: { body, clientMutationId: mutationId, replyToCommentId },
+  });
+}
+
+export function fetchReplies(
+  rootId: number,
+  cursor?: string,
+): Promise<{ comments: PostComment[]; page: Page }> {
+  return request(
+    `/comments/${rootId}/replies${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`,
+  );
+}
+
+export function deleteComment(commentId: number): Promise<{ success: boolean }> {
+  return request(`/comments/${commentId}`, { method: 'DELETE' });
+}
+
+export function setLike(
+  postId: number,
+  liked: boolean,
+): Promise<{ liked: boolean; likes: number }> {
+  return request(`/posts/${postId}/like`, { method: liked ? 'PUT' : 'DELETE' });
+}
+
+export function setFollow(userId: number, following: boolean): Promise<{ following: boolean }> {
+  return request(`/users/${userId}/follow`, { method: following ? 'PUT' : 'DELETE' });
+}
+
+export function setBookmark(postId: number, bookmarked: boolean): Promise<{ bookmarked: boolean }> {
+  return request(`/posts/${postId}/bookmark`, { method: bookmarked ? 'PUT' : 'DELETE' });
+}
+
+export function fetchBookmarks(cursor?: string): Promise<{ posts: Post[]; page: Page }> {
+  return request(`/me/bookmarks${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`);
+}
+
+export function searchCommunity(
+  q: string,
+  kind: 'all' | 'posts' | 'users' | 'places',
+  signal?: AbortSignal,
+  cursor?: string,
+  place?: string,
+): Promise<{
+  posts: Post[];
+  users: FollowListUser[];
+  places: { name: string; postsCount: number }[];
+  page: Page;
+}> {
+  return request(
+    `/search?q=${encodeURIComponent(q)}&type=${kind}${
+      cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''
+    }${place ? `&place=${encodeURIComponent(place)}` : ''}`,
+    { signal },
+  );
+}
+
+export function fetchStoryTray(): Promise<{ groups: StoryGroup[] }> {
+  return request('/stories/tray');
+}
+
+export function fetchUserStories(userId: number): Promise<{ stories: Story[] }> {
+  return request(`/users/${userId}/stories`);
+}
+
+export function markStoryViewed(storyId: number): Promise<{ success: boolean }> {
+  return request(`/stories/${storyId}/view`, { method: 'PUT' });
+}
+
+export function deleteStory(storyId: number): Promise<{ success: boolean }> {
+  return request(`/stories/${storyId}`, { method: 'DELETE' });
+}
+
+export function fetchStoryViewers(storyId: number): Promise<{
+  viewers: {
+    id: number;
+    display_name: string;
+    avatar_emoji: string;
+    viewed_at: string;
+  }[];
+}> {
+  return request(`/stories/${storyId}/viewers`);
+}
+
+export function createStory(input: {
+  image: { uri: string; name: string; type: string };
+  caption: string;
+  audience: 'public' | 'followers';
+  mutationId: string;
+}): Promise<{ story: Story }> {
+  return uploadRequest('/stories', {
+    method: 'POST',
+    fields: {
+      caption: input.caption,
+      audience: input.audience,
+      client_mutation_id: input.mutationId,
+    },
+    files: [{ field: 'image', ...input.image }],
+  });
+}
+
+export function fetchSocialNotifications(cursor?: string): Promise<{
+  notifications: SocialNotification[];
+  unreadCount: number;
+  page: Page;
+}> {
+  return request(`/notifications${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`);
+}
+
+export function markNotificationRead(id: number): Promise<{ unreadCount: number }> {
+  return request(`/notifications/${id}/read`, { method: 'PUT' });
+}
+
+export function markNotificationsReadThrough(
+  highWaterId: number,
+): Promise<{ unreadCount: number }> {
+  return request('/notifications/read-through', { method: 'PUT', body: { highWaterId } });
+}
+
+export function fetchDiscoveryPreference(): Promise<{
+  enabled: boolean;
+  expiresAt: string | null;
+}> {
+  return request('/me/discovery-location');
+}
+
+export function updateDiscoveryLocation(input: {
+  latitude: number;
+  longitude: number;
+  accuracyMeters: number;
+  enabled: boolean;
+}): Promise<{ enabled: boolean; expiresAt: string }> {
+  return request('/me/discovery-location', { method: 'PUT', body: input });
+}
+
+export function disableDiscoveryLocation(): Promise<{ enabled: boolean }> {
+  return request('/me/discovery-location', { method: 'DELETE' });
+}
+
+export function createNearbyQuery(input: {
+  latitude: number;
+  longitude: number;
+  accuracyMeters: number;
+  radiusKm: 1 | 5 | 10 | 20;
+}): Promise<{ queryId: string; expiresAt: string }> {
+  return request('/nearby/queries', { method: 'POST', body: input });
+}
+
+export function fetchNearbyUsers(
+  queryId: string,
+  cursor?: string,
+): Promise<{ users: NearbyUser[]; page: Page }> {
+  const params = new URLSearchParams({ queryId });
+  if (cursor) params.set('cursor', cursor);
+  return request(`/nearby/users?${params.toString()}`);
+}
+
+export function fetchNearbyPosts(
+  queryId: string,
+  cursor?: string,
+): Promise<{ posts: Post[]; page: Page }> {
+  const params = new URLSearchParams({ queryId });
+  if (cursor) params.set('cursor', cursor);
+  return request(`/nearby/posts?${params.toString()}`);
+}
+
 export function fetchUserProfile(userId: number): Promise<{ profile: UserProfile }> {
   return request(`/users/${userId}`);
+}
+
+export function updatePublicProfile(input: {
+  displayName: string;
+  bio: string;
+  avatarEmoji: string;
+  version: number;
+}): Promise<{ profile: UserProfile }> {
+  return request('/me/public-profile', { method: 'PATCH', body: input });
 }
 
 export function toggleFollow(userId: number): Promise<{ following: boolean }> {
@@ -311,8 +559,11 @@ export function deletePost(postId: number): Promise<{ success: boolean }> {
 export function fetchFollowList(
   userId: number,
   kind: 'followers' | 'following',
-): Promise<{ users: FollowListUser[] }> {
-  return request(`/users/${userId}/${kind}`);
+  cursor?: string,
+): Promise<{ users: FollowListUser[]; page: Page }> {
+  return request(
+    `/users/${userId}/${kind}${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`,
+  );
 }
 
 // ─── 趋势统计 ───

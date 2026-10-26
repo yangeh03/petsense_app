@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 
 from petsense import db
 
@@ -25,6 +25,12 @@ class MigrationTests(unittest.TestCase):
     def test_upgrade_creates_all_tables(self):
         db.init_db()
         self.assertTrue(EXPECTED_TABLES <= set(inspect(db.engine()).get_table_names()))
+        self.assertTrue({'post_bookmarks', 'stories', 'story_views', 'discovery_locations',
+                         'discovery_queries',
+                         'social_notifications', 'social_outbox', 'post_media'} <=
+                        set(inspect(db.engine()).get_table_names()))
+        self.assertIn('root_id', {column['name'] for column in
+                                  inspect(db.engine()).get_columns('comments')})
         self.assertIn('avatar_template_id', {column['name'] for column in
                                               inspect(db.engine()).get_columns('pets')})
 
@@ -40,6 +46,21 @@ class MigrationTests(unittest.TestCase):
         db.init_db()
         db.init_db()
         self.assertIn('users', inspect(db.engine()).get_table_names())
+
+    def test_upgrade_existing_community_rows(self):
+        from alembic import command
+        command.upgrade(db._alembic_config(), '0006')
+        with db.engine().begin() as connection:
+            connection.execute(text("INSERT INTO users(id, username, display_name, password_hash, salt, "
+                                    "avatar_emoji, bio, created_at) VALUES "
+                                    "(1, 'old', 'old', 'x', 's', '🙂', '', '2026-01-01T00:00:00Z')"))
+            connection.execute(text("INSERT INTO posts(id, user_id, pet_id, image_path, caption, "
+                                    "location_text, media_url, media_kind, created_at) VALUES "
+                                    "(1, 1, NULL, '', 'legacy', '', NULL, NULL, '2026-01-01T00:00:00Z')"))
+        command.upgrade(db._alembic_config(), 'head')
+        with db.engine().connect() as connection:
+            row = connection.execute(text('SELECT caption, audience, version FROM posts WHERE id=1')).one()
+            self.assertEqual(tuple(row), ('legacy', 'public', 1))
 
 
 if __name__ == '__main__':

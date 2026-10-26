@@ -13,6 +13,7 @@ class User(Base):
     salt = Column(String(32), nullable=False)
     avatar_emoji = Column(String(16), nullable=False, default='🙂')
     bio = Column(Text, nullable=False, default='')
+    profile_version = Column(Integer, nullable=False, default=1)
     created_at = Column(UTCDatetime, nullable=False)
     __table_args__ = (
         # 大小写不敏感唯一：SQLite/PG 双方言等价（替代 SQLite-only 的 COLLATE NOCASE）
