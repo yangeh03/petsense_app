@@ -161,6 +161,10 @@ class SocialTests(unittest.TestCase):
         reply_id = reply.get_json()['comment']['id']
         replies = self.client.get(f'/api/app/comments/{root_id}/replies').get_json()['comments']
         self.assertEqual(replies[0]['id'], reply_id)
+        # 根评论列表带可见回复数，客户端据此决定是否显示“查看 N 条回复”。
+        roots = self.client.get(f'/api/app/posts/{post_id}/comments').get_json()['comments']
+        self.assertEqual(roots[0]['reply_count'], 1)
+        self.assertEqual(root.get_json()['comment']['reply_count'], 0)
         self.assertEqual(self.client.delete(f'/api/app/comments/{root_id}',
                          headers=self.header('alice')).status_code, 403)
         self.assertEqual(self.client.delete(f'/api/app/comments/{root_id}',

@@ -101,6 +101,7 @@ export type PostComment = {
   root_id?: number | null;
   reply_to_comment_id?: number | null;
   deleted?: boolean;
+  reply_count?: number;
 };
 
 export type Page = { hasMore: boolean; nextCursor: string | null };

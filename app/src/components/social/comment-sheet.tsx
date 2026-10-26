@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { timeAgo } from '@/components/social/post-card';
 import { Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
@@ -169,10 +170,16 @@ export function CommentSheet({
       pendingMutation.current = id;
       const data = await addReply(post.id, draft.trim(), id, replyTarget?.id);
       if (data.comment.root_id) {
+        const rootId = data.comment.root_id;
         setReplies((current) => ({
           ...current,
-          [data.comment.root_id!]: [...(current[data.comment.root_id!] ?? []), data.comment],
+          [rootId]: [...(current[rootId] ?? []), data.comment],
         }));
+        setComments((current) =>
+          current.map((item) =>
+            item.id === rootId ? { ...item, reply_count: (item.reply_count ?? 0) + 1 } : item,
+          ),
+        );
       } else {
         setComments((current) => [...current, data.comment]);
       }
@@ -248,12 +255,24 @@ export function CommentSheet({
           void deleteComment(comment.id)
             .then(() => {
               if (comment.root_id) {
-                setReplies((current) => ({
-                  ...current,
-                  [comment.root_id!]: (current[comment.root_id!] ?? []).filter(
+                const rootId = comment.root_id;
+                setReplies((current) => {
+                  const remaining = (current[rootId] ?? []).filter(
                     (item) => item.id !== comment.id,
+                  );
+                  const next = { ...current };
+                  // 楼里最后一条回复删完就收起，避免留下一个空的“收起回复”。
+                  if (remaining.length) next[rootId] = remaining;
+                  else delete next[rootId];
+                  return next;
+                });
+                setComments((current) =>
+                  current.map((item) =>
+                    item.id === rootId
+                      ? { ...item, reply_count: Math.max(0, (item.reply_count ?? 1) - 1) }
+                      : item,
                   ),
-                }));
+                );
               } else {
                 void fetchReplies(comment.id)
                   .then((data) => {
@@ -307,8 +326,12 @@ export function CommentSheet({
             {comment.deleted ? '原评论已删除' : comment.body}
           </ThemedText>
           <View style={styles.actions}>
-            <ThemedText type="small" themeColor="textSecondary">
-              {new Date(comment.created_at).toLocaleString()}
+            <ThemedText
+              type="small"
+              themeColor="textSecondary"
+              accessibilityLabel={new Date(comment.created_at).toLocaleString()}
+            >
+              {timeAgo(comment.created_at)}
             </ThemedText>
             {!comment.deleted && (
               <Pressable onPress={() => setReplyTarget(comment)}>
@@ -336,8 +359,14 @@ export function CommentSheet({
         style={styles.backdrop}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <Pressable style={styles.backdropTouch} onPress={onClose}>
+        <Pressable
+          style={styles.backdropTouch}
+          onPress={onClose}
+          accessible={false}
+          accessibilityLabel="关闭评论"
+        >
           <ThemedView
+            onStartShouldSetResponder={() => true}
             style={[
               styles.sheet,
               { backgroundColor: theme.background, paddingBottom: insets.bottom + Spacing.three },
@@ -402,14 +431,18 @@ export function CommentSheet({
                       }
                     >
                       {renderComment(comment)}
-                      <Pressable
-                        onPress={() => void toggleReplies(comment.id)}
-                        style={styles.replyToggle}
-                      >
-                        <ThemedText type="small" style={{ color: theme.tint }}>
-                          {replies[comment.id] ? '收起回复' : '查看回复'}
-                        </ThemedText>
-                      </Pressable>
+                      {((comment.reply_count ?? 0) > 0 || !!replies[comment.id]) && (
+                        <Pressable
+                          onPress={() => void toggleReplies(comment.id)}
+                          style={styles.replyToggle}
+                        >
+                          <ThemedText type="small" style={{ color: theme.tint }}>
+                            {replies[comment.id]
+                              ? '收起回复'
+                              : `查看 ${comment.reply_count ?? 0} 条回复`}
+                          </ThemedText>
+                        </Pressable>
+                      )}
                       {(replies[comment.id] ?? []).map((reply) => renderComment(reply, true))}
                       {!!replyCursors[comment.id] && (
                         <Pressable

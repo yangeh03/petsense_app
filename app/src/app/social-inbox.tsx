@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { timeAgo } from '@/components/social/post-card';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
@@ -121,7 +122,7 @@ export default function SocialInboxScreen() {
     <ThemedView style={[styles.screen, { paddingTop: insets.top + Spacing.two }]}>
       <View style={styles.content}>
         <View style={styles.header}>
-          <Pressable onPress={() => router.back()} accessibilityLabel="返回社区">
+          <Pressable onPress={() => router.back()} accessibilityLabel="返回">
             <SymbolView
               name={{ ios: 'chevron.left', android: 'arrow_back', web: 'arrow_back' }}
               size={24}
@@ -131,11 +132,15 @@ export default function SocialInboxScreen() {
           <ThemedText type="subtitle">
             互动通知{loadedFor === viewerId && unread ? ` · ${unread}` : ''}
           </ThemedText>
-          <Pressable onPress={() => void readAll()} accessibilityLabel="全部标记已读">
-            <ThemedText type="small" style={{ color: theme.tint }}>
-              全部已读
-            </ThemedText>
-          </Pressable>
+          {loadedFor === viewerId && unread > 0 ? (
+            <Pressable onPress={() => void readAll()} accessibilityLabel="全部标记已读">
+              <ThemedText type="small" style={{ color: theme.tint }}>
+                全部已读
+              </ThemedText>
+            </Pressable>
+          ) : (
+            <View style={styles.headerSpacer} />
+          )}
         </View>
         {!user ? (
           <Pressable onPress={() => router.push('/login')}>
@@ -192,8 +197,12 @@ export default function SocialInboxScreen() {
                   原内容已不可用
                 </ThemedText>
               )}
-              <ThemedText type="small" themeColor="textSecondary">
-                {new Date(item.createdAt).toLocaleString()}
+              <ThemedText
+                type="small"
+                themeColor="textSecondary"
+                accessibilityLabel={new Date(item.createdAt).toLocaleString()}
+              >
+                {timeAgo(item.createdAt)}
               </ThemedText>
             </Pressable>
           )}
@@ -223,5 +232,6 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  headerSpacer: { width: 56 },
   row: { borderBottomWidth: 1, padding: Spacing.three, gap: Spacing.one },
 });

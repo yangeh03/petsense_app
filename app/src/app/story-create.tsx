@@ -17,6 +17,7 @@ import { ThemedView } from '@/components/themed-view';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { createStory } from '@/services/api';
+import { normalizeForUpload } from '@/services/normalize-image';
 
 type Picture = { uri: string; name: string; type: string };
 
@@ -45,11 +46,7 @@ export default function StoryCreateScreen() {
         : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.85 });
       const asset = result.assets?.[0];
       if (asset?.uri) {
-        setPicture({
-          uri: asset.uri,
-          name: asset.fileName ?? 'story.jpg',
-          type: asset.mimeType ?? 'image/jpeg',
-        });
+        setPicture(await normalizeForUpload(asset));
         setMutationId('');
         setError('');
       }

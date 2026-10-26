@@ -533,7 +533,10 @@ def app_post_comments(post_id):
             has_active_replies = select(literal(1)).where(
                 active_reply.root_id == Comment.id,
                 active_reply.deleted_at.is_(None)).exists()
-            stmt = (select(Comment, User.display_name, User.avatar_emoji)
+            reply_count = (select(func.count()).select_from(active_reply)
+                           .where(active_reply.root_id == Comment.id,
+                                  active_reply.deleted_at.is_(None)).scalar_subquery())
+            stmt = (select(Comment, User.display_name, User.avatar_emoji, reply_count)
                     .join(User, User.id == Comment.user_id)
                     .where(Comment.post_id == post_id, Comment.root_id.is_(None),
                            or_(Comment.deleted_at.is_(None), has_active_replies),
@@ -541,7 +544,7 @@ def app_post_comments(post_id):
                     .order_by(Comment.id).limit(limit + 1))
             rows = s.execute(stmt).all()
             has_more = len(rows) > limit
-            comments = [comment_dict(row[0], row[1], row[2]) for row in rows[:limit]]
+            comments = [comment_dict(row[0], row[1], row[2], row[3]) for row in rows[:limit]]
         return {'success': True, 'comments': comments,
                 'page': {'hasMore': has_more,
                          'nextCursor': str(comments[-1]['id']) if has_more and comments else None}}
@@ -595,12 +598,12 @@ def app_post_comments(post_id):
     return {'success': True, 'comment': result}, 201
 
 
-def comment_dict(comment, display_name, avatar_emoji):
+def comment_dict(comment, display_name, avatar_emoji, reply_count=0):
     return {'id': comment.id, 'body': comment.body if comment.deleted_at is None else '',
             'created_at': iso_z(comment.created_at), 'user_id': comment.user_id,
             'display_name': display_name, 'avatar_emoji': avatar_emoji,
             'root_id': comment.root_id, 'reply_to_comment_id': comment.reply_to_comment_id,
-            'deleted': comment.deleted_at is not None}
+            'deleted': comment.deleted_at is not None, 'reply_count': reply_count}
 
 
 @bp.route('/comments/<int:root_id>/replies')

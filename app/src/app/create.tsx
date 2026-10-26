@@ -23,6 +23,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { usePetChanges } from '@/hooks/use-pet-changes';
 import { useTheme } from '@/hooks/use-theme';
 import { createPost, fetchPets } from '@/services/api';
+import { normalizeForUpload } from '@/services/normalize-image';
 import type { SocialPet } from '@/types/social';
 
 /**
@@ -212,25 +213,18 @@ function PostForm() {
             allowsMultipleSelection: true,
             selectionLimit: 10 - images.length,
           });
-      const selected = (result.assets ?? [])
-        .filter((asset) => !!asset.uri)
-        .map((asset) => ({
-          uri: asset.uri,
-          name: asset.fileName ?? 'photo.jpg',
-          type: asset.mimeType ?? 'image/jpeg',
-        }));
-      if (selected.length) {
+      const picked = (result.assets ?? []).filter((asset) => !!asset.uri);
+      if (picked.length) {
+        const selected = await Promise.all(picked.map(normalizeForUpload));
         let durable = selected;
         if (Platform.OS !== 'web') {
           if (!draftDirectory) throw new Error('草稿目录不可用');
           draftDirectory.create({ idempotent: true, intermediates: true });
           durable = [];
           for (const image of selected) {
-            const extension =
-              image.type === 'image/png' ? 'png' : image.type === 'image/webp' ? 'webp' : 'jpg';
             const destination = new File(
               draftDirectory,
-              `${Date.now()}-${Math.random().toString(36).slice(2)}.${extension}`,
+              `${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`,
             );
             await new File(image.uri).copy(destination);
             durable.push({ ...image, uri: destination.uri });

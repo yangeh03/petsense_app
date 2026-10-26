@@ -153,6 +153,8 @@ export default function UserScreen() {
               }
             : current,
         );
+        // 关系变化会改变仅粉丝内容的可见性和帖子计数，立刻重拉一次。
+        void load();
       })
       .catch((exc) => {
         if (currentRequest === sequence.current)

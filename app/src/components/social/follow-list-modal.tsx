@@ -129,13 +129,14 @@ export function FollowListModal({
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
+      <Pressable style={styles.backdrop} onPress={onClose} accessible={false}>
         <Pressable
           style={[
             styles.sheet,
             { backgroundColor: theme.background, paddingBottom: insets.bottom + Spacing.three },
           ]}
           onPress={(event) => event.stopPropagation()}
+          accessible={false}
         >
           <View style={styles.header}>
             <ThemedText type="subtitle" style={styles.title}>

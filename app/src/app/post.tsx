@@ -49,7 +49,17 @@ export default function PostScreen() {
   const [failure, setFailure] = useState<Failure>(null);
   const [loading, setLoading] = useState(true);
   const [commentsOpen, setCommentsOpen] = useState(!!focusCommentId);
-  const [fullImage, setFullImage] = useState<string | null>(null);
+  const [fullIndex, setFullIndex] = useState<number | null>(null);
+  const gallery = post?.media?.length
+    ? post.media.map((media) => media.url)
+    : post?.imageUrl
+      ? [post.imageUrl]
+      : [];
+  const fullImage = fullIndex !== null ? gallery[fullIndex] : undefined;
+  const stepGallery = (delta: number) =>
+    setFullIndex((current) =>
+      current === null ? current : Math.min(gallery.length - 1, Math.max(0, current + delta)),
+    );
 
   const load = useCallback(async () => {
     const current = ++sequence.current;
@@ -180,9 +190,8 @@ export default function PostScreen() {
             expanded
             onLike={like}
             onBookmark={bookmark}
-            onOpenPost={(item) => {
-              const media = item.media?.[0]?.url ?? item.imageUrl;
-              if (media) setFullImage(media);
+            onOpenPost={() => {
+              if (gallery.length) setFullIndex(0);
             }}
             onOpenComments={() => setCommentsOpen(true)}
             onEdit={(item) => router.push(`/post-edit?id=${item.id}`)}
@@ -197,8 +206,12 @@ export default function PostScreen() {
           />
           {(post.media ?? []).length > 1 && (
             <ScrollView horizontal contentContainerStyle={styles.gallery}>
-              {post.media?.map((media) => (
-                <Pressable key={media.url} onPress={() => setFullImage(media.url)}>
+              {post.media?.map((media, index) => (
+                <Pressable
+                  key={media.url}
+                  onPress={() => setFullIndex(index)}
+                  accessibilityLabel={`查看第 ${index + 1} 张图片`}
+                >
                   <Image
                     source={socialImageSource(media.url)}
                     cachePolicy={isProtectedSocialMedia(media.url) ? 'none' : 'memory-disk'}
@@ -227,10 +240,10 @@ export default function PostScreen() {
           )
         }
       />
-      <Modal visible={!!fullImage} onRequestClose={() => setFullImage(null)}>
+      <Modal visible={fullIndex !== null} onRequestClose={() => setFullIndex(null)}>
         <ThemedView style={[styles.fullscreen, { backgroundColor: theme.background }]}>
           <Pressable
-            onPress={() => setFullImage(null)}
+            onPress={() => setFullIndex(null)}
             style={[styles.closeImage, { top: insets.top + Spacing.two }]}
             accessibilityLabel="关闭图片"
           >
@@ -240,6 +253,15 @@ export default function PostScreen() {
               tintColor={theme.text}
             />
           </Pressable>
+          {gallery.length > 1 && fullIndex !== null && (
+            <ThemedText
+              type="smallBold"
+              style={[styles.pageIndicator, { top: insets.top + Spacing.two }]}
+              accessibilityLiveRegion="polite"
+            >
+              {fullIndex + 1} / {gallery.length}
+            </ThemedText>
+          )}
           {!!fullImage && (
             <Image
               source={socialImageSource(fullImage)}
@@ -247,6 +269,24 @@ export default function PostScreen() {
               cachePolicy={isProtectedSocialMedia(fullImage) ? 'none' : 'memory-disk'}
               contentFit="contain"
             />
+          )}
+          {gallery.length > 1 && fullIndex !== null && (
+            <>
+              <Pressable
+                onPress={() => stepGallery(-1)}
+                disabled={fullIndex === 0}
+                style={[styles.pageZone, styles.pageZoneLeft]}
+                accessibilityLabel="上一张"
+                accessibilityRole="button"
+              />
+              <Pressable
+                onPress={() => stepGallery(1)}
+                disabled={fullIndex >= gallery.length - 1}
+                style={[styles.pageZone, styles.pageZoneRight]}
+                accessibilityLabel="下一张"
+                accessibilityRole="button"
+              />
+            </>
           )}
         </ThemedView>
       </Modal>
@@ -281,6 +321,11 @@ const styles = StyleSheet.create({
   gallery: { gap: Spacing.two },
   thumbnail: { width: 96, height: 96, borderRadius: 12 },
   fullscreen: { flex: 1, justifyContent: 'center' },
-  closeImage: { position: 'absolute', top: 55, right: Spacing.four, zIndex: 1 },
+  closeImage: { position: 'absolute', right: Spacing.four, zIndex: 2 },
+  pageIndicator: { position: 'absolute', left: 0, right: 0, textAlign: 'center', zIndex: 1 },
+  // 左右各 35% 作为翻页热区，中间留给图片本身（后续可接缩放手势）。
+  pageZone: { position: 'absolute', top: 100, bottom: 100, width: '35%' },
+  pageZoneLeft: { left: 0 },
+  pageZoneRight: { right: 0 },
   fullImage: { width: '100%', height: '85%' },
 });
