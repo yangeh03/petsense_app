@@ -11,6 +11,7 @@ export type PetgifBehavior = {
   status?: string;
   gifUrl?: string | null;
   videoUrl?: string | null;
+  states?: Record<string, { gifUrl?: string | null }>;
 };
 
 export type PetgifPet = {
@@ -35,6 +36,14 @@ export type PetgifPet = {
   }[];
 };
 
+export type PetAvatarTemplate = {
+  id: string;
+  name: string;
+  previewUrl?: string | null;
+  characterCardUrl?: string | null;
+  behaviors: Record<string, PetgifBehavior>;
+};
+
 export type SocialPet = {
   id: number;
   user_id: number;
@@ -45,6 +54,7 @@ export type SocialPet = {
   device_id: string;
   created_at: string;
   petgif_id?: string | null;
+  avatar_template_id?: string | null;
   avatar_image?: string | null;
   avatarImageUrl?: string | null;
   batteryPercent?: number | null;
@@ -125,6 +135,7 @@ export type DashboardData =
       today?: never;
       insight?: never;
       petgif?: never;
+      avatarTemplate?: never;
     };
 
 type DashboardWithPet = {
@@ -137,6 +148,7 @@ type DashboardWithPet = {
   };
   insight: Insight;
   petgif?: PetgifPet | null;
+  avatarTemplate?: PetAvatarTemplate | null;
 };
 
 /** 趋势统计周期 */

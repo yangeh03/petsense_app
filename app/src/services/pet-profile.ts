@@ -13,6 +13,7 @@ export type PetDraft = {
   breed: string;
   avatarEmoji: string;
   avatarMode: 'keep' | 'photo' | 'emoji';
+  avatarTemplateId: string | null;
   photo: PetPhoto | null;
 };
 export type PetUpdate = Omit<PetDraft, 'photo'> & { photo?: PetPhoto };
@@ -34,6 +35,7 @@ export function createPetDraft(pet: SocialPet): PetDraft {
     breed: pet.breed ?? '',
     avatarEmoji: pet.avatar_emoji,
     avatarMode: 'keep',
+    avatarTemplateId: pet.avatar_template_id ?? null,
     photo: null,
   };
 }
@@ -55,6 +57,7 @@ export function buildPetUpdate(draft: PetDraft): PetUpdate {
     breed: draft.breed.trim(),
     avatarEmoji: draft.avatarEmoji,
     avatarMode: draft.avatarMode,
+    avatarTemplateId: draft.avatarTemplateId,
     ...(draft.avatarMode === 'photo' && draft.photo ? { photo: draft.photo } : {}),
   };
 }
@@ -66,6 +69,7 @@ export function isPetDraftDirty(pet: SocialPet, draft: PetDraft): boolean {
     draft.species !== pet.species ||
     draft.avatarEmoji !== pet.avatar_emoji ||
     draft.avatarMode === 'photo' ||
-    (draft.avatarMode === 'emoji' && !!pet.avatarImageUrl)
+    (draft.avatarMode === 'emoji' && !!pet.avatarImageUrl) ||
+    draft.avatarTemplateId !== (pet.avatar_template_id ?? null)
   );
 }

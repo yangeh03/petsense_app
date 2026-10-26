@@ -14,7 +14,8 @@ from petsense.common import shanghai_now
 from petsense.db import iso_z, session_scope, utc_now
 from petsense.db.models import DailyStat, Pet
 from petsense.devices.routes import DEVICE_ID_PATTERN, claim_device
-from petsense.petgif.proxy import app_petgif_pet
+from petsense.petgif.proxy import (PETGIF_AVATAR_TEMPLATES, app_petgif_avatar_template,
+                                   app_petgif_pet)
 from petsense.pets.profile import decode_avatar, validate_fields
 from petsense.telemetry.status import latest_telemetry
 
@@ -61,9 +62,17 @@ def build_insight(pet, telemetry, today):
 
 def pet_dict(pet, public=False):
     """pets 列表 / dashboard 共用的行序列化（键与旧 dict(row) 一致）。"""
+    from petsense.db.models import PetgifIdentity
+    verified_petgif_id = None
+    if pet.petgif_id:
+        with session_scope() as session:
+            identity = session.get(PetgifIdentity, pet.petgif_id)
+            if identity is not None and identity.user_id == pet.user_id:
+                verified_petgif_id = pet.petgif_id
     item = {'id': pet.id, 'user_id': pet.user_id, 'name': pet.name, 'species': pet.species,
             'breed': pet.breed, 'avatar_emoji': pet.avatar_emoji, 'device_id': pet.device_id,
-            'petgif_id': pet.petgif_id, 'avatar_image': pet.avatar_image,
+            'petgif_id': verified_petgif_id, 'avatar_template_id': pet.avatar_template_id,
+            'avatar_image': pet.avatar_image,
             'created_at': iso_z(pet.created_at)}
     telemetry = pet_latest_telemetry(pet.device_id)
     item['batteryPercent'] = telemetry.get('batteryPercent') if telemetry else None
@@ -136,12 +145,23 @@ def app_pet_profile(pet_id):
             if request.method == 'PATCH':
                 multipart = request.mimetype == 'multipart/form-data'
                 data = request.form.to_dict() if multipart else request.get_json(silent=True)
-                allowed = {'name', 'species', 'breed', 'avatarEmoji', 'avatarMode'}
+                allowed = {'name', 'species', 'breed', 'avatarEmoji', 'avatarMode',
+                           'avatarTemplateId'}
                 if not isinstance(data, dict) or not data or set(data) - allowed:
                     raise ValueError('请提交有效的宠物资料，不能修改设备或账号归属')
                 if multipart and any(len(request.form.getlist(k)) != 1 for k in request.form):
                     raise ValueError('资料字段不能重复')
                 fields = validate_fields(data, existing_emoji=pet.avatar_emoji)
+                if 'avatarTemplateId' in data:
+                    template_id = data['avatarTemplateId']
+                    if template_id == '':
+                        template_id = None
+                    if template_id is not None and (not isinstance(template_id, str)
+                            or template_id not in PETGIF_AVATAR_TEMPLATES):
+                        raise ValueError('动画模板无效')
+                    if template_id is not None and data.get('species', pet.species) != 'dog':
+                        raise ValueError('动画模板仅支持狗狗档案')
+                    fields['avatar_template_id'] = template_id
                 mode = data.get('avatarMode', 'keep')
                 if mode not in ('keep', 'photo', 'emoji'):
                     raise ValueError('头像操作无效')
@@ -213,7 +233,14 @@ def app_pet_bind_petgif(pet_id):
     petgif_id = str((request.get_json(silent=True) or {}).get('petgifId', '')).strip()[:40]
     if not petgif_id:
         return {'success': False, 'message': '缺少 petgifId'}, 400
+    from petsense.petgif.proxy import PETGIF_AVATAR_TEMPLATES
+    from petsense.db.models import PetgifIdentity
+    if petgif_id in {item['petgif_id'] for item in PETGIF_AVATAR_TEMPLATES.values()}:
+        return {'success': False, 'message': '预设动画不能绑定为个人 PetGIF 数字形象'}, 400
     with session_scope() as s:
+        identity_owner = s.get(PetgifIdentity, petgif_id)
+        if identity_owner is None or identity_owner.user_id != user['id']:
+            return {'success': False, 'message': '只能绑定由当前账号生成的个人 PetGIF 数字形象'}, 403
         owned = s.execute(select(Pet.id).where(Pet.id == pet_id,
                                                Pet.user_id == user['id'])).scalar_one_or_none()
         if not owned:
@@ -247,12 +274,19 @@ def app_dashboard():
             petgif = app_petgif_pet(pet['petgif_id'])
         except requests.RequestException:
             petgif = None
+    avatar_template = None
+    if pet.get('avatar_template_id'):
+        try:
+            avatar_template = app_petgif_avatar_template(pet['avatar_template_id'])
+        except requests.RequestException:
+            avatar_template = None
     return {
         'success': True,
         'pet': pet,
         'latest': telemetry,
         'today': today,
         'petgif': petgif,
+        'avatarTemplate': avatar_template,
         'insight': build_insight(pet, telemetry, today),
     }
 

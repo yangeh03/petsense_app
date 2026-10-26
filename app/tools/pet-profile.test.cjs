@@ -8,6 +8,7 @@ const pet = {
   species: 'dog',
   breed: '',
   avatar_emoji: '🐶',
+  avatar_template_id: 'marni',
   avatarImageUrl: '/uploads/original.png',
 };
 
@@ -29,6 +30,7 @@ test('editing other fields preserves an existing photo; whitespace alone is not 
     species: 'dog',
     avatarEmoji: '🐶',
     avatarMode: 'keep',
+    avatarTemplateId: 'marni',
   });
 });
 test('photo selection and switching to emoji are explicit mutations', () => {
@@ -38,6 +40,16 @@ test('photo selection and switching to emoji are explicit mutations', () => {
   assert.equal(profile.buildPetUpdate({ ...draft, avatarMode: 'photo', photo }).photo, photo);
   assert.ok(profile.validatePetDraft({ ...draft, avatarMode: 'photo', photo: null }).avatar);
   assert.equal(profile.buildPetUpdate({ ...draft, avatarMode: 'emoji', photo }).photo, undefined);
+});
+test('template selection participates in dirty checks and persists independently of photo and PetGIF ID', () => {
+  const draft = profile.createPetDraft(pet);
+  assert.equal(draft.avatarTemplateId, 'marni');
+  assert.equal(profile.isPetDraftDirty(pet, { ...draft, avatarTemplateId: null }), true);
+  assert.equal(profile.isPetDraftDirty(pet, { ...draft, avatarTemplateId: 'marni' }), false);
+  assert.equal(
+    profile.buildPetUpdate({ ...draft, avatarTemplateId: 'donggua' }).avatarTemplateId,
+    'donggua',
+  );
 });
 test('species labels are localized without guessing missing values', () => {
   assert.equal(profile.speciesLabel('dog'), '狗狗');

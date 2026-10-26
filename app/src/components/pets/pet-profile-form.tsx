@@ -154,6 +154,7 @@ export function PetProfileForm({
                   )?.emoji;
                   onChange({
                     species: item.id,
+                    ...(item.id !== 'dog' ? { avatarTemplateId: null } : {}),
                     ...(draft.avatarEmoji === previousDefault ? { avatarEmoji: item.emoji } : {}),
                   });
                 }}

@@ -14,6 +14,7 @@ class Pet(Base):
     avatar_emoji = Column(String(16), nullable=False, default='🐾')
     device_id = Column(String(64), nullable=False, default='', index=True)
     petgif_id = Column(String(64), nullable=True)
+    avatar_template_id = Column(String(32), nullable=True)
     avatar_image = Column(String(128), nullable=True)
     created_at = Column(UTCDatetime, nullable=False)
 

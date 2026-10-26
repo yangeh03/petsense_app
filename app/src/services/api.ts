@@ -18,6 +18,7 @@ import type {
   DashboardData,
   Post,
   PostComment,
+  PetAvatarTemplate,
   SocialPet,
   FollowListUser,
   TrendPeriod,
@@ -80,9 +81,10 @@ export async function request<T>(
     form?: FormData;
     auth?: boolean;
     signal?: AbortSignal;
+    headers?: Record<string, string>;
   } = {},
 ): Promise<T> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...options.headers };
   let body: BodyInit | undefined;
   if (options.form) {
     body = options.form;
@@ -200,6 +202,10 @@ export function fetchPets(): Promise<{ pets: SocialPet[] }> {
   return request('/pets');
 }
 
+export function fetchAvatarTemplates(): Promise<{ templates: PetAvatarTemplate[] }> {
+  return request('/petgif/avatar-templates');
+}
+
 export function fetchPet(petId: number): Promise<{ pet: SocialPet }> {
   return request(`/pets/${petId}`);
 }
@@ -209,7 +215,7 @@ export async function updatePet(petId: number, input: PetUpdate): Promise<{ pet:
   if (!photo) return request(`/pets/${petId}`, { method: 'PATCH', body: fields });
   return uploadRequest(`/pets/${petId}`, {
     method: 'PATCH',
-    fields,
+    fields: Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, value ?? ''])),
     files: [{ field: 'photo', ...photo }],
   });
 }

@@ -1,4 +1,4 @@
-import type { PetgifPet, SocialPet } from '@/types/social';
+import type { PetAvatarTemplate, PetgifPet, SocialPet } from '@/types/social';
 import type { TelemetryFrame } from '@/types/telemetry';
 
 export const PET_ACTIONS = {
@@ -40,26 +40,36 @@ export function inferPetAction(frame: TelemetryFrame | null | undefined): PetAct
 export function selectPetAvatar({
   pet,
   petgif,
+  avatarTemplate,
   frame,
   fresh,
   failedUrls = [],
 }: {
   pet: SocialPet;
   petgif: PetgifPet | null | undefined;
+  avatarTemplate?: PetAvatarTemplate | null;
   frame: TelemetryFrame | null;
   fresh: boolean;
   failedUrls?: readonly string[];
 }) {
   const ownAssets = pet.petgif_id && petgif?.id === pet.petgif_id ? petgif : null;
+  const selectedTemplate = pet.avatar_template_id === avatarTemplate?.id ? avatarTemplate : null;
   const actionKey =
     fresh && pet.device_id && frame?.deviceId === pet.device_id ? inferPetAction(frame) : null;
-  const preset = actionKey ? ownAssets?.behaviors[actionKey]?.gifUrl : null;
-  const staticCandidates = [pet.avatarImageUrl, ownAssets?.characterCardUrl];
+  const actionCandidates = actionKey
+    ? [ownAssets?.behaviors[actionKey]?.gifUrl, selectedTemplate?.behaviors[actionKey]?.gifUrl]
+    : [];
+  const preset = actionCandidates.find((url) => url && !failedUrls.includes(url)) || null;
+  const staticCandidates = [
+    pet.avatarImageUrl,
+    ownAssets?.characterCardUrl,
+    selectedTemplate?.characterCardUrl,
+  ];
   return {
     actionKey,
     label: actionKey ? PET_ACTIONS[actionKey] : null,
-    animationAvailable: !!preset,
-    animationUrl: preset && !failedUrls.includes(preset) ? preset : null,
+    animationAvailable: actionCandidates.some(Boolean),
+    animationUrl: preset,
     staticUrl: staticCandidates.find((url) => url && !failedUrls.includes(url)) || null,
   };
 }

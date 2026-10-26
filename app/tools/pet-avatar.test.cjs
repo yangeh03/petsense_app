@@ -32,7 +32,7 @@ const frame = (label, confidence = 1) => ({
 });
 function select(extra = {}) {
   return selector().selectPetAvatar({
-    pet,
+    pet: { ...pet, avatar_template_id: 'marni' },
     petgif,
     frame: frame('walking'),
     fresh: true,
@@ -88,6 +88,33 @@ test('profile image falls back to own character card, never another pet card', (
     select({ pet: { ...pet, avatarImageUrl: null }, petgif: { ...petgif, id: 'other' } }).staticUrl,
     null,
   );
+});
+test('a selected template supplies exact action GIF after personal behavior is missing', () => {
+  const template = {
+    id: 'marni',
+    characterCardUrl: '/template.png',
+    behaviors: { walk: { gifUrl: '/template-walk.gif' }, sit: { gifUrl: '/template-sit.gif' } },
+  };
+  const result = selector().selectPetAvatar({
+    pet: { ...pet, avatar_template_id: 'marni' },
+    petgif: { ...petgif, behaviors: { sit: petgif.behaviors.sit } },
+    avatarTemplate: template,
+    frame: frame('walking'),
+    fresh: true,
+  });
+  assert.equal(result.animationUrl, '/template-walk.gif');
+  assert.equal(result.staticUrl, '/avatar.png');
+});
+test('template card is the still-image fallback after personal identity and user photo', () => {
+  const result = selector().selectPetAvatar({
+    pet: { ...pet, petgif_id: null, avatar_template_id: 'marni', avatarImageUrl: null },
+    petgif: null,
+    avatarTemplate: { id: 'marni', characterCardUrl: '/template.png', behaviors: {} },
+    frame: null,
+    fresh: false,
+  });
+  assert.equal(result.animationUrl, null);
+  assert.equal(result.staticUrl, '/template.png');
 });
 test('legacy hook follows reported predictions and never invents movement or sleep', () => {
   const { inferPetAction } = selector();

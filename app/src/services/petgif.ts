@@ -21,81 +21,106 @@ export function fetchPetgifPet(petgifId: string): Promise<PetgifPet> {
   return request(`/petgif/pet/${petgifId}`);
 }
 
-/** 生成运动日记海报（外部全流程约 2 分钟；后端轮询 200s，客户端 240s 超时兜底） */
-export async function generateDiary(
-  petgifId: string,
-  input: {
-    durationMin: number;
-    steps: number;
-    places: string;
-    notes: string;
-    photos?: { uri: string; name: string; type: string }[];
-  },
-): Promise<{ posterUrl?: string | null; status: string; message?: string }> {
-  const url = `${API_BASE_URL}/api/app/petgif/pet/${petgifId}/diary`;
-  const headers = await buildAuthHeaders();
-  const jsonBody = JSON.stringify({
-    durationMin: input.durationMin,
-    steps: input.steps,
+export type DiaryJobStatus = 'queued' | 'running' | 'completed' | 'failed' | 'unknown';
+export type PetgifDiaryJob = {
+  jobId: string;
+  petId: number;
+  status: DiaryJobStatus;
+  createdAt: string;
+  updatedAt: string;
+  posterUrl?: string | null;
+  stats?: Record<string, unknown>;
+  input?: { durationMin?: number; steps?: number; places?: string; notes?: string };
+  message?: string | null;
+};
+
+export type DiaryInput = {
+  durationMin: number;
+  steps: number;
+  places: string;
+  notes: string;
+  photos?: { uri: string; name: string; type: string }[];
+};
+
+function diaryFields(input: DiaryInput): Record<string, string> {
+  return {
+    durationMin: String(input.durationMin),
+    steps: String(input.steps),
     places: input.places,
     notes: input.notes,
-  });
-  if (input.photos?.length && !IS_WEB_LIKE) {
-    // 原生端 multipart 走 XHR（expo/fetch 不支持 {uri} FormData part）
-    const { status, body } = await sendMultipart(url, {
-      method: 'POST',
-      headers,
-      timeoutMs: 240_000,
-      fields: {
-        durationMin: String(input.durationMin),
-        steps: String(input.steps),
-        places: input.places,
-        notes: input.notes,
-      },
-      files: input.photos.map((photo) => ({ field: 'photos', ...photo })),
-    });
-    try {
-      return JSON.parse(body) as {
-        posterUrl?: string | null;
-        status: string;
-        message?: string;
-      };
-    } catch {
-      return { status: 'failed', message: `生成失败（${status}）` };
-    }
-  }
-  let body: BodyInit;
-  if (input.photos?.length) {
-    body = await buildUploadForm(
-      {
-        durationMin: String(input.durationMin),
-        steps: String(input.steps),
-        places: input.places,
-        notes: input.notes,
-      },
-      input.photos.map((photo) => ({ field: 'photos', ...photo })),
-    );
-  } else {
-    headers['Content-Type'] = 'application/json';
-    body = jsonBody;
-  }
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 240_000);
+  };
+}
+
+function parseDiaryReply(status: number, body: string): PetgifDiaryJob {
+  let payload: PetgifDiaryJob & { message?: string };
   try {
-    const response = await fetch(url, {
+    payload = JSON.parse(body) as PetgifDiaryJob & { message?: string };
+  } catch {
+    throw new ApiError(`日记请求失败（${status}）`, status);
+  }
+  if (status < 200 || status >= 300) {
+    throw new ApiError(payload.message ?? `日记请求失败（${status}）`, status);
+  }
+  return payload;
+}
+
+/** Create an account-scoped diary job; the request returns promptly while the server worker polls PetGIF. */
+export async function createDiaryJob(
+  petId: number,
+  input: DiaryInput,
+  idempotencyKey: string,
+): Promise<PetgifDiaryJob> {
+  const fields = diaryFields(input);
+  const photos = input.photos ?? [];
+  const path = `/petgif/pets/${petId}/diaries`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  try {
+    if (photos.length && !IS_WEB_LIKE) {
+      const { status, body } = await sendMultipart(`${API_BASE_URL}/api/app${path}`, {
+        method: 'POST',
+        headers: { ...(await buildAuthHeaders()), 'Idempotency-Key': idempotencyKey },
+        fields,
+        files: photos.map((photo) => ({ field: 'photos', ...photo })),
+        timeoutMs: 30_000,
+        signal: controller.signal,
+      });
+      return parseDiaryReply(status, body);
+    }
+    const form = photos.length
+      ? await buildUploadForm(
+          fields,
+          photos.map((photo) => ({ field: 'photos', ...photo })),
+        )
+      : undefined;
+    return await request<PetgifDiaryJob>(path, {
       method: 'POST',
-      headers,
-      body,
+      body: form
+        ? undefined
+        : {
+            durationMin: input.durationMin,
+            steps: input.steps,
+            places: input.places,
+            notes: input.notes,
+          },
+      form,
+      headers: { 'Idempotency-Key': idempotencyKey },
       signal: controller.signal,
     });
-    return (await response.json()) as {
-      posterUrl?: string | null;
-      status: string;
-      message?: string;
-    };
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export function getDiaryJob(jobId: string, signal?: AbortSignal): Promise<PetgifDiaryJob> {
+  return request(`/petgif/diary-jobs/${encodeURIComponent(jobId)}`, { signal });
+}
+
+export function listDiaryJobs(
+  petId: number,
+  signal?: AbortSignal,
+): Promise<{ jobs: PetgifDiaryJob[] }> {
+  return request(`/petgif/pets/${petId}/diary-jobs`, { signal });
 }
 
 /** 把生成的日记海报发到社区 */
@@ -103,7 +128,7 @@ export function shareDiaryPost(input: {
   posterUrl: string;
   caption: string;
   location?: string;
-  petId?: number;
+  petId: number;
 }): Promise<{ postId: number }> {
   return request('/petgif/diary-post', { method: 'POST', body: input });
 }
