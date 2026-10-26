@@ -3,7 +3,6 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -108,10 +107,6 @@ export default function CommunityScreen() {
     deletePost(post.id)
       .then(() => setPosts((current) => current.filter((item) => item.id !== post.id)))
       .catch(() => void load());
-  };
-
-  const handleReport = (post: Post) => {
-    Alert.alert('已收到举报', `感谢反馈，我们会尽快核查「${post.display_name}」的内容。`);
   };
 
   const keyword = query.trim().toLowerCase();
@@ -253,7 +248,6 @@ export default function CommunityScreen() {
                 onOpenComments={setCommentsFor}
                 onOpenAuthor={(item) => router.push(`/user?id=${item.user_id}`)}
                 onDelete={handleDelete}
-                onReport={handleReport}
               />
             ))}
           </View>

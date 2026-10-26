@@ -1,6 +1,6 @@
 import { Image } from 'expo-image';
 import { SymbolView } from 'expo-symbols';
-import { Alert, Pressable, Share, StyleSheet, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -18,50 +18,30 @@ function formatCount(value: number): string {
   return String(value);
 }
 
-/** 社区帖子卡（ins 风格）：⋯ 菜单（删除/举报）、大图、文案、点赞/评论/分享。 */
+/** 社区帖子卡（ins 风格）：自己的帖子带 ⋯ 删除菜单，大图、文案、点赞/评论。 */
 export function PostCard({
   post,
   onLike,
   onOpenComments,
   onOpenAuthor,
   onDelete,
-  onReport,
 }: {
   post: Post;
   onLike: (post: Post) => void;
   onOpenComments: (post: Post) => void;
   onOpenAuthor: (post: Post) => void;
   onDelete?: (post: Post) => void;
-  onReport?: (post: Post) => void;
 }) {
   const theme = useTheme();
   const liked = post.liked_by_me;
+  const canDelete = post.isMine && !!onDelete;
 
   const openMenu = () => {
-    const buttons: {
-      text: string;
-      style?: 'cancel' | 'destructive' | 'default';
-      onPress?: () => void;
-    }[] = [];
-    if (post.isMine && onDelete) {
-      buttons.push({
-        text: '删除帖子',
-        style: 'destructive',
-        onPress: () => onDelete(post),
-      });
-    } else if (onReport) {
-      buttons.push({ text: '举报', onPress: () => onReport(post) });
-    }
-    buttons.push({ text: '取消', style: 'cancel' });
-    Alert.alert(post.display_name, undefined, buttons);
-  };
-
-  const share = () => {
-    Share.share({
-      message: post.caption ? `${post.caption}\n— 来自 PetSense 社区` : '来自 PetSense 社区',
-    }).catch(() => {
-      // 当前环境不支持系统分享时静默
-    });
+    if (!canDelete) return;
+    Alert.alert(post.display_name, undefined, [
+      { text: '删除帖子', style: 'destructive', onPress: () => onDelete?.(post) },
+      { text: '取消', style: 'cancel' },
+    ]);
   };
 
   return (
@@ -79,18 +59,21 @@ export function PostCard({
             {timeAgo(post.created_at)}
           </ThemedText>
         </View>
-        <Pressable
-          onPress={openMenu}
-          hitSlop={8}
-          accessibilityLabel="更多操作"
-          style={styles.moreButton}
-        >
-          <SymbolView
-            name={{ ios: 'ellipsis', android: 'more_vert', web: 'more_horiz' }}
-            size={18}
-            tintColor={theme.textSecondary}
-          />
-        </Pressable>
+        {canDelete && (
+          <Pressable
+            onPress={openMenu}
+            hitSlop={8}
+            accessibilityLabel="更多操作"
+            accessibilityRole="button"
+            style={styles.moreButton}
+          >
+            <SymbolView
+              name={{ ios: 'ellipsis', android: 'more_vert', web: 'more_horiz' }}
+              size={18}
+              tintColor={theme.textSecondary}
+            />
+          </Pressable>
+        )}
       </Pressable>
 
       <Image
@@ -122,6 +105,7 @@ export function PostCard({
             }}
             label={formatCount(post.likes)}
             color={liked ? theme.danger : theme.textSecondary}
+            accessibilityLabel={liked ? '取消点赞' : '点赞'}
             onPress={() => onLike(post)}
           />
           <ActionIcon
@@ -132,20 +116,10 @@ export function PostCard({
             }}
             label={formatCount(post.comments_count)}
             color={theme.textSecondary}
+            accessibilityLabel="评论"
             onPress={() => onOpenComments(post)}
           />
         </View>
-        <Pressable
-          onPress={share}
-          style={({ pressed }) => [styles.action, pressed && { opacity: 0.6 }]}
-          accessibilityLabel="分享"
-        >
-          <SymbolView
-            name={{ ios: 'square.and.arrow.up', android: 'share', web: 'share' }}
-            size={20}
-            tintColor={theme.textSecondary}
-          />
-        </Pressable>
       </View>
     </ThemedView>
   );
@@ -155,16 +129,20 @@ function ActionIcon({
   icon,
   label,
   color,
+  accessibilityLabel,
   onPress,
 }: {
   icon: Parameters<typeof SymbolView>[0]['name'];
   label: string;
   color: string;
+  accessibilityLabel: string;
   onPress: () => void;
 }) {
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
       style={({ pressed }) => [styles.action, pressed && { opacity: 0.6 }]}
     >
       <SymbolView name={icon} size={22} tintColor={color} />
@@ -216,7 +194,6 @@ const styles = StyleSheet.create({
   actionRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     paddingHorizontal: Spacing.three,
   },
   actionGroup: { flexDirection: 'row', gap: Spacing.four },
