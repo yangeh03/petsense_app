@@ -94,8 +94,25 @@ export type TelemetryPacket = {
   received_at: string;
 };
 
+export type EdgePrediction = {
+  label: string;
+  confidence: number;
+  experimental?: boolean;
+};
+
+export type EdgeInference = {
+  modelVersion: string;
+  action?: EdgePrediction;
+  sound?: EdgePrediction;
+  acRms?: number;
+  inferenceUs?: number;
+  sdReady?: boolean;
+  captureActive?: boolean;
+};
+
 /** 解析后的传感器帧 */
 export type TelemetryFrame = {
+  edge?: EdgeInference;
   deviceId: string;
   /** 设备侧毫秒时间戳 */
   tsMs: number;

@@ -1,0 +1,65 @@
+import type { PetgifPet, SocialPet } from '@/types/social';
+import type { TelemetryFrame } from '@/types/telemetry';
+
+export const PET_ACTIONS = {
+  stand: '站立',
+  sit: '坐着',
+  lie_down: '趴着',
+  walk: '走动',
+  run: '奔跑',
+  sniff: '嗅闻',
+  jump: '跳跃',
+  eat: '进食',
+  sleep: '睡觉',
+} as const;
+export type PetActionKey = keyof typeof PET_ACTIONS;
+const EDGE_ACTIONS: Record<string, PetActionKey> = {
+  standing: 'stand',
+  sitting: 'sit',
+  'lying down': 'lie_down',
+  walking: 'walk',
+};
+const confident = (value: number) => Number.isFinite(value) && value >= 0.6 && value <= 1;
+
+/** Follow reported model results only. No IMU, clock or arbitrary idle-action guesses. */
+export function inferPetAction(frame: TelemetryFrame | null | undefined): PetActionKey | null {
+  if (frame?.edge) {
+    const prediction = frame.edge.action;
+    return prediction && confident(prediction.confidence)
+      ? (EDGE_ACTIONS[prediction.label] ?? null)
+      : null;
+  }
+  const prediction = frame?.action;
+  return prediction &&
+    confident(prediction.confidence) &&
+    Object.hasOwn(PET_ACTIONS, prediction.actionKey)
+    ? (prediction.actionKey as PetActionKey)
+    : null;
+}
+
+export function selectPetAvatar({
+  pet,
+  petgif,
+  frame,
+  fresh,
+  failedUrls = [],
+}: {
+  pet: SocialPet;
+  petgif: PetgifPet | null | undefined;
+  frame: TelemetryFrame | null;
+  fresh: boolean;
+  failedUrls?: readonly string[];
+}) {
+  const ownAssets = pet.petgif_id && petgif?.id === pet.petgif_id ? petgif : null;
+  const actionKey =
+    fresh && pet.device_id && frame?.deviceId === pet.device_id ? inferPetAction(frame) : null;
+  const preset = actionKey ? ownAssets?.behaviors[actionKey]?.gifUrl : null;
+  const staticCandidates = [pet.avatarImageUrl, ownAssets?.characterCardUrl];
+  return {
+    actionKey,
+    label: actionKey ? PET_ACTIONS[actionKey] : null,
+    animationAvailable: !!preset,
+    animationUrl: preset && !failedUrls.includes(preset) ? preset : null,
+    staticUrl: staticCandidates.find((url) => url && !failedUrls.includes(url)) || null,
+  };
+}

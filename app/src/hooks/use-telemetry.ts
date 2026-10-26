@@ -89,5 +89,5 @@ export function useTelemetry() {
           ? 'offline'
           : status;
 
-  return { status, displayState, latest, series, isFresh };
+  return { status, displayState, latest, series, isFresh, now };
 }
