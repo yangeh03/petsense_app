@@ -71,7 +71,22 @@ def broadcast_packet(packet_str, device_id=None):
 
     device_id 标记报文归属设备，WS 按连接作用域过滤；None=系统帧发全体。
     """
-    fwd.broadcast(packet_str)
+    # Legacy internal SSE has no per-user scope. Never add precise map
+    # coordinates to that channel; keep them on the authenticated WS/API.
+    internal = packet_str
+    if 'uwbPosition' in packet_str:
+        try:
+            packet = json.loads(packet_str)
+            payload = packet.get('payload')
+            was_text = isinstance(payload, str)
+            payload = json.loads(payload) if was_text else dict(payload)
+            payload.pop('uwbPosition', None)
+            packet['payload'] = json.dumps(payload) if was_text else payload
+            internal = json.dumps(packet)
+        except (ValueError, TypeError, AttributeError):
+            internal = ''
+    if internal:
+        fwd.broadcast(internal)
     for client, (_, devices) in list(ws_clients.items()):
         if not packet_visible(devices, device_id):
             continue

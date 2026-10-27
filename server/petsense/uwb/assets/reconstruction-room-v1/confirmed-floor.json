@@ -1,0 +1,56 @@
+{
+  "format": "uwb_to_reconstruction_slice_transform_v1",
+  "source": "rebuild_floor_slice_align",
+  "source_uwb_trail": "maps\\sessions\\20260703_outline_walk_04\\outline_trail.csv",
+  "source_pointcloud": "rebuild\\Pointcloud.ply",
+  "selected_floor_candidate": 0,
+  "selected_floor_report": "rebuild\\alignment_run_01\\floor_slice_report.json",
+  "floor_origin_3d": [
+    -0.48295339941978455,
+    0.3306508958339691,
+    0.6028419137001038
+  ],
+  "floor_up_normal_3d": [
+    0.06250453045190099,
+    -0.9575490792784288,
+    -0.28141240990052413
+  ],
+  "floor_axis_x_3d": [
+    0.7928426710034197,
+    0.21890350670913036,
+    -0.5687545637501373
+  ],
+  "floor_axis_y_3d": [
+    0.6062125722130404,
+    -0.18756602976946263,
+    0.7728682305331035
+  ],
+  "tag_height_m": 1.0,
+  "slice_half_thickness_m": 0.18,
+  "slice_height_reconstruction_units": 0.3529463539379722,
+  "slice_half_thickness_reconstruction_units": 0.063530343708835,
+  "scale_prior": 0.3529463539379722,
+  "rotation_deg": 88.54184047473906,
+  "rotation_matrix": [
+    [
+      0.02544693758808044,
+      -0.9996761742521367
+    ],
+    [
+      0.9996761742521367,
+      0.02544693758808044
+    ]
+  ],
+  "scale": 0.311460842248518,
+  "translation_slice_xy": [
+    0.8435587264031348,
+    -0.09835055536765944
+  ],
+  "scale_locked": false,
+  "quality": {
+    "trimmed_nearest_slice_error": 0.07786882256334209,
+    "near_slice_ratio": 0.3655030800821355,
+    "uwb_point_count": 974,
+    "slice_point_count": 933
+  }
+}
