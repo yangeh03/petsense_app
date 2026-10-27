@@ -2,8 +2,9 @@ import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
 import { ThemedText } from '@/components/themed-text';
-import { BottomTabInset } from '@/constants/theme';
+import { BottomTabInset, MaxContentWidth, Shadows, Spacing } from '@/constants/theme';
 import { useObservations } from '@/hooks/use-observations';
 import { useTelemetry } from '@/hooks/use-telemetry';
 import { useTheme } from '@/hooks/use-theme';
@@ -22,11 +23,20 @@ export default function TrackingScreen() {
       <View
         style={[
           styles.container,
-          { paddingTop: insets.top + 24, paddingBottom: BottomTabInset + insets.bottom + 110 },
+          {
+            paddingTop: insets.top + Spacing.four,
+            paddingBottom: BottomTabInset + insets.bottom + 28,
+          },
         ]}
       >
-        <ThemedText style={styles.title}>位置</ThemedText>
-        <ThemedText themeColor="textSecondary">只显示项圈实际提供的定位能力。</ThemedText>
+        <View style={styles.titleRow}>
+          <ThemedText style={styles.title}>位置</ThemedText>
+          <View style={[styles.tag, { backgroundColor: theme.tintBackground }]}>
+            <ThemedText type="smallBold" style={{ color: theme.tint }}>
+              筹备中
+            </ThemedText>
+          </View>
+        </View>
         <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
           <View style={[styles.icon, { backgroundColor: theme.tintBackground }]}>
             <SymbolView
@@ -54,9 +64,9 @@ export default function TrackingScreen() {
           </Pressable>
         </View>
         <View style={[styles.info, { borderColor: theme.backgroundSelected }]}>
-          <ThemedText type="smallBold">动作与位置是两种数据</ThemedText>
+          <ThemedText type="smallBold">室内 / 室外定位筹备中</ThemedText>
           <ThemedText type="small" themeColor="textSecondary">
-            识别到走动，不代表已经知道它在哪个房间。没有定位数据时，我们不会用演示轨迹代替。
+            正在完善室内标定和室外定位能力；没有可用定位数据时，我们不会用演示轨迹代替。
           </ThemedText>
         </View>
       </View>
@@ -65,12 +75,25 @@ export default function TrackingScreen() {
 }
 const styles = StyleSheet.create({
   scroll: { alignItems: 'center' },
-  container: { width: '100%', maxWidth: 640, paddingHorizontal: 24, gap: 20 },
+  container: {
+    width: '100%',
+    maxWidth: MaxContentWidth,
+    paddingHorizontal: Spacing.four,
+    gap: Spacing.four,
+  },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
   title: { fontSize: 28, lineHeight: 36, fontWeight: '700' },
-  card: { borderRadius: 24, padding: 28, gap: 20, marginTop: 12, alignItems: 'flex-start' },
+  tag: { borderRadius: 999, paddingHorizontal: Spacing.two, paddingVertical: 3 },
+  card: {
+    borderRadius: 22,
+    padding: Spacing.five,
+    gap: Spacing.three,
+    boxShadow: Shadows.card,
+    alignItems: 'flex-start',
+  },
   icon: { padding: 18, borderRadius: 22 },
   sectionTitle: { fontSize: 21, lineHeight: 30, fontWeight: '700' },
   description: { lineHeight: 26 },
   button: { paddingHorizontal: 18, paddingVertical: 12, borderRadius: 16 },
-  info: { borderTopWidth: 1, paddingTop: 22, gap: 10 },
+  info: { borderTopWidth: 1, paddingTop: Spacing.four, gap: Spacing.one },
 });

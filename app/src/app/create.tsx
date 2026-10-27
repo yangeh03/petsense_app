@@ -18,7 +18,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
-import { Shadows, Spacing } from '@/constants/theme';
+import { Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { usePetChanges } from '@/hooks/use-pet-changes';
 import { useTheme } from '@/hooks/use-theme';
@@ -27,7 +27,7 @@ import { normalizeForUpload } from '@/services/normalize-image';
 import type { SocialPet } from '@/types/social';
 
 /**
- * 创建页（底部弹层）：发帖；宠物建档入口转到独立设置流程。
+ * 创建页（底部弹层）：只负责发布社区动态。
  * 布局约定：sheet 撑满 → 内容统一 640 上限 + alignSelf 居中 + 水平边距 20，
  * 控件全部 width:'100%'，杜绝宽度收缩差异导致的贴边与横向拖动。
  */
@@ -42,7 +42,7 @@ export default function CreateScreen() {
       style={[styles.sheet, { backgroundColor: theme.background }]}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      {/* 头部：关闭 + 分段控件 */}
+      {/* 头部：关闭 + 明确的发布任务。宠物资料从“我的”进入。 */}
       <View style={[styles.header, { paddingTop: insets.top + Spacing.two }]}>
         <Pressable onPress={() => router.back()} hitSlop={10} accessibilityLabel="关闭">
           <SymbolView
@@ -51,31 +51,7 @@ export default function CreateScreen() {
             tintColor={theme.textSecondary}
           />
         </Pressable>
-        <View style={[styles.segment, { backgroundColor: theme.backgroundSelected }]}>
-          {(['post', 'pet'] as const).map((item) => {
-            const selected = item === 'post';
-            return (
-              <Pressable
-                key={item}
-                onPress={() => {
-                  if (item === 'pet') router.replace('/pet');
-                }}
-                style={styles.segmentItemWrap}
-              >
-                <View
-                  style={[
-                    styles.segmentItem,
-                    selected && { backgroundColor: theme.background, boxShadow: Shadows.chip },
-                  ]}
-                >
-                  <ThemedText type="smallBold" style={selected ? { color: theme.tint } : undefined}>
-                    {item === 'post' ? '新帖子' : '宠物档案'}
-                  </ThemedText>
-                </View>
-              </Pressable>
-            );
-          })}
-        </View>
+        <ThemedText type="smallBold">发布动态</ThemedText>
         <View style={{ width: 26 }} />
       </View>
 
@@ -84,7 +60,7 @@ export default function CreateScreen() {
           <View style={styles.loginGuide}>
             <ThemedText style={{ fontSize: 40 }}>🔐</ThemedText>
             <ThemedText type="small" themeColor="textSecondary">
-              登录后可以发帖和添加宠物
+              登录后可以发布动态并与其他宠物家长互动
             </ThemedText>
             <Pressable
               onPress={() => router.push('/login')}
@@ -446,21 +422,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.three,
     paddingBottom: Spacing.two,
   },
-  segment: {
-    flexDirection: 'row',
-    borderRadius: 14,
-    padding: 3,
-  },
-  segmentItemWrap: {
-    minWidth: 88,
-  },
-  segmentItem: {
-    alignItems: 'center',
-    borderRadius: 11,
-    paddingVertical: 7,
-    paddingHorizontal: Spacing.three,
-  },
-
   // 表单：统一定宽（100%）+ 内容居中限宽 + 水平边距，杜绝宽度收缩差异
   form: {
     width: '100%',

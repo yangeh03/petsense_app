@@ -4,39 +4,12 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
+import { APP_TABS } from '@/constants/tab-navigation';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
-const TABS = [
-  {
-    name: 'index',
-    href: '/',
-    label: '今日',
-    icon: { ios: 'house.fill', android: 'home', web: 'home' },
-  },
-  {
-    name: 'tracking',
-    href: '/tracking',
-    label: '位置',
-    icon: { ios: 'mappin.and.ellipse', android: 'place', web: 'place' },
-  },
-  {
-    name: 'community',
-    href: '/community',
-    label: '社区',
-    icon: { ios: 'person.2', android: 'people', web: 'people' },
-  },
-  {
-    name: 'profile',
-    href: '/profile',
-    label: '我的',
-    icon: { ios: 'person', android: 'person', web: 'person' },
-  },
-] as const;
-
 /**
- * Web 端底部 Tab 栏：内容出口 TabSlot + 四入口均分，宽裕不拥挤。
- * 创建入口由 (tabs)/_layout 的右下角悬浮按钮承担，不占用底栏空间。
+ * Web 端底部 Tab 栏：内容出口 TabSlot + 五入口均分。
  */
 export default function AppTabs() {
   const theme = useTheme();
@@ -59,7 +32,7 @@ export default function AppTabs() {
       <TabSlot style={{ height: '100%' }} />
       <TabList asChild>
         <View style={barStyle}>
-          {TABS.map((tab) => (
+          {APP_TABS.map((tab) => (
             <TabTrigger key={tab.name} name={tab.name} href={tab.href} asChild>
               <TabButton label={tab.label} icon={tab.icon} active={isActive(tab.href)} />
             </TabTrigger>
@@ -77,7 +50,7 @@ function TabButton({
   onPress,
 }: {
   label: string;
-  icon: (typeof TABS)[number]['icon'];
+  icon: (typeof APP_TABS)[number]['icon'];
   active: boolean;
   onPress?: () => void;
 }) {

@@ -206,6 +206,11 @@ export default function CommunityScreen() {
         <ThemedText style={[styles.title, { fontFamily: Fonts.rounded }]}>社区</ThemedText>
         <View style={styles.headerActions}>
           <HeaderButton
+            label="发布动态"
+            name={{ ios: 'plus.circle', android: 'add_circle', web: 'add_circle' }}
+            onPress={() => router.push('/create')}
+          />
+          <HeaderButton
             label="搜索社区"
             name={{ ios: 'magnifyingglass', android: 'search', web: 'search' }}
             onPress={() => router.push('/community-search')}
