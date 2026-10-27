@@ -111,16 +111,23 @@ export default function ProfileScreen() {
         {/* 用户卡 */}
         <ThemedView type="backgroundElement" style={styles.userCard}>
           <View style={[styles.userAvatar, { backgroundColor: theme.tintBackground }]}>
-            <ThemedText style={{ fontSize: 32 }}>{user.avatarEmoji}</ThemedText>
+            <ThemedText style={{ fontSize: 32 }}>
+              {profile?.avatarEmoji ?? user.avatarEmoji}
+            </ThemedText>
           </View>
           <View style={styles.userTexts}>
             <ThemedText type="smallBold" style={styles.userName}>
-              {user.displayName}
+              {profile?.displayName ?? user.displayName}
             </ThemedText>
             <ThemedText type="small" themeColor="textSecondary">
               @{user.username}
             </ThemedText>
           </View>
+          <Pressable onPress={() => router.push('/profile-edit')} accessibilityLabel="编辑公开资料">
+            <ThemedText type="small" style={{ color: theme.tint }}>
+              编辑
+            </ThemedText>
+          </Pressable>
           <Pressable
             onPress={confirmLogout}
             hitSlop={8}
@@ -140,23 +147,19 @@ export default function ProfileScreen() {
             label="帖子"
             onPress={() => router.push(`/user?id=${user.id}`)}
           />
-          <StatCell value={profile?.followers ?? 0} label="粉丝" />
-          <StatCell value={profile?.following ?? 0} label="关注" />
+          <StatCell
+            value={profile?.followers ?? 0}
+            label="粉丝"
+            onPress={() => setFollowKind('followers')}
+          />
+          <StatCell
+            value={profile?.following ?? 0}
+            label="关注"
+            onPress={() => setFollowKind('following')}
+          />
         </ThemedView>
 
-        {/* 我的设备（认领/解绑项圈） */}
-        <DeviceCard />
-        <Pressable onPress={() => router.push('/collect')} accessibilityRole="button">
-          <ThemedView type="backgroundElement" style={styles.menuRow}>
-            <AppIcon name="video-outline" size={20} color={theme.tint} />
-            <ThemedText type="default" style={styles.menuLabel}>
-              录像标注与校准
-            </ThemedText>
-            <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
-          </ThemedView>
-        </Pressable>
-
-        {/* 我的宠物 */}
+        {/* 新用户先看到宠物档案，再看到项圈和社区功能。 */}
         <View style={styles.sectionHeader}>
           <ThemedText type="smallBold">宠物档案</ThemedText>
           {profile && profile.pets.length === 0 && (
@@ -227,6 +230,54 @@ export default function ProfileScreen() {
           </Pressable>
         ))}
 
+        <View style={styles.sectionHeader}>
+          <ThemedText type="smallBold">项圈与连接</ThemedText>
+        </View>
+        <DeviceCard />
+
+        <View style={styles.sectionHeader}>
+          <ThemedText type="smallBold">社区与内容</ThemedText>
+        </View>
+        <Pressable onPress={() => router.push('/social-inbox')} accessibilityRole="button">
+          <ThemedView type="backgroundElement" style={styles.menuRow}>
+            <SymbolView
+              name={{ ios: 'bell', android: 'notifications_none', web: 'notifications_none' }}
+              size={20}
+              tintColor={theme.tint}
+            />
+            <ThemedText type="default" style={styles.menuLabel}>
+              互动通知
+            </ThemedText>
+            <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
+          </ThemedView>
+        </Pressable>
+        <Pressable onPress={() => router.push('/bookmarks')} accessibilityRole="button">
+          <ThemedView type="backgroundElement" style={styles.menuRow}>
+            <SymbolView
+              name={{ ios: 'bookmark', android: 'bookmark_border', web: 'bookmark_border' }}
+              size={20}
+              tintColor={theme.tint}
+            />
+            <ThemedText type="default" style={styles.menuLabel}>
+              我的收藏
+            </ThemedText>
+            <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
+          </ThemedView>
+        </Pressable>
+
+        <View style={styles.sectionHeader}>
+          <ThemedText type="smallBold">实验与高级</ThemedText>
+        </View>
+        <Pressable onPress={() => router.push('/collect')} accessibilityRole="button">
+          <ThemedView type="backgroundElement" style={styles.menuRow}>
+            <AppIcon name="video-outline" size={20} color={theme.tint} />
+            <ThemedText type="default" style={styles.menuLabel}>
+              录像标注与校准
+            </ThemedText>
+            <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
+          </ThemedView>
+        </Pressable>
+
         <FollowListModal
           visible={followKind !== null && profile !== null}
           userId={user.id}
@@ -234,12 +285,12 @@ export default function ProfileScreen() {
           onClose={() => setFollowKind(null)}
         />
 
-        {/* 设备诊断入口 */}
+        {/* 工程诊断保留，但不作为日常健康管理的主入口。 */}
         <Pressable onPress={() => router.push('/monitor')}>
           <ThemedView type="backgroundElement" style={styles.menuRow}>
             <AppIcon name="heart-pulse" size={20} color={theme.tint} />
             <ThemedText type="default" style={styles.menuLabel}>
-              设备诊断（工程师视图）
+              设备诊断（高级）
             </ThemedText>
             <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
           </ThemedView>

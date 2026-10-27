@@ -12,9 +12,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { PetHero } from '@/components/dashboard/pet-hero';
 import { NotificationBell } from '@/components/alerts/notification-bell';
-import { DiaryModal } from '@/components/dashboard/diary-modal';
-import { SoundTimeline } from '@/components/observations/sound-timeline';
-import { TrendPanel } from '@/components/observations/trend-panel';
 import { ThemedText } from '@/components/themed-text';
 import { BottomTabInset, Fonts, MaxContentWidth, Shadows, Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
@@ -23,7 +20,6 @@ import { useTelemetry } from '@/hooks/use-telemetry';
 import { useTheme } from '@/hooks/use-theme';
 import { clockTime, duration } from '@/services/observation-view';
 import { parseTelemetryMessage } from '@/services/telemetry-service';
-import type { ObservationPeriod } from '@/types/observations';
 
 export default function DashboardScreen() {
   const theme = useTheme();
@@ -31,18 +27,16 @@ export default function DashboardScreen() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
   const { latest: live, displayState, isFresh, now } = useTelemetry();
-  const [period, setPeriod] = useState<ObservationPeriod>('day');
   const {
     dashboard,
     observations: data,
     busy,
     error,
     reload,
-  } = useObservations(period, displayState !== 'replaying');
+  } = useObservations('day', displayState !== 'replaying');
   const [pullRefreshing, setPullRefreshing] = useState(false);
   const [mediaRefresh, setMediaRefresh] = useState(0);
   const [vitalsOpen, setVitalsOpen] = useState(false);
-  const [diaryVisible, setDiaryVisible] = useState(false);
   const pet = dashboard?.pet ?? null;
   const snapshot = data?.latest
     ? parseTelemetryMessage(
@@ -187,6 +181,7 @@ export default function DashboardScreen() {
         ) : pet ? (
           <>
             <PetHero
+              key={`${pet.id}:${pet.petgif_id ?? ''}:${pet.avatar_template_id ?? ''}`}
               pet={pet}
               petgif={dashboard?.petgif}
               avatarTemplate={dashboard?.avatarTemplate}
@@ -197,12 +192,12 @@ export default function DashboardScreen() {
               }
               refreshVersion={mediaRefresh}
               onEdit={() => router.push('/pet')}
-              onSoundPress={() => router.push(pet.device_id ? '/monitor' : '/setup')}
+              onSoundPress={() => router.push('/records')}
             />
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="查看项圈连接与诊断"
-              onPress={() => router.push(pet.device_id ? '/monitor' : '/setup')}
+              accessibilityLabel="查看项圈状态"
+              onPress={() => router.push(pet.device_id ? '/profile' : '/setup')}
               style={styles.status}
             >
               <View style={[styles.dot, { backgroundColor: color }]} />
@@ -255,17 +250,22 @@ export default function DashboardScreen() {
                   </ThemedText>
                   <Pressable
                     accessibilityRole="button"
-                    onPress={() => router.push('/monitor')}
+                    onPress={() => router.push('/profile')}
                     style={styles.tap}
                   >
                     <ThemedText type="smallBold" style={{ color: theme.tint }}>
-                      查看设备诊断 ›
+                      查看项圈状态 ›
                     </ThemedText>
                   </Pressable>
                 </View>
               )}
             </View>
-            <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="查看完整健康记录"
+              onPress={() => router.push('/records')}
+              style={[styles.card, { backgroundColor: theme.backgroundElement }]}
+            >
               <View style={styles.rowBetween}>
                 <ThemedText style={styles.sectionTitle}>今日记录</ThemedText>
                 <ThemedText type="small" themeColor="textSecondary">
@@ -284,19 +284,17 @@ export default function DashboardScreen() {
                   compact
                 />
               </View>
-            </View>
-            <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
-              <ThemedText style={styles.sectionTitle}>声音记录</ThemedText>
-              <SoundTimeline events={data?.events ?? []} />
-            </View>
-            <TrendPanel data={data} period={period} onPeriod={setPeriod} busy={busy} />
+              <ThemedText type="smallBold" style={{ color: theme.tint }}>
+                查看健康趋势、声音与运动日记 ›
+              </ThemedText>
+            </Pressable>
             <Pressable
               accessibilityRole="button"
-              onPress={() => setDiaryVisible(true)}
+              onPress={() => router.push('/records')}
               style={[styles.card, { backgroundColor: theme.backgroundElement }]}
             >
               <ThemedText type="smallBold">
-                {pet.petgif_id ? '制作运动日记 ›' : '运动日记暂不可用'}
+                {pet.petgif_id ? '制作运动日记 ›' : '查看运动日记条件 ›'}
               </ThemedText>
               {!pet.petgif_id && (
                 <ThemedText type="small" themeColor="textSecondary">
@@ -313,21 +311,6 @@ export default function DashboardScreen() {
           )
         )}
       </View>
-      {pet && (
-        <DiaryModal
-          visible={diaryVisible}
-          onShared={() => {
-            setDiaryVisible(false);
-            void reload();
-          }}
-          onClose={() => setDiaryVisible(false)}
-          petName={pet.name}
-          petId={pet.id}
-          userId={user?.id ?? -1}
-          petgifId={pet.petgif_id ?? null}
-          activeMinutes={Math.floor((summary?.walkingSeconds ?? 0) / 60)}
-        />
-      )}
     </ScrollView>
   );
 }

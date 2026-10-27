@@ -27,8 +27,10 @@ import {
   deletePost,
   fetchFeed,
   fetchUserProfile,
-  toggleFollow,
-  toggleLike,
+  fetchUserStories,
+  setFollow,
+  setLike,
+  setBookmark,
 } from '@/services/api';
 import type { Post, UserProfile } from '@/types/social';
 
@@ -40,12 +42,25 @@ export default function UserScreen() {
   const params = useLocalSearchParams<{ id: string }>();
   const userId = Number(params.id);
   const { user } = useAuth();
-  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [storedProfile, setProfile] = useState<UserProfile | null>(null);
   const [posts, setPosts] = useState<Post[]>([]);
+  const [loadedFor, setLoadedFor] = useState<number | null>(null);
+  const viewerId = user?.id ?? 0;
+  const profile = loadedFor === viewerId ? storedProfile : null;
+  const visiblePosts = loadedFor === viewerId ? posts : [];
+  const [storyState, setStoryState] = useState<{ owner: number; count: number }>({
+    owner: -1,
+    count: 0,
+  });
+  const storyCount = storyState.owner === viewerId ? storyState.count : 0;
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [commentsFor, setCommentsFor] = useState<Post | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [pageError, setPageError] = useState('');
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [followPending, setFollowPending] = useState(false);
   const [followListKind, setFollowListKind] = useState<'followers' | 'following' | null>(null);
   const isMe = user?.id === userId;
 
@@ -57,24 +72,41 @@ export default function UserScreen() {
       return;
     }
     const current = ++sequence.current;
+    // 故事入口是附属信息：失败只是不显示入口，不影响资料和帖子。
+    void fetchUserStories(userId)
+      .then((data) => {
+        if (current === sequence.current)
+          setStoryState({ owner: viewerId, count: data.stories.length });
+      })
+      .catch(() => {});
     try {
       const [profileData, feedData] = await Promise.all([
         fetchUserProfile(userId),
-        fetchFeed(userId),
+        fetchFeed(userId, { limit: 20 }),
       ]);
       if (current !== sequence.current) return;
       setProfile(profileData.profile);
       setPosts(feedData.posts);
+      setLoadedFor(viewerId);
+      setNextCursor(feedData.page.nextCursor);
+      setPageError('');
       setLoadError('');
     } catch {
-      if (current === sequence.current) setLoadError('资料加载失败，请检查网络后重试');
+      if (current === sequence.current) {
+        if (loadedFor !== viewerId) {
+          setProfile(null);
+          setPosts([]);
+        }
+        setLoadedFor(viewerId);
+        setLoadError('资料加载失败，请检查网络后重试');
+      }
     } finally {
       if (current === sequence.current) {
         setLoading(false);
         setRefreshing(false);
       }
     }
-  }, [userId]);
+  }, [userId, viewerId, loadedFor]);
 
   useFocusEffect(
     useCallback(() => {
@@ -97,33 +129,73 @@ export default function UserScreen() {
   };
 
   const handleFollow = () => {
-    if (requireLogin() || !profile) return;
-    setProfile({
-      ...profile,
-      is_following: !profile.is_following,
-      followers: profile.followers + (profile.is_following ? -1 : 1),
-    });
-    toggleFollow(userId).catch(() => void load());
+    if (requireLogin() || !profile || followPending) return;
+    const currentRequest = sequence.current;
+    const target = !profile.is_following;
+    const previous = { is_following: profile.is_following, followers: profile.followers };
+    setFollowPending(true);
+    // 乐观更新：按钮立刻切换；失败时回滚到请求前的关系与计数。
+    setProfile((current) =>
+      current
+        ? { ...current, is_following: target, followers: current.followers + (target ? 1 : -1) }
+        : current,
+    );
+    void setFollow(userId, target)
+      .then((data) => {
+        if (currentRequest !== sequence.current) return;
+        // 以服务端最终状态校准（幂等接口重复请求不会反转）。
+        setProfile((current) =>
+          current && current.is_following !== data.following
+            ? {
+                ...current,
+                is_following: data.following,
+                followers: current.followers + (data.following ? 1 : -1),
+              }
+            : current,
+        );
+        // 关系变化会改变仅粉丝内容的可见性和帖子计数，立刻重拉一次。
+        void load();
+      })
+      .catch((exc) => {
+        if (currentRequest === sequence.current)
+          setProfile((current) => (current ? { ...current, ...previous } : current));
+        Alert.alert('关注失败', exc instanceof Error ? exc.message : '请重试');
+      })
+      .finally(() => setFollowPending(false));
   };
 
   const handleDelete = (post: Post) => {
-    Alert.alert('删除帖子', '删除后无法恢复，确定删除？', [
-      { text: '取消', style: 'cancel' },
-      {
-        text: '删除',
-        style: 'destructive',
-        onPress: () => {
-          deletePost(post.id)
-            .then(() => {
-              setPosts((current) => current.filter((item) => item.id !== post.id));
-              setProfile((current) =>
-                current ? { ...current, posts_count: current.posts_count - 1 } : current,
-              );
-            })
-            .catch(() => void load());
-        },
-      },
-    ]);
+    const currentRequest = sequence.current;
+    void deletePost(post.id)
+      .then(() => {
+        if (currentRequest !== sequence.current) return;
+        setPosts((current) => current.filter((item) => item.id !== post.id));
+        setProfile((current) =>
+          current ? { ...current, posts_count: current.posts_count - 1 } : current,
+        );
+      })
+      .catch((exc) => Alert.alert('删除失败', exc instanceof Error ? exc.message : '请重试'));
+  };
+
+  const loadMore = async () => {
+    if (!nextCursor || loadingMore || loadedFor !== viewerId) return;
+    const currentRequest = sequence.current;
+    setLoadingMore(true);
+    try {
+      const data = await fetchFeed(userId, { cursor: nextCursor, limit: 20 });
+      if (currentRequest !== sequence.current) return;
+      setPosts((current) => [
+        ...current,
+        ...data.posts.filter((item) => !current.some((existing) => existing.id === item.id)),
+      ]);
+      setNextCursor(data.page.nextCursor);
+      setPageError('');
+    } catch (exc) {
+      if (currentRequest === sequence.current)
+        setPageError(exc instanceof Error ? exc.message : '加载更多失败');
+    } finally {
+      setLoadingMore(false);
+    }
   };
 
   return (
@@ -158,7 +230,7 @@ export default function UserScreen() {
           </ThemedText>
         </Pressable>
 
-        {loading ? (
+        {loading || loadedFor !== viewerId ? (
           <View style={styles.center}>
             <ActivityIndicator color={theme.tint} />
           </View>
@@ -193,20 +265,33 @@ export default function UserScreen() {
         ) : (
           <>
             <View style={styles.headerCard}>
-              <View style={[styles.avatar, { backgroundColor: theme.tintBackground }]}>
+              <Pressable
+                onPress={storyCount > 0 ? () => router.push(`/story?userId=${userId}`) : undefined}
+                disabled={storyCount === 0}
+                accessibilityLabel={
+                  storyCount > 0 ? `查看 ${profile.displayName} 的 ${storyCount} 条故事` : undefined
+                }
+                style={[
+                  styles.avatar,
+                  { backgroundColor: theme.tintBackground },
+                  storyCount > 0 && { borderWidth: 2.5, borderColor: theme.tint },
+                ]}
+              >
                 <ThemedText style={{ fontSize: 34 }}>{profile.avatarEmoji}</ThemedText>
-              </View>
+              </Pressable>
               <View style={styles.headerTexts}>
                 <ThemedText type="smallBold" style={styles.name}>
                   {profile.displayName}
                 </ThemedText>
                 <ThemedText type="small" themeColor="textSecondary">
                   @{profile.username} · {profile.pets.length} 只宠物
+                  {storyCount > 0 ? ` · ${storyCount} 条故事` : ''}
                 </ThemedText>
               </View>
               {!isMe && (
                 <Pressable
                   onPress={handleFollow}
+                  disabled={followPending}
                   style={({ pressed }) => [
                     styles.followButton,
                     {
@@ -266,34 +351,70 @@ export default function UserScreen() {
             )}
 
             <View style={styles.feed}>
-              {posts.length === 0 ? (
+              {visiblePosts.length === 0 ? (
                 <ThemedText type="small" themeColor="textSecondary" style={styles.empty}>
                   TA 还没有发过帖子
                 </ThemedText>
               ) : (
-                posts.map((post) => (
+                visiblePosts.map((post) => (
                   <PostCard
                     key={post.id}
                     post={post}
                     onLike={() => {
                       if (requireLogin()) return;
-                      toggleLike(post.id)
-                        .then((result) =>
+                      const currentRequest = sequence.current;
+                      setLike(post.id, !post.liked_by_me)
+                        .then((result) => {
+                          if (currentRequest !== sequence.current) return;
                           setPosts((current) =>
                             current.map((item) =>
                               item.id === post.id
                                 ? { ...item, liked_by_me: result.liked, likes: result.likes }
                                 : item,
                             ),
-                          ),
-                        )
-                        .catch(() => void load());
+                          );
+                        })
+                        .catch(() => {
+                          if (currentRequest === sequence.current) void load();
+                        });
                     }}
                     onOpenComments={setCommentsFor}
+                    onOpenPost={(item) => router.push(`/post?id=${item.id}`)}
+                    onEdit={(item) => router.push(`/post-edit?id=${item.id}`)}
+                    onBookmark={(item) => {
+                      if (requireLogin()) return;
+                      const currentRequest = sequence.current;
+                      void setBookmark(item.id, !item.bookmarked_by_me)
+                        .then((data) => {
+                          if (currentRequest !== sequence.current) return;
+                          setPosts((current) =>
+                            current.map((row) =>
+                              row.id === item.id
+                                ? { ...row, bookmarked_by_me: data.bookmarked }
+                                : row,
+                            ),
+                          );
+                        })
+                        .catch((exc) =>
+                          Alert.alert('收藏失败', exc instanceof Error ? exc.message : '请重试'),
+                        );
+                    }}
                     onOpenAuthor={() => {}}
                     onDelete={handleDelete}
                   />
                 ))
+              )}
+              {!!nextCursor && (
+                <Pressable onPress={() => void loadMore()}>
+                  <ThemedText type="small" style={{ color: theme.tint }}>
+                    {loadingMore ? '加载中…' : '加载更多帖子'}
+                  </ThemedText>
+                </Pressable>
+              )}
+              {!!pageError && (
+                <ThemedText type="small" style={{ color: theme.danger }}>
+                  {pageError}
+                </ThemedText>
               )}
             </View>
           </>
@@ -301,13 +422,15 @@ export default function UserScreen() {
       </ThemedView>
 
       <CommentSheet
-        key={commentsFor?.id ?? 'none'}
-        post={commentsFor}
+        key={`${commentsFor?.id ?? 'none'}:${viewerId}`}
+        post={loadedFor === viewerId ? commentsFor : null}
         onClose={() => setCommentsFor(null)}
-        onCommented={(postId) => {
+        onCommented={(postId, delta = 1) => {
           setPosts((current) =>
             current.map((item) =>
-              item.id === postId ? { ...item, comments_count: item.comments_count + 1 } : item,
+              item.id === postId
+                ? { ...item, comments_count: Math.max(0, item.comments_count + delta) }
+                : item,
             ),
           );
         }}

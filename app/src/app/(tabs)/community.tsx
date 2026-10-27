@@ -3,11 +3,11 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
+  FlatList,
   Pressable,
   RefreshControl,
-  ScrollView,
   StyleSheet,
-  TextInput,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -16,51 +16,86 @@ import { CommentSheet } from '@/components/social/comment-sheet';
 import { PostCard } from '@/components/social/post-card';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { BottomTabInset, Fonts, MaxContentWidth, Shadows, Spacing } from '@/constants/theme';
+import { BottomTabInset, Fonts, MaxContentWidth, Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { usePetChanges } from '@/hooks/use-pet-changes';
 import { useTheme } from '@/hooks/use-theme';
-import { deletePost, fetchFeed, toggleLike } from '@/services/api';
-import type { Post } from '@/types/social';
+import {
+  deletePost,
+  fetchFeed,
+  fetchSocialNotifications,
+  fetchStoryTray,
+  setBookmark,
+  setLike,
+} from '@/services/api';
+import type { Post, StoryGroup } from '@/types/social';
 
-type Story = { key: string; userId: number | null; emoji: string; name: string };
+type Scope = 'discover' | 'following';
 
-/**
- * 社区页（ins 风格）：渐变感故事环 + 可搜索的帖子流。
- * 互动闭环：点赞 / 评论 / 分享 / 删除自己的帖子 / 举报他人帖子。
- * 浏览无需登录，互动需登录。
- */
 export default function CommunityScreen() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useAuth();
+  const [scope, setScope] = useState<Scope>('discover');
   const [posts, setPosts] = useState<Post[]>([]);
+  const [stories, setStories] = useState<StoryGroup[]>([]);
+  const [unread, setUnread] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState('');
+  const [storyError, setStoryError] = useState('');
+  const [pageError, setPageError] = useState('');
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [commentsFor, setCommentsFor] = useState<Post | null>(null);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [query, setQuery] = useState('');
-
+  const [loadedKey, setLoadedKey] = useState('');
   const sequence = useRef(0);
-  const load = useCallback(() => {
+  const pending = useRef(new Set<string>());
+  const currentKey = `${user?.id ?? 0}:${scope}`;
+  const visiblePosts = loadedKey === currentKey ? posts : [];
+  const visibleStories = loadedKey === currentKey ? stories : [];
+
+  const load = useCallback(async () => {
     const current = ++sequence.current;
-    return fetchFeed()
-      .then((data) => {
+    // 故事环只是头部装饰内容，加载失败不能连坐整个 Feed。
+    void fetchStoryTray()
+      .then((tray) => {
         if (current !== sequence.current) return;
-        setPosts(data.posts);
-        setError(null);
-        setLoading(false);
-        setRefreshing(false);
+        setStories(tray.groups);
+        setStoryError('');
       })
-      .catch(() => {
+      .catch((exc) => {
         if (current !== sequence.current) return;
-        setError('社区动态加载失败，下拉重试');
+        setStoryError(exc instanceof Error ? exc.message : '故事加载失败');
+      });
+    try {
+      const feed = await fetchFeed(undefined, { limit: 20, scope });
+      if (current !== sequence.current) return;
+      setPosts(feed.posts);
+      setLoadedKey(currentKey);
+      setUnread(0);
+      setNextCursor(feed.page.nextCursor);
+      setError('');
+      setPageError('');
+      if (user) {
+        void fetchSocialNotifications()
+          .then((data) => {
+            if (current === sequence.current) setUnread(data.unreadCount);
+          })
+          .catch(() => {});
+      }
+    } catch (exc) {
+      if (current !== sequence.current) return;
+      setLoadedKey(currentKey);
+      setError(exc instanceof Error ? exc.message : '社区动态加载失败，请重试');
+    } finally {
+      if (current === sequence.current) {
         setLoading(false);
         setRefreshing(false);
-      });
-  }, []);
+      }
+    }
+  }, [scope, user, currentKey]);
 
   useFocusEffect(
     useCallback(() => {
@@ -71,255 +106,383 @@ export default function CommunityScreen() {
       };
     }, [load, user]),
   );
-
   usePetChanges(load);
 
-  const handleLike = (post: Post) => {
+  const loadMore = async () => {
+    if (!nextCursor || loadingMore || refreshing || loading || loadedKey !== currentKey) return;
+    const current = sequence.current;
+    setLoadingMore(true);
+    setPageError('');
+    try {
+      const data = await fetchFeed(undefined, { limit: 20, scope, cursor: nextCursor });
+      if (current !== sequence.current) return;
+      setPosts((old) => [
+        ...old,
+        ...data.posts.filter((item) => !old.some((previous) => previous.id === item.id)),
+      ]);
+      setNextCursor(data.page.nextCursor);
+    } catch (exc) {
+      if (current === sequence.current)
+        setPageError(exc instanceof Error ? exc.message : '加载更多失败');
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  const handleLike = async (post: Post) => {
     if (!user) {
       router.push('/login');
       return;
     }
-    setPosts((current) =>
-      current.map((item) =>
-        item.id === post.id
-          ? {
-              ...item,
-              liked_by_me: !item.liked_by_me,
-              likes: item.likes + (item.liked_by_me ? -1 : 1),
-            }
-          : item,
-      ),
-    );
-    toggleLike(post.id)
-      .then((result) => {
-        setPosts((current) =>
-          current.map((item) =>
-            item.id === post.id
-              ? { ...item, liked_by_me: result.liked, likes: result.likes }
-              : item,
-          ),
-        );
-      })
-      .catch(() => void load());
+    const current = sequence.current;
+    const key = `like:${currentKey}:${post.id}`;
+    if (pending.current.has(key)) return;
+    pending.current.add(key);
+    try {
+      const result = await setLike(post.id, !post.liked_by_me);
+      if (current !== sequence.current) return;
+      setPosts((current) =>
+        current.map((item) =>
+          item.id === post.id ? { ...item, liked_by_me: result.liked, likes: result.likes } : item,
+        ),
+      );
+    } catch (exc) {
+      Alert.alert('点赞失败', exc instanceof Error ? exc.message : '请重试');
+    } finally {
+      pending.current.delete(key);
+    }
   };
 
-  const handleDelete = (post: Post) => {
-    deletePost(post.id)
-      .then(() => setPosts((current) => current.filter((item) => item.id !== post.id)))
-      .catch(() => void load());
+  const handleBookmark = async (post: Post) => {
+    if (!user) {
+      router.push('/login');
+      return;
+    }
+    const current = sequence.current;
+    const key = `bookmark:${currentKey}:${post.id}`;
+    if (pending.current.has(key)) return;
+    pending.current.add(key);
+    try {
+      const result = await setBookmark(post.id, !post.bookmarked_by_me);
+      if (current !== sequence.current) return;
+      setPosts((current) =>
+        current.map((item) =>
+          item.id === post.id ? { ...item, bookmarked_by_me: result.bookmarked } : item,
+        ),
+      );
+    } catch (exc) {
+      Alert.alert('收藏失败', exc instanceof Error ? exc.message : '请重试');
+    } finally {
+      pending.current.delete(key);
+    }
   };
 
-  const keyword = query.trim().toLowerCase();
-  const visiblePosts = keyword
-    ? posts.filter((post) =>
-        `${post.caption} ${post.display_name} ${post.pet_name ?? ''} ${post.location_text}`
-          .toLowerCase()
-          .includes(keyword),
-      )
-    : posts;
+  const handleDelete = async (post: Post) => {
+    const current = sequence.current;
+    try {
+      await deletePost(post.id);
+      if (current !== sequence.current) return;
+      setPosts((current) => current.filter((item) => item.id !== post.id));
+    } catch (exc) {
+      Alert.alert('删除失败', exc instanceof Error ? exc.message : '请重试');
+    }
+  };
 
-  const stories: Story[] = [];
-  if (user) stories.push({ key: 'me', userId: null, emoji: user.avatarEmoji, name: '我的故事' });
-  for (const post of posts) {
-    if (stories.some((item) => item.userId === post.user_id)) continue;
-    if (user && post.user_id === user.id) continue;
-    stories.push({
-      key: `u${post.user_id}`,
-      userId: post.user_id,
-      emoji: post.avatar_emoji,
-      name: post.display_name,
-    });
-  }
+  const selectScope = (next: Scope) => {
+    if (next === 'following' && !user) {
+      router.push('/login');
+      return;
+    }
+    if (next === scope) return;
+    setScope(next);
+    setLoading(true);
+    setPosts([]);
+    setNextCursor(null);
+  };
 
-  return (
-    <ScrollView
-      style={[styles.scrollView, { backgroundColor: theme.background }]}
-      contentContainerStyle={styles.contentContainer}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={() => {
-            setRefreshing(true);
-            void load();
-          }}
-        />
-      }
-    >
-      <ThemedView style={[styles.container, { paddingTop: insets.top + Spacing.two }]}>
-        {/* 标题 + 搜索圆钮 */}
-        <View style={styles.header}>
-          <ThemedText style={[styles.title, { fontFamily: Fonts.rounded }]}>社区</ThemedText>
+  const header = (
+    <View style={styles.headerContent}>
+      <View style={styles.headerRow}>
+        <ThemedText style={[styles.title, { fontFamily: Fonts.rounded }]}>社区</ThemedText>
+        <View style={styles.headerActions}>
+          <HeaderButton
+            label="发布动态"
+            name={{ ios: 'plus.circle', android: 'add_circle', web: 'add_circle' }}
+            onPress={() => router.push('/create')}
+          />
+          <HeaderButton
+            label="搜索社区"
+            name={{ ios: 'magnifyingglass', android: 'search', web: 'search' }}
+            onPress={() => router.push('/community-search')}
+          />
+          <HeaderButton
+            label="附近的人"
+            name={{ ios: 'location', android: 'location_on', web: 'location_on' }}
+            onPress={() => router.push('/nearby')}
+          />
+          <HeaderButton
+            label={loadedKey === currentKey && unread ? `互动通知，${unread} 条未读` : '互动通知'}
+            name={{ ios: 'bell', android: 'notifications_none', web: 'notifications_none' }}
+            onPress={() => router.push('/social-inbox')}
+            badge={loadedKey === currentKey ? unread : 0}
+          />
+        </View>
+      </View>
+      <View style={styles.scopeRow}>
+        {(['discover', 'following'] as const).map((item) => (
           <Pressable
-            onPress={() => {
-              setSearchOpen((value) => !value);
-              setQuery('');
-            }}
+            key={item}
+            onPress={() => selectScope(item)}
             style={[
-              styles.searchButton,
-              {
-                backgroundColor: theme.backgroundElement,
-                boxShadow: Shadows.chip,
-              },
+              styles.scopeButton,
+              { backgroundColor: item === scope ? theme.tint : theme.backgroundSelected },
             ]}
-            accessibilityLabel="搜索社区"
+          >
+            <ThemedText
+              type="smallBold"
+              style={{ color: item === scope ? '#ffffff' : theme.textSecondary }}
+            >
+              {item === 'discover' ? '发现' : '关注'}
+            </ThemedText>
+          </Pressable>
+        ))}
+      </View>
+      {!!error && visiblePosts.length > 0 && (
+        <Pressable
+          onPress={() => void load()}
+          style={[styles.banner, { backgroundColor: theme.backgroundSelected }]}
+          accessibilityLabel="刷新失败，点击重试"
+        >
+          <ThemedText type="small" style={{ color: theme.danger }}>
+            刷新失败：{error}
+          </ThemedText>
+          <ThemedText type="smallBold" style={{ color: theme.tint }}>
+            重试
+          </ThemedText>
+        </Pressable>
+      )}
+      <View style={styles.storyHeader}>
+        <ThemedText type="smallBold">故事</ThemedText>
+        {!!user && (
+          <Pressable
+            onPress={() => router.push('/story-create')}
+            style={styles.storyCreate}
+            accessibilityLabel="发布故事"
           >
             <SymbolView
-              name={{ ios: 'magnifyingglass', android: 'search', web: 'search' }}
-              size={19}
+              name={{ ios: 'plus.circle', android: 'add_circle', web: 'add_circle' }}
+              size={18}
               tintColor={theme.tint}
             />
+            <ThemedText type="smallBold" style={{ color: theme.tint }}>
+              发布故事
+            </ThemedText>
           </Pressable>
-        </View>
-
-        {searchOpen && (
-          <TextInput
-            value={query}
-            onChangeText={setQuery}
-            placeholder="搜索帖子、宠友、地点…"
-            placeholderTextColor={theme.textSecondary}
-            autoFocus
-            style={[
-              styles.searchInput,
-              { color: theme.text, borderColor: theme.backgroundSelected },
-            ]}
-          />
         )}
-
-        {/* 故事环：珊瑚描边 + 光晕感 */}
-        <ScrollView
+      </View>
+      {visibleStories.length ? (
+        <FlatList
           horizontal
+          data={visibleStories}
+          keyExtractor={(item) => String(item.user_id)}
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.stories}
-        >
-          {stories.map((story) => (
+          contentContainerStyle={styles.storyTray}
+          renderItem={({ item }) => (
             <Pressable
-              key={story.key}
-              style={styles.story}
-              onPress={() =>
-                story.userId ? router.push(`/user?id=${story.userId}`) : router.push('/create')
-              }
+              onPress={() => router.push(`/story?userId=${item.user_id}`)}
+              style={styles.storyItem}
+              accessibilityLabel={`查看 ${item.display_name} 的故事`}
             >
               <View
                 style={[
                   styles.storyRing,
-                  { borderColor: theme.tint, boxShadow: `0 0 0 3px ${theme.tint}1A` },
+                  {
+                    // 自己的故事不存在“未读”，不用品牌色环误导成有新内容。
+                    borderColor:
+                      item.unseen && item.user_id !== user?.id
+                        ? theme.tint
+                        : theme.backgroundSelected,
+                  },
                 ]}
               >
-                <View style={[styles.storyAvatar, { backgroundColor: theme.tintBackground }]}>
-                  <ThemedText style={{ fontSize: 24 }}>{story.emoji || '🙂'}</ThemedText>
-                </View>
+                <ThemedText style={styles.storyEmoji}>{item.avatar_emoji || '🙂'}</ThemedText>
               </View>
-              <ThemedText
-                type="small"
-                themeColor="textSecondary"
-                style={styles.storyName}
-                numberOfLines={1}
-              >
-                {story.name}
+              <ThemedText type="small" numberOfLines={1}>
+                {item.display_name}
               </ThemedText>
             </Pressable>
-          ))}
-        </ScrollView>
+          )}
+        />
+      ) : storyError ? (
+        <ThemedText type="small" style={{ color: theme.danger }}>
+          {storyError}
+        </ThemedText>
+      ) : (
+        <ThemedText type="small" themeColor="textSecondary">
+          暂无有效故事
+        </ThemedText>
+      )}
+    </View>
+  );
 
-        {loading ? (
-          <View style={styles.center}>
-            <ActivityIndicator color={theme.tint} />
-          </View>
-        ) : error ? (
-          <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
-            {error}
-          </ThemedText>
-        ) : visiblePosts.length === 0 ? (
-          <View style={styles.center}>
-            <ThemedText style={styles.emptyEmoji}>{query ? '🔍' : '🐕'}</ThemedText>
-            <ThemedText type="small" themeColor="textSecondary" style={styles.centerText}>
-              {query
-                ? `没有找到与「${query}」相关的内容`
-                : '还没有帖子，点右下角 ＋ 分享第一张宠物照片'}
-            </ThemedText>
-          </View>
-        ) : (
-          <View style={styles.feed}>
-            {visiblePosts.map((post) => (
-              <PostCard
-                key={post.id}
-                post={post}
-                onLike={handleLike}
-                onOpenComments={setCommentsFor}
-                onOpenAuthor={(item) => router.push(`/user?id=${item.user_id}`)}
-                onDelete={handleDelete}
-              />
-            ))}
-          </View>
+  return (
+    <ThemedView style={[styles.screen, { paddingTop: insets.top + Spacing.two }]}>
+      <FlatList
+        data={visiblePosts}
+        keyExtractor={(item) => String(item.id)}
+        contentContainerStyle={styles.content}
+        ListHeaderComponent={header}
+        renderItem={({ item }) => (
+          <PostCard
+            post={item}
+            onLike={handleLike}
+            onBookmark={handleBookmark}
+            onOpenComments={setCommentsFor}
+            onOpenPost={(post) => router.push(`/post?id=${post.id}`)}
+            onEdit={(post) => router.push(`/post-edit?id=${post.id}`)}
+            onOpenAuthor={(post) => router.push(`/user?id=${post.user_id}`)}
+            onDelete={handleDelete}
+          />
         )}
-      </ThemedView>
-
+        ListEmptyComponent={
+          loading || loadedKey !== currentKey ? (
+            <ActivityIndicator color={theme.tint} />
+          ) : (
+            <Pressable onPress={() => void load()} style={styles.center}>
+              <ThemedText
+                type="small"
+                style={{ color: error ? theme.danger : theme.textSecondary }}
+              >
+                {error ||
+                  (scope === 'following'
+                    ? '还没有关注动态，去发现宠友吧'
+                    : '还没有帖子，来分享第一条动态')}
+              </ThemedText>
+              {!!error && (
+                <ThemedText type="small" style={{ color: theme.tint }}>
+                  点击重试
+                </ThemedText>
+              )}
+            </Pressable>
+          )
+        }
+        ListFooterComponent={
+          pageError ? (
+            <Pressable onPress={() => void loadMore()} style={styles.center}>
+              <ThemedText type="small" style={{ color: theme.danger }}>
+                {pageError} · 点击重试
+              </ThemedText>
+            </Pressable>
+          ) : loadingMore ? (
+            <ActivityIndicator color={theme.tint} />
+          ) : null
+        }
+        onEndReached={() => void loadMore()}
+        onEndReachedThreshold={0.5}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => {
+              setRefreshing(true);
+              void load();
+            }}
+          />
+        }
+      />
       <CommentSheet
-        key={commentsFor?.id ?? 'none'}
-        post={commentsFor}
+        key={`${commentsFor?.id ?? 'none'}:${user?.id ?? 0}`}
+        post={loadedKey === currentKey ? commentsFor : null}
         onClose={() => setCommentsFor(null)}
-        onCommented={(postId) => {
+        onCommented={(postId, delta = 1) =>
           setPosts((current) =>
             current.map((item) =>
-              item.id === postId ? { ...item, comments_count: item.comments_count + 1 } : item,
+              item.id === postId
+                ? { ...item, comments_count: Math.max(0, item.comments_count + delta) }
+                : item,
             ),
-          );
-        }}
+          )
+        }
       />
-    </ScrollView>
+    </ThemedView>
+  );
+}
+
+function HeaderButton({
+  label,
+  name,
+  onPress,
+  badge = 0,
+}: {
+  label: string;
+  name: Parameters<typeof SymbolView>[0]['name'];
+  onPress: () => void;
+  badge?: number;
+}) {
+  const theme = useTheme();
+  return (
+    <Pressable onPress={onPress} accessibilityLabel={label} style={styles.iconButton}>
+      <SymbolView name={name} size={21} tintColor={theme.tint} />
+      {badge > 0 && (
+        <View style={[styles.badge, { backgroundColor: theme.danger }]}>
+          <ThemedText style={[styles.badgeText, { color: '#ffffff' }]}>
+            {badge > 99 ? '99+' : badge}
+          </ThemedText>
+        </View>
+      )}
+    </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  scrollView: { flex: 1 },
-  contentContainer: { flexDirection: 'row', justifyContent: 'center' },
-  container: {
-    flexGrow: 1,
-    maxWidth: MaxContentWidth,
+  screen: { flex: 1 },
+  content: {
     paddingHorizontal: Spacing.four,
     paddingBottom: BottomTabInset + Spacing.five,
-    gap: Spacing.three,
+    gap: Spacing.four,
+    maxWidth: MaxContentWidth,
+    width: '100%',
+    alignSelf: 'center',
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
+  headerContent: { gap: Spacing.three, marginBottom: Spacing.three },
+  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   title: { fontSize: 30, fontWeight: '700', lineHeight: 38 },
-  searchButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+  headerActions: { flexDirection: 'row', gap: Spacing.one },
+  iconButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  badge: {
+    position: 'absolute',
+    top: 4,
+    right: 2,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    paddingHorizontal: 4,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  searchInput: {
-    borderWidth: 1,
-    borderRadius: 14,
+  badgeText: { fontSize: 10, lineHeight: 12, fontWeight: '700' },
+  banner: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: Spacing.two,
     paddingHorizontal: Spacing.three,
-    paddingVertical: 10,
-    fontSize: 14,
+    paddingVertical: Spacing.two,
+    borderRadius: 12,
   },
-  stories: { gap: Spacing.three },
-  story: { alignItems: 'center', gap: 6, width: 70 },
+  scopeRow: { flexDirection: 'row', gap: Spacing.two },
+  scopeButton: { paddingHorizontal: Spacing.four, paddingVertical: Spacing.two, borderRadius: 18 },
+  storyHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  storyCreate: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one },
+  storyTray: { gap: Spacing.three },
+  storyItem: { alignItems: 'center', width: 68, gap: Spacing.one },
   storyRing: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    borderWidth: 2.5,
+    borderWidth: 2,
+    width: 58,
+    height: 58,
+    borderRadius: 29,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  storyAvatar: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  storyName: { fontSize: 11, lineHeight: 14 },
-  center: { alignItems: 'center', paddingVertical: Spacing.six, gap: Spacing.two },
-  centerText: { textAlign: 'center', paddingVertical: Spacing.four },
-  emptyEmoji: { fontSize: 38 },
-  feed: { gap: Spacing.four },
+  storyEmoji: { fontSize: 24 },
+  center: { alignItems: 'center', paddingVertical: Spacing.five, gap: Spacing.two },
 });

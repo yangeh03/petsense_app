@@ -4,7 +4,9 @@
     "slug": "petsense_app",
     "version": "1.0.0",
     "owner": "yangenhui",
-    "runtimeVersion": "exposdk:57.0.0",
+    "runtimeVersion": {
+      "policy": "fingerprint"
+    },
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "petsenseapp",
@@ -49,6 +51,12 @@
           "cameraPermission": "允许 PetSense 录制宠物动作与时间校准视频。",
           "microphonePermission": "允许 PetSense 同步记录校准视频的声音。",
           "recordAudioAndroid": true
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "允许 PetSense 在你打开附近功能时使用位置查找附近宠友。"
         }
       ],
       "expo-video"

@@ -83,6 +83,11 @@ export type Post = PostAuthor & {
   likes: number;
   comments_count: number;
   liked_by_me: boolean;
+  bookmarked_by_me?: boolean;
+  audience?: 'public' | 'followers';
+  version?: number;
+  updated_at?: string | null;
+  media?: { url: string; kind: 'image' | 'gif' }[];
   isMine: boolean;
 };
 
@@ -93,10 +98,58 @@ export type PostComment = {
   user_id: number;
   display_name: string;
   avatar_emoji: string;
+  root_id?: number | null;
+  reply_to_comment_id?: number | null;
+  deleted?: boolean;
+  reply_count?: number;
+};
+
+export type Page = { hasMore: boolean; nextCursor: string | null };
+
+export type Story = {
+  id: number;
+  user_id: number;
+  display_name: string;
+  avatar_emoji: string;
+  imageUrl: string;
+  caption: string;
+  audience: 'public' | 'followers';
+  created_at: string;
+  expires_at: string;
+  viewed: boolean;
+};
+
+export type StoryGroup = {
+  user_id: number;
+  display_name: string;
+  avatar_emoji: string;
+  stories: Story[];
+  unseen: number;
+};
+
+export type SocialNotification = {
+  id: number;
+  kind: 'like' | 'comment' | 'reply' | 'follow';
+  actorId: number;
+  actorName: string;
+  actorEmoji: string;
+  postId: number | null;
+  commentId: number | null;
+  targetAvailable: boolean;
+  createdAt: string;
+  readAt: string | null;
+};
+
+export type NearbyUser = {
+  id: number;
+  display_name: string;
+  avatar_emoji: string;
+  distanceBand: string;
 };
 
 export type UserProfile = AppUser & {
   bio: string;
+  version?: number;
   posts_count: number;
   followers: number;
   following: number;

@@ -6,7 +6,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Shadows, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import { absoluteUrl } from '@/services/api';
+import { isProtectedSocialMedia, socialImageSource } from '@/services/api';
 import type { Post } from '@/types/social';
 
 /** 点赞/评论数格式化：千位缩写（1.2k），对齐 ins 观感 */
@@ -24,12 +24,20 @@ export function PostCard({
   onLike,
   onOpenComments,
   onOpenAuthor,
+  onOpenPost,
+  onBookmark,
+  onEdit,
+  expanded = false,
   onDelete,
 }: {
   post: Post;
   onLike: (post: Post) => void;
   onOpenComments: (post: Post) => void;
   onOpenAuthor: (post: Post) => void;
+  onOpenPost?: (post: Post) => void;
+  onBookmark?: (post: Post) => void;
+  onEdit?: (post: Post) => void;
+  expanded?: boolean;
   onDelete?: (post: Post) => void;
 }) {
   const theme = useTheme();
@@ -39,26 +47,45 @@ export function PostCard({
   const openMenu = () => {
     if (!canDelete) return;
     Alert.alert(post.display_name, undefined, [
-      { text: '删除帖子', style: 'destructive', onPress: () => onDelete?.(post) },
+      ...(onEdit ? [{ text: '编辑帖子', onPress: () => onEdit(post) }] : []),
+      {
+        text: '删除帖子',
+        style: 'destructive',
+        onPress: () =>
+          Alert.alert('删除帖子？', '删除后无法恢复。', [
+            { text: '取消', style: 'cancel' },
+            { text: '删除', style: 'destructive', onPress: () => onDelete?.(post) },
+          ]),
+      },
       { text: '取消', style: 'cancel' },
     ]);
   };
 
   return (
     <ThemedView type="backgroundElement" style={styles.card}>
-      <Pressable style={styles.authorRow} onPress={() => onOpenAuthor(post)}>
-        <View style={[styles.authorAvatar, { backgroundColor: theme.tintBackground }]}>
-          <ThemedText style={{ fontSize: 20 }}>{post.avatar_emoji || '🙂'}</ThemedText>
-        </View>
-        <View style={styles.authorTexts}>
-          <ThemedText type="smallBold" style={styles.authorName}>
-            {post.display_name}
-          </ThemedText>
-          <ThemedText type="small" themeColor="textSecondary" style={styles.meta}>
-            {post.pet_name ? `${post.pet_emoji || '🐾'} ${post.pet_name} · ` : ''}
-            {timeAgo(post.created_at)}
-          </ThemedText>
-        </View>
+      {/* 作者区与菜单按钮是兄弟节点：嵌套 Pressable 会把菜单合并进作者行，读屏无法单独触达。 */}
+      <View style={styles.authorRow}>
+        <Pressable
+          style={styles.authorLink}
+          onPress={() => onOpenAuthor(post)}
+          accessibilityRole="button"
+          accessibilityLabel={`查看 ${post.display_name} 的主页`}
+        >
+          <View style={[styles.authorAvatar, { backgroundColor: theme.tintBackground }]}>
+            <ThemedText style={{ fontSize: 20 }}>{post.avatar_emoji || '🙂'}</ThemedText>
+          </View>
+          <View style={styles.authorTexts}>
+            <ThemedText type="smallBold" style={styles.authorName}>
+              {post.display_name}
+            </ThemedText>
+            <ThemedText type="small" themeColor="textSecondary" style={styles.meta}>
+              {post.pet_name ? `${post.pet_emoji || '🐾'} ${post.pet_name} · ` : ''}
+              {post.location_text ? `${post.location_text} · ` : ''}
+              {timeAgo(post.created_at)}
+              {post.updated_at ? ' · 已编辑' : ''}
+            </ThemedText>
+          </View>
+        </Pressable>
         {canDelete && (
           <Pressable
             onPress={openMenu}
@@ -74,25 +101,53 @@ export function PostCard({
             />
           </Pressable>
         )}
-      </Pressable>
+      </View>
 
-      <Image
-        source={{
-          uri:
-            post.mediaKind === 'gif' && post.mediaUrl
-              ? absoluteUrl(post.mediaUrl)
-              : absoluteUrl(post.imageUrl),
-        }}
-        style={styles.image}
-        contentFit="cover"
-        transition={150}
-        autoplay={true}
-      />
+      {(post.imageUrl || post.mediaUrl) && (
+        <Pressable
+          onPress={() => onOpenPost?.(post)}
+          accessibilityLabel={
+            (post.media?.length ?? 0) > 1
+              ? `查看帖子详情，共 ${post.media!.length} 张图片`
+              : '查看帖子详情'
+          }
+          style={styles.imageWrap}
+        >
+          <Image
+            source={socialImageSource(
+              post.mediaKind === 'gif' && post.mediaUrl ? post.mediaUrl : post.imageUrl,
+            )}
+            cachePolicy={isProtectedSocialMedia(post.imageUrl) ? 'none' : 'memory-disk'}
+            style={styles.image}
+            contentFit="cover"
+            transition={150}
+            autoplay={true}
+          />
+          {(post.media?.length ?? 0) > 1 && (
+            <View style={[styles.mediaBadge, { backgroundColor: theme.text }]}>
+              <SymbolView
+                name={{
+                  ios: 'square.on.square',
+                  android: 'photo_library',
+                  web: 'photo_library',
+                }}
+                size={12}
+                tintColor={theme.background}
+              />
+              <ThemedText style={[styles.mediaBadgeText, { color: theme.background }]}>
+                {post.media!.length}
+              </ThemedText>
+            </View>
+          )}
+        </Pressable>
+      )}
 
       {post.caption ? (
-        <ThemedText type="small" style={styles.caption} numberOfLines={4}>
-          {post.caption}
-        </ThemedText>
+        <Pressable onPress={() => onOpenPost?.(post)} accessibilityLabel="阅读帖子全文">
+          <ThemedText type="small" style={styles.caption} numberOfLines={expanded ? undefined : 4}>
+            {post.caption}
+          </ThemedText>
+        </Pressable>
       ) : null}
 
       <View style={styles.actionRow}>
@@ -119,6 +174,20 @@ export function PostCard({
             accessibilityLabel="评论"
             onPress={() => onOpenComments(post)}
           />
+          {/* 收藏放在左侧操作组：卡片右下角会被全局“创建”悬浮按钮盖住。 */}
+          {!!onBookmark && (
+            <ActionIcon
+              icon={{
+                ios: post.bookmarked_by_me ? 'bookmark.fill' : 'bookmark',
+                android: post.bookmarked_by_me ? 'bookmark' : 'bookmark_border',
+                web: post.bookmarked_by_me ? 'bookmark' : 'bookmark_border',
+              }}
+              label=""
+              color={post.bookmarked_by_me ? theme.tint : theme.textSecondary}
+              accessibilityLabel={post.bookmarked_by_me ? '取消收藏' : '收藏帖子'}
+              onPress={() => onBookmark(post)}
+            />
+          )}
         </View>
       </View>
     </ThemedView>
@@ -155,7 +224,7 @@ function ActionIcon({
   );
 }
 
-function timeAgo(iso: string) {
+export function timeAgo(iso: string) {
   const seconds = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
   if (seconds < 60) return '刚刚';
   const minutes = seconds / 60;
@@ -186,10 +255,25 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   authorTexts: { gap: 2, flexShrink: 1 },
+  authorLink: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two + 4, flex: 1 },
   authorName: { fontSize: 15, lineHeight: 20 },
   meta: { flexShrink: 1, fontSize: 11, lineHeight: 15 },
   moreButton: { marginLeft: 'auto', paddingHorizontal: Spacing.one },
+  imageWrap: { position: 'relative' },
   image: { width: '100%', aspectRatio: 4 / 3, borderRadius: 16 },
+  mediaBadge: {
+    position: 'absolute',
+    top: Spacing.two,
+    right: Spacing.two,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: Spacing.two,
+    paddingVertical: 3,
+    borderRadius: 10,
+    opacity: 0.85,
+  },
+  mediaBadgeText: { fontSize: 11, lineHeight: 14, fontWeight: '700' },
   caption: { paddingHorizontal: Spacing.three, lineHeight: 20 },
   actionRow: {
     flexDirection: 'row',
