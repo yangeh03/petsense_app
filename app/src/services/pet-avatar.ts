@@ -49,6 +49,7 @@ export function selectPetAvatar({
   frame,
   fresh,
   previewAction,
+  interactionAction,
   failedUrls = [],
 }: {
   pet: SocialPet;
@@ -57,18 +58,32 @@ export function selectPetAvatar({
   frame: TelemetryFrame | null;
   fresh: boolean;
   previewAction?: PetActionKey | null;
+  interactionAction?: PetActionKey | null;
   failedUrls?: readonly string[];
 }) {
   const ownAssets = pet.petgif_id && petgif?.id === pet.petgif_id ? petgif : null;
   const selectedTemplate = pet.avatar_template_id === avatarTemplate?.id ? avatarTemplate : null;
-  const liveActionKey =
-    fresh && pet.device_id && frame?.deviceId === pet.device_id ? inferPetAction(frame) : null;
+  const matching = Boolean(fresh && pet.device_id && frame?.deviceId === pet.device_id);
+  const liveActionKey = matching ? inferPetAction(frame) : null;
   const actionKey =
     liveActionKey || (!fresh && selectedTemplate && previewAction ? previewAction : null);
   const actionCandidates = actionKey
-    ? [ownAssets?.behaviors[actionKey]?.gifUrl, selectedTemplate?.behaviors[actionKey]?.gifUrl]
+    ? [ownAssets?.behaviors[actionKey], selectedTemplate?.behaviors[actionKey]]
     : [];
-  const preset = actionCandidates.find((url) => url && !failedUrls.includes(url)) || null;
+  // State animations must stay with the character supplying the ordinary action.
+  const behavior = actionCandidates.find(
+    (item) => item?.gifUrl && !failedUrls.includes(item.gifUrl),
+  );
+  const sound = matching ? frame?.edge?.sound : null;
+  const barking = sound?.label === 'bark' && confident(sound.confidence);
+  const requestedState = barking
+    ? 'barking'
+    : actionKey && interactionAction === actionKey
+      ? 'interaction'
+      : null;
+  const stateUrl = requestedState ? behavior?.states?.[requestedState]?.gifUrl : null;
+  const stateAvailable = Boolean(stateUrl && !failedUrls.includes(stateUrl));
+  const interactionUrl = behavior?.states?.interaction?.gifUrl;
   const staticCandidates = [
     // A selected preset is an explicit home-screen representation while no live action is available.
     ...(!actionKey && selectedTemplate ? [selectedTemplate.characterCardUrl] : []),
@@ -79,8 +94,13 @@ export function selectPetAvatar({
   return {
     actionKey,
     label: actionKey ? PET_ACTIONS[actionKey] : selectedTemplate ? '静止站立' : null,
-    animationAvailable: actionCandidates.some(Boolean),
-    animationUrl: preset,
+    animationAvailable: actionCandidates.some((item) => Boolean(item?.gifUrl)),
+    animationUrl: (stateAvailable ? stateUrl : behavior?.gifUrl) || null,
+    animationState: stateAvailable ? requestedState : 'normal',
+    interactionAvailable: Boolean(
+      interactionUrl && !failedUrls.includes(interactionUrl) && !barking,
+    ),
+    isPreview: Boolean(actionKey && !liveActionKey),
     staticUrl: staticCandidates.find((url) => url && !failedUrls.includes(url)) || null,
   };
 }

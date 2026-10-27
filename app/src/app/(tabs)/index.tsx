@@ -181,6 +181,7 @@ export default function DashboardScreen() {
         ) : pet ? (
           <>
             <PetHero
+              key={`${pet.id}:${pet.petgif_id ?? ''}:${pet.avatar_template_id ?? ''}`}
               pet={pet}
               petgif={dashboard?.petgif}
               avatarTemplate={dashboard?.avatarTemplate}

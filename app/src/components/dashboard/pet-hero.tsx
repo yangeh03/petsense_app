@@ -41,6 +41,12 @@ export function PetHero({
 }) {
   const theme = useTheme();
   const [previewAction, setPreviewAction] = useState<PetActionKey | null>(null);
+  const [interactionAction, setInteractionAction] = useState<PetActionKey | null>(null);
+  useEffect(() => {
+    if (!interactionAction) return;
+    const timer = setTimeout(() => setInteractionAction(null), 4_000);
+    return () => clearTimeout(timer);
+  }, [interactionAction]);
   // Retry failed media on pull-to-refresh or the explicit retry button; keep good GIFs mounted.
   const [failures, setFailures] = useState<{
     petId: number;
@@ -64,6 +70,7 @@ export function PetHero({
     frame,
     fresh: current,
     previewAction: canPreview ? previewAction : null,
+    interactionAction,
     failedUrls: failed,
   });
   const animation = media.animationUrl;
@@ -78,6 +85,9 @@ export function PetHero({
         ? '识别准备中'
         : '暂未识别动作'
       : statusLabel);
+  const displayLabel = `${media.isPreview ? '动作预览 · ' : ''}${actionLabel}${
+    media.animationState === 'barking' ? ' · 吠叫' : ''
+  }`;
   const [displayedMedia, setDisplayedMedia] = useState(
     uri ? { uri, animation: Boolean(animation) } : null,
   );
@@ -100,7 +110,7 @@ export function PetHero({
     <View style={styles.hero}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={`${pet.name}的${animation ? `${actionLabel}动画` : '头像'}${
+        accessibilityLabel={`${pet.name}的${animation ? `${displayLabel}动画` : '头像'}${
           canPreview ? '，轻点切换预设动作，长按编辑宠物档案' : '，编辑宠物档案'
         }`}
         onLongPress={canPreview ? onEdit : undefined}
@@ -109,6 +119,7 @@ export function PetHero({
             onEdit();
             return;
           }
+          setInteractionAction(null);
           setPreviewAction((previous) => {
             const currentIndex = previous ? previewActions.indexOf(previous) : -1;
             return previewActions[(currentIndex + 1) % previewActions.length];
@@ -156,10 +167,23 @@ export function PetHero({
           ]}
         >
           <View style={[styles.dot, { backgroundColor: color }]} />
-          <ThemedText type="smallBold">{actionLabel}</ThemedText>
+          <ThemedText type="smallBold">{displayLabel}</ThemedText>
         </View>
       </Pressable>
       <View style={styles.caption}>
+        {media.interactionAvailable && (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="播放转头互动动画"
+            disabled={interactionAction === media.actionKey}
+            onPress={() => setInteractionAction(media.actionKey)}
+            style={[styles.interaction, { backgroundColor: theme.tintBackground }]}
+          >
+            <ThemedText type="smallBold" style={{ color: theme.tint }}>
+              {media.animationState === 'interaction' ? '互动中…' : '动画互动'}
+            </ThemedText>
+          </Pressable>
+        )}
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={`${sound.label}，查看声音诊断`}
@@ -232,6 +256,12 @@ const styles = StyleSheet.create({
   },
   dot: { width: 6, height: 6, borderRadius: 3 },
   caption: { alignItems: 'center', gap: 6, paddingTop: 4 },
+  interaction: {
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+    borderRadius: 22,
+  },
   sound: {
     flexDirection: 'row',
     alignItems: 'center',

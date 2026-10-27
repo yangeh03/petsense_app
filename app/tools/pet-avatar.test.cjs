@@ -180,3 +180,106 @@ test('failed images step through action GIF, profile, character card and emoji; 
   );
   assert.equal(select({ failedUrls: [] }).animationUrl, '/walk.gif');
 });
+
+const statePetgif = {
+  ...petgif,
+  behaviors: {
+    ...petgif.behaviors,
+    walk: {
+      gifUrl: '/walk.gif',
+      states: {
+        interaction: { gifUrl: '/walk-look.gif' },
+        barking: { gifUrl: '/walk-bark.gif' },
+      },
+    },
+  },
+};
+test('a confident current bark selects the matching posture and takes priority over interaction', () => {
+  const input = frame('walking');
+  input.edge.sound = { label: 'bark', confidence: 0.8 };
+  const result = select({ petgif: statePetgif, frame: input, interactionAction: 'walk' });
+  assert.equal(result.animationUrl, '/walk-bark.gif');
+  assert.equal(result.animationState, 'barking');
+  assert.equal(result.actionKey, 'walk');
+});
+test('other sounds, low confidence, expired frames and other collars never trigger barking', () => {
+  for (const [label, confidence] of [
+    ['quiet', 1],
+    ['howl', 1],
+    ['whine', 1],
+    ['bark', 0.59],
+    ['bark', NaN],
+    ['bark', 1.1],
+  ]) {
+    const input = frame('walking');
+    input.edge.sound = { label, confidence };
+    assert.equal(select({ petgif: statePetgif, frame: input }).animationUrl, '/walk.gif');
+  }
+  const input = frame('walking');
+  input.edge.sound = { label: 'bark', confidence: 1 };
+  assert.equal(select({ petgif: statePetgif, frame: input, fresh: false }).animationUrl, null);
+  input.deviceId = 'another-collar';
+  assert.equal(select({ petgif: statePetgif, frame: input }).animationUrl, null);
+  input.deviceId = 'collar';
+  input.edge.action = { label: 'unknown', confidence: 0 };
+  assert.equal(select({ petgif: statePetgif, frame: input }).animationUrl, null);
+});
+test('interaction uses only the requested posture and can return to its ordinary animation', () => {
+  const result = select({ petgif: statePetgif, interactionAction: 'walk' });
+  assert.equal(result.animationUrl, '/walk-look.gif');
+  assert.equal(result.animationState, 'interaction');
+  assert.equal(result.interactionAvailable, true);
+  assert.equal(select({ petgif: statePetgif, interactionAction: null }).animationUrl, '/walk.gif');
+  assert.equal(select({ petgif: statePetgif, interactionAction: 'sit' }).animationUrl, '/walk.gif');
+});
+test('missing or failed state GIFs preserve the same character and posture', () => {
+  const input = frame('walking');
+  input.edge.sound = { label: 'bark', confidence: 1 };
+  const avatarTemplate = {
+    id: 'marni',
+    behaviors: {
+      walk: {
+        gifUrl: '/template-walk.gif',
+        states: {
+          barking: { gifUrl: '/template-bark.gif' },
+          interaction: { gifUrl: '/template-look.gif' },
+        },
+      },
+    },
+  };
+  const noStates = select({ frame: input, avatarTemplate, interactionAction: 'walk' });
+  assert.equal(noStates.animationUrl, '/walk.gif');
+  assert.equal(noStates.interactionAvailable, false);
+  const failedState = select({
+    petgif: statePetgif,
+    frame: input,
+    avatarTemplate,
+    failedUrls: ['/walk-bark.gif'],
+    interactionAction: 'walk',
+  });
+  assert.equal(failedState.animationUrl, '/walk.gif');
+  assert.equal(failedState.animationState, 'normal');
+  const failedLook = select({
+    petgif: statePetgif,
+    interactionAction: 'walk',
+    failedUrls: ['/walk-look.gif'],
+  });
+  assert.equal(failedLook.animationUrl, '/walk.gif');
+  assert.equal(failedLook.interactionAvailable, false);
+});
+test('offline interaction stays an explicit action preview and ignores stale barking', () => {
+  const input = frame('walking');
+  input.edge.sound = { label: 'bark', confidence: 1 };
+  const result = select({
+    pet: { ...pet, petgif_id: null, avatar_template_id: 'marni' },
+    avatarTemplate: { ...statePetgif, id: 'marni' },
+    petgif: null,
+    frame: input,
+    fresh: false,
+    previewAction: 'walk',
+    interactionAction: 'walk',
+  });
+  assert.equal(result.animationUrl, '/walk-look.gif');
+  assert.equal(result.animationState, 'interaction');
+  assert.equal(result.isPreview, true);
+});
