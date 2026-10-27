@@ -10,6 +10,7 @@ import { TELEMETRY_MODE, TELEMETRY_WS_URL } from '@/config';
 import { REPLAY_BATTERY, REPLAY_HEALTH, REPLAY_META } from '@/data/replay-dataset';
 import { getToken } from '@/services/api';
 import type { TelemetryFrame, TelemetryPacket, TelemetryStatus } from '@/types/telemetry';
+import type { UwbPosition } from '@/types/uwb';
 
 const SENSOR_TOPIC_PREFIX = 'petsense/sensor/';
 const MAX_RETRY_DELAY_MS = 15_000;
@@ -363,9 +364,33 @@ export function parseTelemetryMessage(raw: unknown): TelemetryFrame | null {
       ? (payload.experiment as TelemetryFrame['experiment'])
       : undefined,
     uwb: validUwb(payload.uwb) ? (payload.uwb as TelemetryFrame['uwb']) : undefined,
+    uwbPosition: parseUwbPosition(payload.uwbPosition, payload.deviceId as string),
     action: validAction(payload.action) ? (payload.action as TelemetryFrame['action']) : undefined,
   };
   return frame.health || frame.battery || frame.imu || frame.audio || frame.uwb ? frame : null;
+}
+
+export function parseUwbPosition(value: unknown, deviceId: string): UwbPosition | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const p = value as Record<string, unknown>;
+  const point = p.position as Record<string, unknown> | null;
+  if (
+    p.schemaVersion !== 1 ||
+    p.deviceId !== deviceId ||
+    typeof p.mapId !== 'string' ||
+    typeof p.mapVersion !== 'string' ||
+    typeof p.fresh !== 'boolean' ||
+    !['waiting', 'ok', 'low_quality', 'stale', 'error'].includes(String(p.status)) ||
+    typeof p.remainingMs !== 'number' ||
+    !Number.isFinite(p.remainingMs) ||
+    p.remainingMs < 0 ||
+    p.remainingMs > 30000 ||
+    (point !== null && (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y))) ||
+    !p.quality ||
+    typeof p.quality !== 'object'
+  )
+    return undefined;
+  return p as UwbPosition;
 }
 
 function validUwb(value: unknown): boolean {
