@@ -60,17 +60,21 @@ export function VitalsCard({
         </ThemedText>
       )}
       <View style={styles.vitals}>
-        {vitals.map((vital) => (
-          <View key={vital.key} style={styles.vital}>
-            <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
-              {vital.label}
-            </ThemedText>
-            <View style={styles.valueRow}>
-              <ThemedText style={styles.value}>
-                {formatVital(vital.value, vital.decimals)}
-              </ThemedText>
-              <ThemedText type="small" themeColor="textSecondary">
-                {vital.unit}
+        {vitals.map((vital, index) => (
+          <View
+            key={vital.key}
+            style={[
+              styles.vital,
+              index > 0 && {
+                borderLeftWidth: StyleSheet.hairlineWidth,
+                borderLeftColor: theme.backgroundSelected,
+                paddingLeft: 10,
+              },
+            ]}
+          >
+            <View style={styles.labelRow}>
+              <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
+                {vital.label}
               </ThemedText>
               {vital.value !== null && vital.source === 'avg' && (
                 <ThemedText type="small" style={{ color: theme.warning }}>
@@ -78,21 +82,46 @@ export function VitalsCard({
                 </ThemedText>
               )}
             </View>
+            <View style={styles.valueRow}>
+              <ThemedText
+                style={styles.value}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.8}
+              >
+                {formatVital(vital.value, vital.decimals)}
+              </ThemedText>
+              <ThemedText type="small" themeColor="textSecondary">
+                {vital.unit}
+              </ThemedText>
+            </View>
             <MiniSparkline
               points={vital.points}
               metric={vital.key}
               accessibilityLabel={`${vital.label}近期趋势，${vital.points.length} 个数据点`}
             />
-            <ThemedText type="small" themeColor="textSecondary">
+            <ThemedText
+              type="small"
+              themeColor="textSecondary"
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.8}
+            >
               {vital.today
-                ? `今日 ${formatVital(vital.today.min, vital.decimals)}–${formatVital(vital.today.max, vital.decimals)}`
+                ? `${formatVital(vital.today.min, vital.decimals)}–${formatVital(vital.today.max, vital.decimals)}`
                 : '今日暂无统计'}
             </ThemedText>
           </View>
         ))}
       </View>
       {hotTemp && (
-        <ThemedText type="small" style={{ color: theme.warning }}>
+        <ThemedText
+          type="small"
+          style={[
+            styles.alertText,
+            { color: theme.warning, backgroundColor: theme.tintBackground },
+          ]}
+        >
           温度读数偏高，请先核对佩戴和传感器状态。
         </ThemedText>
       )}
@@ -118,7 +147,7 @@ export function VitalsCard({
       {explanationOpen && (
         <View style={[styles.explanation, { backgroundColor: theme.background }]}>
           <ThemedText type="small" themeColor="textSecondary">
-            温度来自项圈传感器，不等同于体温；趋势线在实时在线时显示最近读数，离线时显示当日小时均值。
+            数值下方为今日最小–最大区间；温度来自项圈传感器，不等同于体温。趋势线在实时在线时显示最近读数，离线时显示当日小时均值。
           </ThemedText>
           <Pressable accessibilityRole="button" onPress={onOpenCollar} style={styles.tap}>
             <ThemedText type="smallBold" style={{ color: theme.tint }}>
@@ -142,10 +171,23 @@ const styles = StyleSheet.create({
   },
   sectionTitle: { fontSize: 18, lineHeight: 24, fontWeight: '700' },
   tap: { paddingVertical: 6 },
-  vitals: { flexDirection: 'row', gap: 12 },
+  vitals: { flexDirection: 'row', gap: 10 },
   vital: { flex: 1, gap: 5, minWidth: 0 },
+  labelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 4,
+    minHeight: 18,
+  },
   valueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 4 },
-  value: { fontSize: 24, lineHeight: 32, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  value: {
+    fontSize: 24,
+    lineHeight: 32,
+    fontWeight: '700',
+    fontVariant: ['tabular-nums'],
+    flexShrink: 1,
+  },
   subrow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -157,4 +199,10 @@ const styles = StyleSheet.create({
     borderRadius: 14,
   },
   explanation: { padding: 14, borderRadius: 14, gap: 10 },
+  alertText: {
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    overflow: 'hidden',
+  },
 });
