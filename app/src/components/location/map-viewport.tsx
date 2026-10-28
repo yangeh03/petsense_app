@@ -28,7 +28,13 @@ export function MapViewport({
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const dragStart = useRef({ x: 0, y: 0, pageX: 0, pageY: 0 });
   const bounds = useMemo(() => mapBounds(map), [map]);
-  const viewport = useMemo(() => ({ width, height: 340 }), [width]);
+  // Stage follows the map aspect ratio so 1.0x fills the view without letterbox bands.
+  const stageHeight = useMemo(() => {
+    if (!width || !bounds.width || !bounds.height) return 340;
+    const fit = Math.round((width * bounds.height) / bounds.width);
+    return Math.min(460, Math.max(180, fit));
+  }, [width, bounds]);
+  const viewport = useMemo(() => ({ width, height: stageHeight }), [width, stageHeight]);
   const limited = clampMapPan(pan, viewport, bounds, zoom);
   const gestureState = useRef({ pan: limited, viewport, bounds, zoom, onDragging });
   useLayoutEffect(() => {
@@ -76,7 +82,7 @@ export function MapViewport({
     <View style={styles.wrapper}>
       <View
         accessibilityLabel="室内定位地图，放大后可拖动查看"
-        style={[styles.stage, { backgroundColor: theme.backgroundSelected }]}
+        style={[styles.stage, { height: stageHeight, backgroundColor: theme.backgroundSelected }]}
         onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
         {...responder.panHandlers}
       >
@@ -180,7 +186,7 @@ export function MapViewport({
 
 const styles = StyleSheet.create({
   wrapper: { width: '100%', gap: 12 },
-  stage: { width: '100%', height: 340, borderRadius: 18, overflow: 'hidden' },
+  stage: { width: '100%', borderRadius: 18, overflow: 'hidden' },
   toolbar: { gap: 10 },
   buttons: { flexDirection: 'row', gap: 10 },
   button: { minHeight: 44, minWidth: 44, borderRadius: 12, padding: 12, alignItems: 'center' },
