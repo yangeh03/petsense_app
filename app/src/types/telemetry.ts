@@ -107,6 +107,9 @@ export type EdgeInference = {
   acRms?: number;
   inferenceUs?: number;
   sdReady?: boolean;
+  sdTotalBytes?: number;
+  sdUsedBytes?: number;
+  sdFreeBytes?: number;
   captureActive?: boolean;
 };
 

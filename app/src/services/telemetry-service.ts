@@ -323,6 +323,9 @@ export function parseTelemetryMessage(raw: unknown): TelemetryFrame | null {
           acRms: finiteNonnegative(sound?.ac_rms),
           inferenceUs: finiteNonnegative(payload.inference_us),
           sdReady: typeof payload.sd_ready === 'boolean' ? payload.sd_ready : undefined,
+          sdTotalBytes: finiteNonnegative(payload.sd_total_bytes),
+          sdUsedBytes: finiteNonnegative(payload.sd_used_bytes),
+          sdFreeBytes: finiteNonnegative(payload.sd_free_bytes),
           captureActive:
             typeof payload.capture_active === 'boolean' ? payload.capture_active : undefined,
         }

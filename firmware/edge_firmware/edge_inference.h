@@ -100,7 +100,8 @@ static void edgeStep(const String& raw, bool gap) {
   cJSON_AddStringToObject(result,"source","esp32_mlp");
   cJSON_AddStringToObject(result,"modelVersion","edge-dog-vocal-v3-whine");
   cJSON_AddNumberToObject(result,"ts_ms",millis());
-  const char* metadata[]={"boot_id","seq","mono_us","utc_us","sd_ready","capture_active","missed_deadlines","queue_drops","disk_errors"};
+  const char* metadata[]={"boot_id","seq","mono_us","utc_us","sd_ready","capture_active","missed_deadlines","queue_drops","disk_errors",
+    "session_id","clock_age_us","clock_uncertainty_us","persisted_rows","sd_total_bytes","sd_used_bytes","sd_free_bytes","storage_draining","armed_marker","marker_ready","marker_id"};
   for(const char* key:metadata) {
     cJSON* v=cJSON_GetObjectItem(frame,key);
     if(v)cJSON_AddItemToObject(result,key,cJSON_Duplicate(v,true));

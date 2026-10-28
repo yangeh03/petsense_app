@@ -45,6 +45,23 @@ class CollectionScopeTests(unittest.TestCase):
                          json={'action': 'stop'}).status_code, 404)
         self.assertEqual(self.sent, [])
 
+    def test_start_checks_live_storage_and_preserves_auth(self):
+        url = self.base + '/sessions/session-a/control'
+        frame = dict(utc_us=time.time_ns() // 1000, clock_age_us=1000, sd_ready=True,
+                     sd_free_bytes=2000000, capture_active=False, storage_draining=False)
+        self.store.latest['collar-a'] = dict(received_us=time.time_ns() // 1000, frame=frame)
+        self.assertEqual(self.client.post(url, json={'action': 'start'}).status_code, 401)
+        for patch in [dict(sd_ready=False), dict(sd_free_bytes=0), dict(disk_errors=1),
+                      dict(storage_draining=True), dict(capture_active=True, session_id='different')]:
+            self.store.latest['collar-a']['frame'] = dict(frame, **patch)
+            self.assertEqual(self.client.post(url, headers=self.ha, json={'action': 'start'}).status_code, 409)
+        self.assertEqual(self.sent, [])
+        self.store.latest['collar-a']['frame'] = frame
+        response = self.client.post(url, headers=self.ha, json={'action': 'start'})
+        self.assertEqual(response.status_code, 202)
+        self.assertFalse(response.json['device_acknowledged'])
+        self.assertEqual(self.sent[-1], ('collar-a', {'type': 'collection_start', 'session': 'session-a'}))
+
     def test_all_video_endpoints_are_scoped(self):
         base = self.base + '/sessions/session-a/videos'
         self.assertEqual(self.client.post(base, headers=self.hb, json={}).status_code, 404)

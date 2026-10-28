@@ -56,6 +56,10 @@ export type DeviceFrame = {
   marker_ready?: boolean;
   session_id: string;
   sd_ready: boolean;
+  sd_total_bytes?: number | null;
+  sd_used_bytes?: number | null;
+  sd_free_bytes?: number | null;
+  storage_draining?: boolean;
   missed_deadlines: number;
   queue_drops: number;
   disk_errors: number;

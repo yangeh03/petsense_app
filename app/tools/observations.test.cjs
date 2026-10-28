@@ -43,6 +43,24 @@ const parse = (payload) =>
       payload,
     }),
   );
+
+test('SD telemetry preserves zero free bytes but rejects missing and malformed capacity', () => {
+  const frame = parse({
+    ...raw,
+    sd_free_bytes: 0,
+    sd_total_bytes: 1048576,
+    sd_used_bytes: 1048576,
+  });
+  assert.equal(frame.edge.sdFreeBytes, 0);
+  assert.equal(frame.edge.sdTotalBytes, 1048576);
+  for (const value of [null, -1, '1024']) {
+    assert.equal(parse({ ...raw, sd_free_bytes: value }).edge.sdFreeBytes, undefined);
+  }
+  const { storageSpace } = load('../src/services/storage-space.ts');
+  assert.equal(storageSpace(0), '0.0 MiB');
+  assert.equal(storageSpace(null), '未上报');
+  assert.equal(storageSpace(1048576), '1.0 MiB');
+});
 test('real edge schema preserves resting prediction and quiet zero confidence', () => {
   const frame = parse(raw);
   assert.equal(frame.edge.action.label, 'lying down');
