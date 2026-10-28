@@ -36,6 +36,31 @@ export function positionMatchesMap(position: UwbPosition | null, map: UwbMap | n
   return !!position && !!map && position.mapId === map.mapId && position.mapVersion === map.version;
 }
 
+/**
+ * Rect (in stage points) of the raster background, replicating the SVG viewBox
+ * "xMidYMid meet" fit. The bitmap renders as a native image because react-native-svg
+ * decodes data-URI images at layout-point size, losing device-pixel sharpness.
+ */
+export function backgroundImageRect(
+  map: UwbMap,
+  bounds: { minX: number; minY: number; width: number; height: number },
+  viewport: { width: number; height: number },
+) {
+  if (!viewport.width || !viewport.height || !bounds.width || !bounds.height) return null;
+  const { origin, width: pixelWidth, height: pixelHeight, metersPerPixel } = map.background;
+  const imageWidth = pixelWidth * metersPerPixel;
+  const imageHeight = pixelHeight * metersPerPixel;
+  const scale = Math.min(viewport.width / bounds.width, viewport.height / bounds.height);
+  const offsetX = (viewport.width - bounds.width * scale) / 2;
+  const offsetY = (viewport.height - bounds.height * scale) / 2;
+  return {
+    left: offsetX + (origin[0] - bounds.minX) * scale,
+    top: offsetY + (bounds.minY + bounds.height - origin[1] - imageHeight) * scale,
+    width: imageWidth * scale,
+    height: imageHeight * scale,
+  };
+}
+
 export function appendMeasuredTrail(
   trail: { x: number; y: number }[],
   position: UwbPosition | null,

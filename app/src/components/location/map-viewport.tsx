@@ -2,11 +2,12 @@
 /* eslint-disable react-hooks/refs */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { PanResponder, Pressable, StyleSheet, View } from 'react-native';
-import Svg, { Circle, Image as SvgImage, Polyline, Text as SvgText } from 'react-native-svg';
+import { Image } from 'expo-image';
+import Svg, { Circle, Polyline, Text as SvgText } from 'react-native-svg';
 
 import { ThemedText } from '@/components/themed-text';
 import { useTheme } from '@/hooks/use-theme';
-import { clampMapPan, mapBounds } from '@/services/map-viewport';
+import { backgroundImageRect, clampMapPan, mapBounds } from '@/services/map-viewport';
 import type { UwbMap, UwbPosition } from '@/types/uwb';
 
 export function MapViewport({
@@ -78,6 +79,7 @@ export function MapViewport({
   const bg = map.background;
   const point = position?.position;
   const stroke = Math.max(bounds.width, bounds.height) / 350;
+  const backgroundRect = backgroundImageRect(map, bounds, viewport);
   return (
     <View style={styles.wrapper}>
       <View
@@ -93,19 +95,26 @@ export function MapViewport({
             { transform: [{ translateX: limited.x }, { translateY: limited.y }, { scale: zoom }] },
           ]}
         >
+          {backgroundRect && (
+            <Image
+              source={{ uri: bg.imageDataUri }}
+              style={{
+                position: 'absolute',
+                left: backgroundRect.left,
+                top: backgroundRect.top,
+                width: backgroundRect.width,
+                height: backgroundRect.height,
+              }}
+              contentFit="fill"
+              pointerEvents="none"
+            />
+          )}
           <Svg
             width="100%"
             height="100%"
             viewBox={`${bounds.minX} ${-(bounds.minY + bounds.height)} ${bounds.width} ${bounds.height}`}
             preserveAspectRatio="xMidYMid meet"
           >
-            <SvgImage
-              href={bg.imageDataUri}
-              x={bg.origin[0]}
-              y={-(bg.origin[1] + bg.height * bg.metersPerPixel)}
-              width={bg.width * bg.metersPerPixel}
-              height={bg.height * bg.metersPerPixel}
-            />
             <Polyline
               points={[...map.polygon, map.polygon[0]].map(([x, y]) => `${x},${-y}`).join(' ')}
               fill="none"

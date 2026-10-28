@@ -11,7 +11,8 @@ const code = ts.transpileModule(
   { compilerOptions: { module: ts.ModuleKind.CommonJS } },
 ).outputText;
 vm.runInNewContext(code, { exports: exportsObject });
-const { clampMapPan, mapBounds, appendMeasuredTrail, positionMatchesMap } = exportsObject;
+const { clampMapPan, mapBounds, appendMeasuredTrail, positionMatchesMap, backgroundImageRect } =
+  exportsObject;
 const telemetryExports = {};
 const telemetrySource = ts.transpileModule(
   fs.readFileSync(path.join(__dirname, '../src/services/telemetry-service.ts'), 'utf8'),
@@ -84,6 +85,15 @@ test('pan is clamped after zoom/resize and cannot change physical positions', ()
   assert.equal(zoomed.y, -100);
   assert.equal(p.x, 1000);
   assert.equal(map.polygon[0][0], -2);
+});
+
+test('background image rect replicates the svg meet fit for native rendering', () => {
+  const b = mapBounds(map);
+  const exact = backgroundImageRect(map, b, { width: 400, height: 200 });
+  assert.deepEqual({ ...exact }, { left: 0, top: 0, width: 400, height: 200 });
+  const tall = backgroundImageRect(map, b, { width: 200, height: 400 });
+  assert.deepEqual({ ...tall }, { left: 0, top: 150, width: 200, height: 100 });
+  assert.equal(backgroundImageRect(map, b, { width: 0, height: 0 }), null);
 });
 
 test('stale/poor/repeated measurements cannot fabricate trail points', () => {
