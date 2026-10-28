@@ -1,7 +1,7 @@
 import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
@@ -56,21 +56,19 @@ export default function TrackingScreen() {
               trail={location.trail}
               fresh={location.fresh}
               onDragging={setDragging}
+              onRetry={location.reload}
             />
+          </View>
+        )}
+        {location.loading && (
+          <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
+            <ActivityIndicator color={theme.tint} />
             <ThemedText type="small" themeColor="textSecondary">
-              {!location.position?.position
-                ? '已加载标定地图，等待项圈提供位置'
-                : !location.fresh
-                  ? '定位已超时，灰色点为最后位置'
-                  : location.position.status === 'low_quality'
-                    ? '当前测距质量偏低，请参考实际环境'
-                    : location.position.quality.insideMap === false
-                      ? '坐标位于标定范围之外，请核对锚点与地图'
-                      : '正在显示项圈的真实位置'}
+              正在获取地图…
             </ThemedText>
           </View>
         )}
-        {!location.map && (
+        {!location.map && !location.loading && (
           <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
             <View style={[styles.icon, { backgroundColor: theme.tintBackground }]}>
               <SymbolView

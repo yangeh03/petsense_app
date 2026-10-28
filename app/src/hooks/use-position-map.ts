@@ -3,6 +3,7 @@ import { useCallback, useState } from 'react';
 
 import { useAuth } from '@/hooks/use-auth';
 import { ApiError, request } from '@/services/api';
+import { checkMapImage } from '@/services/map-image';
 import { appendMeasuredTrail, positionMatchesMap } from '@/services/map-viewport';
 import type { UwbMap, UwbPosition } from '@/types/uwb';
 
@@ -23,6 +24,7 @@ export function usePositionMap(deviceId: string | undefined) {
   const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState('');
   const [now, setNow] = useState(() => Date.now());
+  const [settledScope, setSettledScope] = useState('');
   useFocusEffect(
     useCallback(() => {
       if (!scope || !deviceId) return;
@@ -42,15 +44,23 @@ export function usePositionMap(deviceId: string | undefined) {
             `/uwb/position${query}`,
             { signal: controller.signal },
           );
-          if (response.deviceId !== deviceId) throw new Error('设备数据不匹配');
+          if (!response || response.deviceId !== deviceId)
+            throw new Error('设备数据不完整或不匹配');
           const position = response.position;
           if (!loadedMap || (position && !positionMatchesMap(position, map))) {
             const response = await request<{ deviceId: string; map: UwbMap | null }>(
               `/uwb/map${query}`,
               { signal: controller.signal },
             );
-            if (response.deviceId !== deviceId) throw new Error('地图设备不匹配');
-            map = response.map;
+            if (!response || response.deviceId !== deviceId)
+              throw new Error('地图数据不完整或设备不匹配');
+            if (response.map) {
+              const receipt = checkMapImage(response.map.background);
+              map = {
+                ...response.map,
+                background: { ...response.map.background, ...receipt },
+              };
+            } else map = null;
             loadedMap = true;
           }
           if (cancelled) return;
@@ -84,6 +94,7 @@ export function usePositionMap(deviceId: string | undefined) {
         } finally {
           clearTimeout(timeout);
           busy = false;
+          if (!cancelled) setSettledScope(scope);
         }
       }
       void poll();
@@ -103,7 +114,8 @@ export function usePositionMap(deviceId: string | undefined) {
     position: scoped?.position ?? null,
     trail: scoped?.trail ?? [],
     fresh: !!scoped?.position?.fresh && now < scoped.deadline,
-    error: scope ? error : '',
+    loading: !!scope && settledScope !== scope,
+    error: scope && settledScope === scope ? error : '',
     reload: () => setRevision((n) => n + 1),
   };
 }

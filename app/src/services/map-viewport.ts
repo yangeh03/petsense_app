@@ -32,6 +32,21 @@ export function clampMapPan(
   };
 }
 
+/** Place the raster in screen points using exactly the same fit and Y flip as the SVG overlay. */
+export function mapImageRect(map: UwbMap, viewport: { width: number; height: number }) {
+  const bounds = mapBounds(map);
+  const bg = map.background;
+  const fit = Math.min(viewport.width / bounds.width, viewport.height / bounds.height);
+  return {
+    left: (viewport.width - bounds.width * fit) / 2 + (bg.origin[0] - bounds.minX) * fit,
+    top:
+      (viewport.height - bounds.height * fit) / 2 +
+      (bounds.minY + bounds.height - bg.origin[1] - bg.height * bg.metersPerPixel) * fit,
+    width: bg.width * bg.metersPerPixel * fit,
+    height: bg.height * bg.metersPerPixel * fit,
+  };
+}
+
 export function positionMatchesMap(position: UwbPosition | null, map: UwbMap | null) {
   return !!position && !!map && position.mapId === map.mapId && position.mapVersion === map.version;
 }

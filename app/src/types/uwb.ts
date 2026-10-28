@@ -29,6 +29,8 @@ export type UwbMap = {
     width: number;
     height: number;
     imageDataUri: string;
+    byteLength?: number;
+    crc32?: string;
   };
   staleAfterMs: number;
 };
