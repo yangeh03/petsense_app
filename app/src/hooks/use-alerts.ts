@@ -61,7 +61,8 @@ function subscribe(listener: Listener) {
 const getSnapshot = () => snapshot;
 
 export function useAlerts() {
-  const activeAlerts = useSyncExternalStore(subscribe, getSnapshot);
+  // 第三个参数 getServerSnapshot：web 静态导出（SSR）必需，服务端无订阅、快照恒为初始空数组
+  const activeAlerts = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const acknowledge = useCallback((ruleId: AlertRuleId) => engine.acknowledge(ruleId), []);
   return { activeAlerts, acknowledge };
 }

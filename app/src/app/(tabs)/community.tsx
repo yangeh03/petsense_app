@@ -375,7 +375,7 @@ export default function CommunityScreen() {
             </Pressable>
           ) : loadingMore ? (
             <ActivityIndicator color={theme.tint} />
-          ) : null
+          ) : undefined
         }
         onEndReached={() => void loadMore()}
         onEndReachedThreshold={0.5}

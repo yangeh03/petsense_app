@@ -348,7 +348,7 @@ export default function NearbyScreen() {
                     加载更多
                   </ThemedText>
                 </Pressable>
-              ) : null
+              ) : undefined
             }
           />
         ) : (
@@ -375,7 +375,7 @@ export default function NearbyScreen() {
                     加载更多
                   </ThemedText>
                 </Pressable>
-              ) : null
+              ) : undefined
             }
           />
         )}

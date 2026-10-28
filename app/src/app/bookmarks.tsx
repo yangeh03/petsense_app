@@ -113,7 +113,7 @@ export default function BookmarksScreen() {
               <ThemedText type="small" themeColor="textSecondary">
                 还没有收藏的帖子
               </ThemedText>
-            ) : null
+            ) : undefined
           }
           renderItem={({ item }) => (
             <View style={[styles.row, { borderColor: theme.backgroundSelected }]}>
@@ -141,7 +141,7 @@ export default function BookmarksScreen() {
                   加载更多
                 </ThemedText>
               </Pressable>
-            ) : null
+            ) : undefined
           }
         />
       </View>

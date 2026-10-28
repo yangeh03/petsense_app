@@ -249,7 +249,7 @@ export default function CommunitySearchScreen() {
                     {loadingMore ? '加载中…' : '加载更多结果'}
                   </ThemedText>
                 </Pressable>
-              ) : null
+              ) : undefined
             }
             keyExtractor={(item) =>
               `${item.type}:${

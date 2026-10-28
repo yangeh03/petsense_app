@@ -4,7 +4,7 @@
 
 ## 仓库速览
 
-- `app/`：Expo SDK 57、React Native 0.86、TypeScript（strict）、expo-router、Reanimated、react-native-svg。所有 npm 命令在 `app/` 下执行
+- `app/`：Expo SDK 58、React Native 0.88、TypeScript（strict）、expo-router、Reanimated、react-native-svg。所有 npm 命令在 `app/` 下执行
 - `server/`：Python 3.12 Flask。代码在 `server/petsense/` 包（入口 `wsgi.py`），按域分包：`telemetry/`（MQTT ingest、WS/SSE 分发、音频重组、设备控制）、`actions/`（动作识别）、`collection/`（数据采集 API）、`experiments/`（实验录制）、`auth/`、`pets/`、`devices/`（项圈认领/解绑）、`social/`、`petgif/`、`trends/`、`web/`，另含 `db/`（数据库会话与 ORM 模型）
 - 运行时数据（DB、uploads、cloud_data 等）在服务端安装根目录（包上一级），与代码分离；本地跑 `PETSENSE_MQTT_DISABLED=1 python3 wsgi.py`
 - 部署：push main 触发 CI，按变更路径执行——`app/` 有变才跑客户端链（Lint/Typecheck/Web 构建/客户端状态回归测试），`server/`（含 ci.yml）有变才跑服务端测试+模型校验并自动部署腾讯云；无关变更两侧检查秒级跳过。`app/` 有变的 main 直推另发 EAS Update OTA；手动重部署用 Actions 的 Run workflow
@@ -38,4 +38,4 @@
 
 # Expo HAS CHANGED
 
-Read the exact versioned docs at https://docs.expo.dev/versions/v57.0.0/ before writing any code.
+Read the exact versioned docs at https://docs.expo.dev/versions/v58.0.0/ before writing any code.

@@ -10,6 +10,7 @@ import {
   StyleSheet,
   TextInput,
   View,
+  type ScrollViewInstance,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -61,7 +62,7 @@ export function CommentSheet({
   const [highlightId, setHighlightId] = useState<number | null>(null);
   const [focusNote, setFocusNote] = useState('');
   const pendingMutation = useRef<string | null>(null);
-  const listRef = useRef<ScrollView>(null);
+  const listRef = useRef<ScrollViewInstance>(null);
   const highlightY = useRef<number | null>(null);
   const sequence = useRef(0);
   const invalidate = () => {

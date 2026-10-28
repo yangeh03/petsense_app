@@ -2,7 +2,8 @@ import { CameraView, useCameraPermissions, useMicrophonePermissions } from 'expo
 import { useKeepAwake } from 'expo-keep-awake';
 import { SymbolView } from 'expo-symbols';
 import { useVideoPlayer, VideoView } from 'expo-video';
-import { Redirect, useRouter, useNavigation } from 'expo-router';
+import { Redirect, useRouter } from 'expo-router';
+import { usePreventRemove } from 'expo-router/react-navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
@@ -165,7 +166,6 @@ function CollectionScreen({ ownerId }: { ownerId: number }) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const navigation = useNavigation();
   const camera = useRef<CameraView>(null);
   const [permission, requestCamera] = useCameraPermissions();
   const [mic, requestMic] = useMicrophonePermissions();
@@ -190,6 +190,8 @@ function CollectionScreen({ ownerId }: { ownerId: number }) {
   const countdownTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const debounce = useRef(0);
   const uploading = useRef(false);
+  // uploading 的 state 镜像：usePreventRemove 在渲染期取值，ref 变化不触发重渲染
+  const [uploadingState, setUploadingState] = useState(false);
   const active = useRef(true);
   const stopReason = useRef(false);
   const stopping = useRef(false);
@@ -235,16 +237,9 @@ function CollectionScreen({ ownerId }: { ownerId: number }) {
       view?.stopRecording();
     };
   }, [ready]);
-  useEffect(
-    () =>
-      navigation.addListener('beforeRemove', (e) => {
-        if (current.current || uploading.current) {
-          e.preventDefault();
-          Alert.alert('任务进行中', '请先结束录像并等待保存或上传完成。');
-        }
-      }),
-    [navigation],
-  );
+  usePreventRemove(recording || uploadingState, () => {
+    Alert.alert('任务进行中', '请先结束录像并等待保存或上传完成。');
+  });
   useEffect(() => {
     if (!token || !deviceId) return;
     let cancelled = false;
@@ -500,6 +495,7 @@ function CollectionScreen({ ownerId }: { ownerId: number }) {
   async function upload(clip: Clip) {
     if (uploading.current || recording) return;
     uploading.current = true;
+    setUploadingState(true);
     setBusy(true);
     try {
       await uploadClip(token, clip, (bytes) =>
@@ -512,6 +508,7 @@ function CollectionScreen({ ownerId }: { ownerId: number }) {
       setMessage(`${error}，本地文件已保留，可重试续传`);
     } finally {
       uploading.current = false;
+      setUploadingState(false);
       setBusy(false);
       await reload();
     }

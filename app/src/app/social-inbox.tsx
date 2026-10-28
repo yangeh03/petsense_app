@@ -166,7 +166,7 @@ export default function SocialInboxScreen() {
               <ThemedText type="small" themeColor="textSecondary">
                 暂无互动通知
               </ThemedText>
-            ) : null
+            ) : undefined
           }
           renderItem={({ item }) => (
             <Pressable
@@ -213,7 +213,7 @@ export default function SocialInboxScreen() {
                   加载更多
                 </ThemedText>
               </Pressable>
-            ) : null
+            ) : undefined
           }
         />
       </View>
