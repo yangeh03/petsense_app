@@ -18,6 +18,14 @@ MPLCONFIGDIR=/tmp/petsense-matplotlib tools/offline-map/.venv/bin/python tools/o
 
 输出目录必须不存在，避免覆盖已确认资产。支持当前提供的 binary little-endian XYZ float32 + RGB uint8 PLY。输入不能直接使用原始点云 Z 做高度；`--floor` 必须包含确认过的三维原点、正交地面基、向上法向与 `scale_prior`。
 
+导出前检查地面基、三锚点非共线和 UWB 对齐变换；导出后复用服务器的纯地图契约，再检查 PNG 完整解码及轮廓覆盖范围。只在校验成功后发布输出目录，失败清理临时文件，不覆盖旧地图。图片上限为 4,000,000 字节、2000 万像素，单边不超过 10000；超限应调整 `--resolution`。工具从同一仓库的 `server/petsense/uwb/maps.py` 复用纯校验代码，需保留该源码路径，但不需要安装 Flask、数据库依赖、在线凭据或启动服务器。
+
+也可独立检查已有地图包：
+
+```sh
+tools/offline-map/.venv/bin/python tools/offline-map/validate.py /data/maps/reconstruction-room-v2
+```
+
 默认俯视图保留离地 -0.05 至 1.20 米的点，1 厘米/像素，每像素绘制保留点中最高的点。`--min-height`、`--max-height`、`--resolution` 可以调整；这排除高处数据，不是天花板语义分类。墙体上部也会同时被裁掉。坐标尺度来自确认文件，不能将自动对齐的尺度当作独立实测真值。
 
 可通行区域使用 0.08 至 `--obstacle-height`（默认 1 米）的点、3.5 厘米栅格。家具会影响边界；只保留一个可通行连通分量，导出的 polygon 不含内部孔洞。`diagnostics/navigation_grid.npz` 保留了障碍与可通行栅格，不能只凭外 polygon 判断内部可通行性。

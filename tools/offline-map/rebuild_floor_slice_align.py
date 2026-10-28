@@ -57,11 +57,13 @@ def read_binary_xyzrgb(path: Path) -> Tuple[np.ndarray, np.ndarray]:
     """Read the simple binary little-endian PLY format used by this dataset."""
     with path.open("rb") as f:
         header = bytearray()
-        while not header.endswith(b"end_header\n"):
-            byte = f.read(1)
-            if not byte:
+        while True:
+            line = f.readline(65537)
+            if not line or len(header) + len(line) > 65536:
                 raise ValueError(f"invalid PLY header: {path}")
-            header.extend(byte)
+            header.extend(line)
+            if line.strip() == b'end_header':
+                break
         offset = f.tell()
 
     header_text = header.decode("ascii", errors="replace")
@@ -71,6 +73,14 @@ def read_binary_xyzrgb(path: Path) -> Tuple[np.ndarray, np.ndarray]:
         count = int(next(line.split()[-1] for line in header_text.splitlines() if line.startswith("element vertex")))
     except StopIteration as exc:
         raise ValueError("PLY contains no vertex element") from exc
+    if count <= 0:
+        raise ValueError('PLY vertex count must be positive')
+    properties = [line.split()[1:] for line in header_text.splitlines() if line.startswith('property ')]
+    expected_properties = [['float', axis] for axis in ['x', 'y', 'z']] + [['uchar', color] for color in ['red', 'green', 'blue']]
+    aliases = {'float32': 'float', 'uint8': 'uchar'}
+    normalized = [[aliases.get(part, part) for part in entry] for entry in properties]
+    if normalized != expected_properties:
+        raise ValueError('PLY must contain XYZ float32 followed by RGB uint8 properties')
 
     # The supplied Pointcloud.ply contains x/y/z float32 followed by RGB u8.
     dtype = np.dtype([("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("r", "u1"), ("g", "u1"), ("b", "u1")])

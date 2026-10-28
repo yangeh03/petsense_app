@@ -36,6 +36,9 @@ class ProjectionTests(unittest.TestCase):
             p.write_bytes(header)
             with self.assertRaises(ValueError):
                 build.read_binary_xyzrgb(p)
+            p.write_bytes(header.replace(b'property float x', b'property double x') + struct.pack('<fffBBB', 1, 2, 3, 4, 5, 6))
+            with self.assertRaisesRegex(ValueError, 'XYZ float32'):
+                build.read_binary_xyzrgb(p)
 
     def test_raster_size_guard(self):
         with self.assertRaises(ValueError):

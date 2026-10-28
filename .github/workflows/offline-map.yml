@@ -2,10 +2,10 @@ name: Offline map tool
 
 on:
   pull_request:
-    paths: ['tools/offline-map/**', '.github/workflows/offline-map.yml']
+    paths: ['tools/offline-map/**', 'server/petsense/uwb/maps.py', '.github/workflows/offline-map.yml']
   push:
     branches: [main]
-    paths: ['tools/offline-map/**', '.github/workflows/offline-map.yml']
+    paths: ['tools/offline-map/**', 'server/petsense/uwb/maps.py', '.github/workflows/offline-map.yml']
   workflow_dispatch:
 
 permissions:

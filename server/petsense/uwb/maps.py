@@ -53,6 +53,43 @@ def xy(value):
     return tuple(number(v) for v in value)
 
 
+def validate_config(d):
+    """Pure geometry contract shared with the offline exporter; no Flask/runtime imports."""
+    if not isinstance(d, dict):
+        raise ValueError('Map manifest must be an object')
+    if d.get('schemaVersion') != 1 or d.get('units') != 'm':
+        raise ValueError('Unsupported map schema or units')
+    for key in ['mapId', 'version']:
+        if not isinstance(d.get(key), str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', d[key]):
+            raise ValueError('Invalid map identity')
+    polygon = tuple(xy(p) for p in d['polygon'])
+    if not 3 <= len(polygon) <= 10000:
+        raise ValueError('Invalid map polygon')
+    area = sum(a[0]*b[1] - b[0]*a[1] for a, b in zip(polygon, polygon[1:] + polygon[:1]))
+    if abs(area) < 1e-6:
+        raise ValueError('Degenerate map polygon')
+    anchors = d['anchors']
+    if not isinstance(anchors, list) or not all(isinstance(a, dict) for a in anchors):
+        raise ValueError('Invalid anchor list')
+    indices = tuple(a['id'] for a in anchors)
+    if len(indices) != 3 or len(set(indices)) != 3 or any(type(i) is not int or not 0 <= i < 8 for i in indices):
+        raise ValueError('Exactly three distinct anchor indices are required')
+    points = tuple(xy(a['uwb']) for a in anchors)
+    a, b, c = points
+    if abs((b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0])) < 1e-6:
+        raise ValueError('Collinear anchors')
+    t = d['uwbTransform']
+    if not isinstance(t, dict):
+        raise ValueError('Invalid UWB transform')
+    matrix = tuple(xy(row) for row in t['matrix'])
+    if len(matrix) != 2 or abs(matrix[0][0]*matrix[1][1]-matrix[0][1]*matrix[1][0]) < 1e-9:
+        raise ValueError('Singular map transform')
+    scale = number(t['scale'], .000001, 1000)
+    translation = xy(t['translation'])
+    stale = number(d.get('staleAfterMs', 2000), 100, 30000) / 1000
+    return EngineConfig(indices, points, polygon, scale, matrix, translation, stale)
+
+
 class MapBundle:
     def __init__(self, directory):
         self.directory = Path(directory).resolve()
@@ -61,39 +98,7 @@ class MapBundle:
             raise ValueError('Map manifest is too large')
         self.data = json.loads(raw)
         d = self.data
-        if not isinstance(d, dict):
-            raise ValueError('Map manifest must be an object')
-        if d.get('schemaVersion') != 1 or d.get('units') != 'm':
-            raise ValueError('Unsupported map schema or units')
-        for key in ['mapId', 'version']:
-            if not isinstance(d.get(key), str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', d[key]):
-                raise ValueError('Invalid map identity')
-        polygon = tuple(xy(p) for p in d['polygon'])
-        if not 3 <= len(polygon) <= 10000:
-            raise ValueError('Invalid map polygon')
-        area = sum(a[0]*b[1] - b[0]*a[1] for a, b in zip(polygon, polygon[1:] + polygon[:1]))
-        if abs(area) < 1e-6:
-            raise ValueError('Degenerate map polygon')
-        anchors = d['anchors']
-        if not isinstance(anchors, list) or not all(isinstance(a, dict) for a in anchors):
-            raise ValueError('Invalid anchor list')
-        indices = tuple(a['id'] for a in anchors)
-        if len(indices) != 3 or len(set(indices)) != 3 or any(type(i) is not int or not 0 <= i < 8 for i in indices):
-            raise ValueError('Exactly three distinct anchor indices are required')
-        points = tuple(xy(a['uwb']) for a in anchors)
-        a, b, c = points
-        if abs((b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0])) < 1e-6:
-            raise ValueError('Collinear anchors')
-        t = d['uwbTransform']
-        if not isinstance(t, dict):
-            raise ValueError('Invalid UWB transform')
-        matrix = tuple(xy(row) for row in t['matrix'])
-        if len(matrix) != 2 or abs(matrix[0][0]*matrix[1][1]-matrix[0][1]*matrix[1][0]) < 1e-9:
-            raise ValueError('Singular map transform')
-        scale = number(t['scale'], .000001, 1000)
-        translation = xy(t['translation'])
-        stale = number(d.get('staleAfterMs', 2000), 100, 30000) / 1000
-        self.config = EngineConfig(indices, points, polygon, scale, matrix, translation, stale)
+        self.config = validate_config(d)
         bg = d['background']
         if not isinstance(bg, dict):
             raise ValueError('Invalid image metadata')
