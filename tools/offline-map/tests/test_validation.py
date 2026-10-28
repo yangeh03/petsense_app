@@ -62,6 +62,31 @@ class ValidationTests(unittest.TestCase):
         with self.assertRaises((ValueError, OSError, SyntaxError)):
             validate_bundle(self.bundle)
 
+    def test_orientation_calibration_canvas_and_sidecar_are_checked_together(self):
+        from orientation import choose_orientation
+        _, _, record = choose_orientation(self.data['polygon'], mode='none')
+        record['sourceUwbTransform'] = copy.deepcopy(self.data['uwbTransform'])
+        bg = self.data['background']
+        record['sourceBackground'] = {'origin': bg['origin'],
+            'extent': [bg['width'] * bg['metersPerPixel'], bg['height'] * bg['metersPerPixel']]}
+        self.data['provenance']['orientation'] = record
+        self.manifest.write_text(json.dumps(self.data))
+        validate_bundle(self.bundle)
+        for kind in ['transform', 'matrix', 'canvas', 'sidecar']:
+            with self.subTest(kind=kind):
+                d = copy.deepcopy(self.data)
+                if kind == 'transform':
+                    d['uwbTransform']['translation'][0] += 1
+                elif kind == 'matrix':
+                    d['provenance']['orientation']['matrix'][0][1] = 1
+                elif kind == 'canvas':
+                    d['provenance']['orientation']['sourceBackground']['extent'][0] += 10
+                else:
+                    (self.bundle / 'orientation.json').write_text('{}')
+                self.manifest.write_text(json.dumps(d))
+                with self.assertRaises(ValueError):
+                    validate_bundle(self.bundle)
+
     def arguments(self):
         floor = {'scale_prior': 1, 'floor_origin_3d': [0, 0, 0],
                  'floor_axis_x_3d': [1, 0, 0], 'floor_axis_y_3d': [0, 1, 0],

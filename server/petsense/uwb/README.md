@@ -28,6 +28,7 @@
 ## 接口与状态
 
 - `GET /api/app/uwb/map?deviceId=...`：登录且拥有设备时返回地图；内嵌 data URI 背景，避免 Web 图片请求不能携带自定义鉴权头。PNG 限制 4MB、2000 万像素，App 进入页面时获取一次，地图版本变化或手动重试时再获取。`background.byteLength` 和八位小写十六进制 `background.crc32` 描述同一份已校验图片快照，供客户端核对传输完整性；旧客户端可忽略新增字段。CRC32 不是密码学校验，不替代接口鉴权。
+- `GET /api/app/uwb/map-version?deviceId=...`：同样要求登录及设备归属，返回 `{mapId, version, revision}` 或 null，不包含图片；不需要收到定位测量。revision 包含地图指纹及 Tag 绑定，App 聚焦位置页时每 5 秒检查，新增/切换/删除绑定自动更新，未变化时不重新下载 PNG。完整地图也返回同一 revision。旧服务器无此接口（404）时，App 回退为每 30 秒获取完整地图。
 - `GET /api/app/uwb/position?deviceId=...`：当前定位状态；只在内存中保留，重启后等待新 MQTT，不伪造历史轨迹。
 - 原有 MQTT WS 包在 `payload.uwbPosition` 附加相同字段；原始测距仍保留。App 用鉴权快照每秒刷新位置、在本地独立过期，拖动不影响数据。
 - 原有 `/uwb/latest` 保持原测距查询语义。
