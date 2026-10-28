@@ -1,0 +1,24 @@
+name: Offline map tool
+
+on:
+  pull_request:
+    paths: ['tools/offline-map/**', '.github/workflows/offline-map.yml']
+  push:
+    branches: [main]
+    paths: ['tools/offline-map/**', '.github/workflows/offline-map.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  projection:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r tools/offline-map/requirements.txt
+      - run: python -m unittest discover -s tools/offline-map/tests -v

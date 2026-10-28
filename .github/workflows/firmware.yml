@@ -1,0 +1,43 @@
+name: ESP32 firmware
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'firmware/petsense_esp32/**'
+      - 'firmware/tests/**'
+      - 'firmware/check-build.sh'
+      - 'server/tests/fixtures/uwb_wire.json'
+      - '.github/workflows/firmware.yml'
+  pull_request:
+    paths:
+      - 'firmware/petsense_esp32/**'
+      - 'firmware/tests/**'
+      - 'firmware/check-build.sh'
+      - 'server/tests/fixtures/uwb_wire.json'
+      - '.github/workflows/firmware.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Parser and identity regression tests
+        run: python -m unittest discover -s firmware/tests -v
+      - uses: arduino/setup-arduino-cli@v2
+        with:
+          version: '1.5.1'
+      - name: Install pinned ESP32 core
+        run: |
+          arduino-cli core update-index --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core install esp32:esp32@2.0.16 --additional-urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+      - name: Compile acquisition firmware without production credentials
+        run: bash firmware/check-build.sh

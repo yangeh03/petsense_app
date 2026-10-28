@@ -1,11 +1,14 @@
 import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
+import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
+import { MapViewport } from '@/components/location/map-viewport';
 import { BottomTabInset, MaxContentWidth, Shadows, Spacing } from '@/constants/theme';
 import { useObservations } from '@/hooks/use-observations';
+import { usePositionMap } from '@/hooks/use-position-map';
 import { useTelemetry } from '@/hooks/use-telemetry';
 import { useTheme } from '@/hooks/use-theme';
 
@@ -18,8 +21,14 @@ export default function TrackingScreen() {
   const { latest, isFresh } = useTelemetry();
   const matching = latest?.deviceId === dashboard?.pet?.device_id && isFresh ? latest : null;
   const hasRanges = matching?.uwb?.valid && matching.uwb.distanceMm.length > 0;
+  const location = usePositionMap(dashboard?.pet?.device_id);
+  const [dragging, setDragging] = useState(false);
   return (
-    <ScrollView style={{ backgroundColor: theme.background }} contentContainerStyle={styles.scroll}>
+    <ScrollView
+      scrollEnabled={!dragging}
+      style={{ backgroundColor: theme.background }}
+      contentContainerStyle={styles.scroll}
+    >
       <View
         style={[
           styles.container,
@@ -33,40 +42,77 @@ export default function TrackingScreen() {
           <ThemedText style={styles.title}>位置</ThemedText>
           <View style={[styles.tag, { backgroundColor: theme.tintBackground }]}>
             <ThemedText type="smallBold" style={{ color: theme.tint }}>
-              筹备中
+              {location.map ? '室内定位' : '筹备中'}
             </ThemedText>
           </View>
         </View>
-        <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
-          <View style={[styles.icon, { backgroundColor: theme.tintBackground }]}>
-            <SymbolView
-              name={{ ios: 'location.slash', android: 'location_off', web: 'location_off' }}
-              size={32}
-              tintColor={theme.tint}
+        {location.map && (
+          <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
+            <ThemedText type="smallBold">{location.map.name}</ThemedText>
+            <MapViewport
+              key={`${location.map.mapId}:${location.map.version}`}
+              map={location.map}
+              position={location.position}
+              trail={location.trail}
+              fresh={location.fresh}
+              onDragging={setDragging}
             />
+            <ThemedText type="small" themeColor="textSecondary">
+              {!location.position?.position
+                ? '已加载标定地图，等待项圈提供位置'
+                : !location.fresh
+                  ? '定位已超时，灰色点为最后位置'
+                  : location.position.status === 'low_quality'
+                    ? '当前测距质量偏低，请参考实际环境'
+                    : location.position.quality.insideMap === false
+                      ? '坐标位于标定范围之外，请核对锚点与地图'
+                      : '正在显示项圈的真实位置'}
+            </ThemedText>
           </View>
-          <ThemedText style={styles.sectionTitle}>
-            {hasRanges ? '已收到测距，尚未完成户型标定' : '当前还不能确定它的位置'}
-          </ThemedText>
-          <ThemedText themeColor="textSecondary" style={styles.description}>
-            {hasRanges
-              ? '项圈提供了真实测距数据，但尚不能据此确定房间。完成锚点与户型标定后，才能显示位置。'
-              : '当前没有收到可用的位置坐标，因此无法显示房间或移动轨迹。动作识别仍可在「今日」查看。'}
-          </ThemedText>
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => router.push('/monitor')}
-            style={[styles.button, { backgroundColor: theme.tintBackground }]}
-          >
-            <ThemedText type="smallBold" style={{ color: theme.tint }}>
-              查看项圈能力 ›
+        )}
+        {!location.map && (
+          <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
+            <View style={[styles.icon, { backgroundColor: theme.tintBackground }]}>
+              <SymbolView
+                name={{ ios: 'location.slash', android: 'location_off', web: 'location_off' }}
+                size={32}
+                tintColor={theme.tint}
+              />
+            </View>
+            <ThemedText style={styles.sectionTitle}>
+              {hasRanges ? '已收到测距，尚未完成户型标定' : '当前还不能确定它的位置'}
+            </ThemedText>
+            <ThemedText themeColor="textSecondary" style={styles.description}>
+              {hasRanges
+                ? '项圈提供了真实测距数据，但尚不能据此确定房间。完成锚点与户型标定后，才能显示位置。'
+                : '当前没有收到可用的位置坐标，因此无法显示房间或移动轨迹。动作识别仍可在「今日」查看。'}
+            </ThemedText>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => router.push('/monitor')}
+              style={[styles.button, { backgroundColor: theme.tintBackground }]}
+            >
+              <ThemedText type="smallBold" style={{ color: theme.tint }}>
+                查看项圈能力 ›
+              </ThemedText>
+            </Pressable>
+          </View>
+        )}
+        {location.error !== '' && (
+          <Pressable accessibilityRole="button" onPress={location.reload}>
+            <ThemedText type="small" themeColor="textSecondary">
+              位置暂未更新：{location.error} · 点击重试
             </ThemedText>
           </Pressable>
-        </View>
+        )}
         <View style={[styles.info, { borderColor: theme.backgroundSelected }]}>
-          <ThemedText type="smallBold">室内 / 室外定位筹备中</ThemedText>
+          <ThemedText type="smallBold">
+            {location.map ? '室内定位 · 室外定位筹备中' : '室内 / 室外定位筹备中'}
+          </ThemedText>
           <ThemedText type="small" themeColor="textSecondary">
-            正在完善室内标定和室外定位能力；没有可用定位数据时，我们不会用演示轨迹代替。
+            {location.map
+              ? '地图来自实际空间重建。拖动只改变视野；灰色点表示最后位置，室外定位尚未接入。'
+              : '正在完善室内标定和室外定位能力；没有可用定位数据时，我们不会用演示轨迹代替。'}
           </ThemedText>
         </View>
       </View>

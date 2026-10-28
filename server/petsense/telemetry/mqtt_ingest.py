@@ -19,6 +19,7 @@ from petsense.db.models import Device, Reading
 from petsense.experiments import recorder
 from petsense.telemetry import audio as audio_module
 from petsense.telemetry import edge, observations
+from petsense.uwb import service as uwb_service
 from petsense.telemetry.realtime import broadcast_packet
 
 _trim_counter = 0
@@ -281,11 +282,17 @@ def on_message(client, userdata, msg):
         frames = expand_sensor_batch(payload_dict)
         if frames:
             for frame in frames:
+                frame.pop('uwbPosition', None)
                 actions_service.enrich_frame_with_action(frame)
                 frame_payload = json.dumps(frame, ensure_ascii=False, separators=(',', ':'))
                 ts = store(msg.topic, frame_payload, device_id)
                 if ts is None:
                     continue
+                last_ms = frames[-1].get('ts_ms')
+                sample_ms = frame.get('ts_ms')
+                batch_age = ((last_ms - sample_ms) & uwb_service.MASK) if type(last_ms) is int and type(sample_ms) is int else 0
+                uwb_service.enrich(frame, device_id, ts, batch_age)
+                frame_payload = json.dumps(frame, ensure_ascii=False, separators=(',', ':'))
                 packet = json.dumps({'topic': msg.topic, 'payload': frame_payload, 'received_at': iso_z(ts)})
                 try:
                     recorder.append_cloud_experiment_frame(msg.topic, frame, iso_z(ts), device_id)
@@ -300,12 +307,16 @@ def on_message(client, userdata, msg):
             return
 
     if device_id and isinstance(payload_dict, dict):
+        payload_dict.pop('uwbPosition', None)
         actions_service.enrich_frame_with_action(payload_dict)
         payload_str = json.dumps(payload_dict, ensure_ascii=False, separators=(',', ':'))
 
     ts = store(msg.topic, payload_str, device_id)
     if ts is None:
         return
+    if device_id and isinstance(payload_dict, dict):
+        uwb_service.enrich(payload_dict, device_id, ts)
+        payload_str = json.dumps(payload_dict, ensure_ascii=False, separators=(',', ':'))
     packet = json.dumps({'topic': msg.topic, 'payload': payload_str, 'received_at': iso_z(ts)})
     if device_id and isinstance(payload_dict, dict):
         try:

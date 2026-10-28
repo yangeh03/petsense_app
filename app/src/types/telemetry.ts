@@ -112,6 +112,7 @@ export type EdgeInference = {
 
 /** 解析后的传感器帧 */
 export type TelemetryFrame = {
+  uwbPosition?: import('@/types/uwb').UwbPosition;
   edge?: EdgeInference;
   deviceId: string;
   /** 设备侧毫秒时间戳 */

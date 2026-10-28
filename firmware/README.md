@@ -85,12 +85,14 @@ Copy-Item firmware/petsense_esp32/secrets.example.h firmware/petsense_esp32/secr
 | MQTT 地址         | `81.71.71.31`                                     |
 | MQTT 端口         | `80`，当前服务器的 TCP 网关入口                   |
 | MQTT 用户名       | `petsense-device`                                 |
-| Client ID         | `esp32-001`                                       |
+| Client ID         | `petsense-esp32-001`                              |
 | 数据中的 deviceId | `petsense-esp32-001`                              |
-| 传感器 Topic      | `petsense/sensor/esp32-001`                       |
-| 命令 Topic        | `petsense/device/esp32-001/command`               |
+| 传感器 Topic      | `petsense/sensor/petsense-esp32-001`              |
+| 命令 Topic        | `petsense/device/petsense-esp32-001/command`      |
 
-`80` 是目前已配置的 MQTT/HTTP 分流入口，不要自行改成 1883。多块板子同时连接时，至少为 Client ID、deviceId、传感器 Topic、命令 Topic 设置唯一且匹配的标识，并让服务器同步配置对应设备。当前网页主要面向 `esp32-001`。App 从 WebSocket 获取数据，不应内置 MQTT 密码。
+`80` 是目前已配置的 MQTT/HTTP 分流入口，不要自行改成 1883。`PETSENSE_DEVICE_ID` 是唯一设备身份配置，Client ID、消息 deviceId 和两个设备 Topic 都从它生成。多块板子必须设置不同 ID。可在 `secrets.h` 中额外定义 `PETSENSE_DEVICE_ID`，或通过编译宏覆盖默认值；这是设备标识，不是密码。App 从 WebSocket 获取数据，不应内置 MQTT 密码。
+
+**升级前先核对已认领设备 ID。** 旧固件把 `esp32-001` 用于 Topic，却把 `petsense-esp32-001` 放入消息；本版本默认统一为后者。如果实际已认领的是 `esp32-001`，应明确配置该 ID，使全部字段一致，而不是改动用户绑定或自动认领新设备。历史查询脚本、Broker ACL 和控制订阅也需核对。代码变更本身不会迁移线上数据。
 
 ## 5. 接线与串口
 
@@ -99,12 +101,13 @@ Copy-Item firmware/petsense_esp32/secrets.example.h firmware/petsense_esp32/secr
 | PDM 麦克风      | CLK 13，DATA 14                             |
 | IMU I2C         | SDA 1，SCL 7，地址 `0x23`                   |
 | 健康模块 UART   | RX 40 ← 模块 TX；TX 41 → 模块 RX；9600 baud |
+| BU03 UWB        | RX 42 ← BU03 TX1；115200 baud                |
 | 4G 模块 UART    | RX 17，TX 18；115200 baud                   |
 | MAX17048 电量计 | SDA 15，SCL 16，地址 `0x36`                 |
 | SDMMC（1-bit）  | CLK 5，CMD 4，D0 6，检测 46                 |
-| UART0 调试      | TX 43，RX 44；921600 baud                   |
+| UART0 调试输出  | TX 43；115200 baud                          |
 
-健康模块当前已接到 **40/41**，不是 SD 卡的 4/5。确认共地、供电与逻辑电平符合模块要求，蜂窝天线接 **MAIN**，不是 GNSS/NET 座。
+健康模块当前已接到 **40/41**，BU03 使用另一根输入线 `TX1 → GPIO42`，两者可以同时工作。BU03 的 `RX1` 暂不连接；BU03 与 ESP32 必须共地。UART0 的 RX 已用于 UWB，因此串口监视器只能查看日志，运行时控制使用 MQTT 命令。确认供电与逻辑电平符合模块要求，蜂窝天线接 **MAIN**，不是 GNSS/NET 座。
 
 ```sh
 arduino-cli board list
@@ -117,7 +120,7 @@ arduino-cli board list
 ```sh
 arduino-cli compile --fqbn esp32:esp32:esp32s3 --build-path firmware/petsense_esp32/build firmware/petsense_esp32
 arduino-cli upload --port COM10 --fqbn esp32:esp32:esp32s3 --input-dir firmware/petsense_esp32/build firmware/petsense_esp32
-arduino-cli monitor --port COM10 --config baudrate=921600
+arduino-cli monitor --port COM10 --config baudrate=115200
 ```
 
 把 `COM10` 换成自己的端口。macOS 常见 `/dev/cu.*`，Linux 常见 `/dev/ttyUSB*` 或 `/dev/ttyACM*`。每次修改代码/密码后先重新编译，再上传；上述步骤使用的是同一个明确的 build 目录。
@@ -133,6 +136,7 @@ arduino-cli monitor --port COM10 --config baudrate=921600
 ## 当前数据行为与限制
 
 - IMU/音频特征目标每 100 ms 采样；板端最多攒 10 条、约每秒批量发一次。串行 AT 上传和重试可能造成实际速率下降，不是硬实时保证。
+- BU03 `CmdM:4` 帧会持续解析，并写入每条批量样本的 `u` 数组：`[fresh, receivedMs, timer, tagId, anchorId, sequence, anchorMask, kalmanEnabled, distanceMm[8], rawMm[8], kalmanMm[8]]`。`fresh` 超过 2 秒没有新帧后变为 `false`。
 - 健康与电量的 SD 更新节奏为每秒一次，CSV 的 `health_fresh` / `battery_fresh` 区分新值；健康 UART 会持续服务。
 - 麦克风为 16 kHz、16-bit 单声道，输出 RMS、ZCR、40 维 Mel。按需录音默认 3 秒，分片上传；当前 SD 记录不保存原始 WAV。
 - SD 当前采用根目录下的 `petsense_<experiment_id>_samples.csv`，按事件列标注，不会为十个事件分别创建文件夹。主流程也未调用旧 manifest/WAV 创建函数；代码中保留的旧辅助函数不代表当前会生成这些文件。
@@ -143,6 +147,22 @@ arduino-cli monitor --port COM10 --config baudrate=921600
 
 ## 代码导航
 
-在 `.ino` 中搜索函数名即可定位：`setup/loop`（启动与调度）、`initCellularNetwork/mqttConnect`（蜂窝联网）、`appendCloudBatchSample/publishCloudSnapshot`（批次遥测）、`captureAudioFeatureStep`（音频特征）、`captureAudioFileStep/processAudioFileUploadStep`（录音上传）、`initSdLogger/sdLogStep`（SD）、`serviceHealthModule`（健康串口）。
+在 `.ino` 中搜索函数名即可定位：`setup/loop`（启动与调度）、`initCellularNetwork/mqttConnect`（蜂窝联网）、`appendCloudBatchSample/publishCloudSnapshot`（批次遥测）、`serviceUwbSerial`（UWB 串口）、`captureAudioFeatureStep`（音频特征）、`captureAudioFileStep/processAudioFileUploadStep`（录音上传）、`initSdLogger/sdLogStep`（SD）、`serviceHealthModule`（健康串口）。BU03 协议解析位于 `uwb_protocol.h/.cpp`。
 
 此次整理保留原有采集逻辑；进一步修复 SD 稳定性、时间同步或增加设备功能应单独提交、实机验证。
+
+## UWB 接入回归检查
+
+在仓库根目录执行（主机测试需要 Python 3 与 g++）：
+
+```sh
+python3 -m unittest discover -s firmware/tests -v
+PETSENSE_MQTT_DISABLED=1 python3 -m unittest discover -s server/tests -v
+bash firmware/check-build.sh
+```
+
+最后一条需要 Arduino CLI 1.5.1 和 `esp32:esp32@2.0.16`，仅在临时目录用示例密码编译，不烧录、不读取真实密码。主机测试不替代 ESP32 编译和实物联调。GitHub 的独立 `ESP32 firmware` workflow 执行协议回归和完整编译，保留现有 App/服务器 CI。
+
+当前固件只保存最新 Tag 测距；第一阶段使用单 Tag。重复测距可能出现在多个 MQTT 样本中，后续定位引擎须去重。`receivedMs`、`timer` 都不能当作 UTC 使用，`valid` 仅表示最近 2 秒内收到可解析的帧，不保证距离足够或定位质量合格。旧串口键盘命令已移除，MQTT 命令不保证覆盖所有旧调试操作。GPIO43 仅输出日志，不向 BU03 RX1 发送配置命令。
+
+后续任务与验收见 [UWB 整合待办](../docs/UWB_INTEGRATION.md)。
