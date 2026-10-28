@@ -119,3 +119,5 @@
 验证：客户端 77 项、服务端 174 项、离线工具 16 项测试通过；lint/typecheck/format:check、Expo 58 Web 导出通过。真实 200 万点自动旋转约 -9.8369°，输出 780 × 549；两次生成 map.json、PNG、orientation.json、polygon.json 字节一致。关闭旋转时 PNG 与原 714 × 431 样例字节一致。全部 217 个轮廓顶点、三个 Anchor 及已知点的坐标对应已核对。
 
 Chromium 在隔离账号/数据库、无 UWB 测量的情况下验证新增绑定自动显示、未变更时不重新下载图片、切换到摆正地图并正确叠加、仅变更 Tag 时刷新，以及解绑后自动清空；没有页面脚本错误。实物定位闭环、原生 iOS/Android 清晰度/手势仍待验收。
+
+PR 准备时同步主分支至 `7b9ee8e`，保留同伴的原生图片层与 `backgroundImageRect` 函数，合并重复布局实现。同步后客户端 78 项测试及 lint/typecheck/format:check、Web 导出通过；补充隔离浏览器的浅色/深色界面截图，位于 docs/screenshots/uwb-map-light.png 和 uwb-map-dark.png。

@@ -11,7 +11,7 @@ const code = ts.transpileModule(
   { compilerOptions: { module: ts.ModuleKind.CommonJS } },
 ).outputText;
 vm.runInNewContext(code, { exports: exportsObject });
-const { clampMapPan, mapBounds, mapImageRect, appendMeasuredTrail, positionMatchesMap } =
+const { clampMapPan, mapBounds, backgroundImageRect, appendMeasuredTrail, positionMatchesMap } =
   exportsObject;
 const telemetryExports = {};
 const telemetrySource = ts.transpileModule(
@@ -75,14 +75,14 @@ test('map bounds preserve metre coordinates and non-square image aspect', () => 
 });
 
 test('raster screen rectangle shares the overlay fit, offsets, aspect ratio and upward map Y', () => {
-  const fitted = mapImageRect(map, { width: 400, height: 300 });
+  const fitted = backgroundImageRect(map, mapBounds(map), { width: 400, height: 300 });
   assert.equal(fitted.left, 0);
   assert.equal(fitted.top, 50);
   assert.equal(fitted.width, 400);
   assert.equal(fitted.height, 200);
   // An anchor outside the raster expands the view to 8 x 4 metres.
   const expanded = { ...map, anchors: [{ id: 0, position: [6, 3] }] };
-  const rect = mapImageRect(expanded, { width: 400, height: 200 });
+  const rect = backgroundImageRect(expanded, mapBounds(expanded), { width: 400, height: 200 });
   assert.equal(rect.left, 0);
   assert.equal(rect.top, 100);
   assert.equal(rect.width, 200);
@@ -103,6 +103,15 @@ test('pan is clamped after zoom/resize and cannot change physical positions', ()
   assert.equal(zoomed.y, -100);
   assert.equal(p.x, 1000);
   assert.equal(map.polygon[0][0], -2);
+});
+
+test('background image rect replicates the svg meet fit for native rendering', () => {
+  const b = mapBounds(map);
+  const exact = backgroundImageRect(map, b, { width: 400, height: 200 });
+  assert.deepEqual({ ...exact }, { left: 0, top: 0, width: 400, height: 200 });
+  const tall = backgroundImageRect(map, b, { width: 200, height: 400 });
+  assert.deepEqual({ ...tall }, { left: 0, top: 150, width: 200, height: 100 });
+  assert.equal(backgroundImageRect(map, b, { width: 0, height: 0 }), null);
 });
 
 test('stale/poor/repeated measurements cannot fabricate trail points', () => {

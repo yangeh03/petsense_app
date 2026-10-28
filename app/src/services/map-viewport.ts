@@ -32,23 +32,33 @@ export function clampMapPan(
   };
 }
 
-/** Place the raster in screen points using exactly the same fit and Y flip as the SVG overlay. */
-export function mapImageRect(map: UwbMap, viewport: { width: number; height: number }) {
-  const bounds = mapBounds(map);
-  const bg = map.background;
-  const fit = Math.min(viewport.width / bounds.width, viewport.height / bounds.height);
-  return {
-    left: (viewport.width - bounds.width * fit) / 2 + (bg.origin[0] - bounds.minX) * fit,
-    top:
-      (viewport.height - bounds.height * fit) / 2 +
-      (bounds.minY + bounds.height - bg.origin[1] - bg.height * bg.metersPerPixel) * fit,
-    width: bg.width * bg.metersPerPixel * fit,
-    height: bg.height * bg.metersPerPixel * fit,
-  };
-}
-
 export function positionMatchesMap(position: UwbPosition | null, map: UwbMap | null) {
   return !!position && !!map && position.mapId === map.mapId && position.mapVersion === map.version;
+}
+
+/**
+ * Rect (in stage points) of the raster background, replicating the SVG viewBox
+ * "xMidYMid meet" fit. The bitmap renders as a native image because react-native-svg
+ * decodes data-URI images at layout-point size, losing device-pixel sharpness.
+ */
+export function backgroundImageRect(
+  map: UwbMap,
+  bounds: { minX: number; minY: number; width: number; height: number },
+  viewport: { width: number; height: number },
+) {
+  if (!viewport.width || !viewport.height || !bounds.width || !bounds.height) return null;
+  const { origin, width: pixelWidth, height: pixelHeight, metersPerPixel } = map.background;
+  const imageWidth = pixelWidth * metersPerPixel;
+  const imageHeight = pixelHeight * metersPerPixel;
+  const scale = Math.min(viewport.width / bounds.width, viewport.height / bounds.height);
+  const offsetX = (viewport.width - bounds.width * scale) / 2;
+  const offsetY = (viewport.height - bounds.height * scale) / 2;
+  return {
+    left: offsetX + (origin[0] - bounds.minX) * scale,
+    top: offsetY + (bounds.minY + bounds.height - origin[1] - imageHeight) * scale,
+    width: imageWidth * scale,
+    height: imageHeight * scale,
+  };
 }
 
 export function appendMeasuredTrail(

@@ -8,7 +8,7 @@ import Svg, { Circle, Polyline, Text as SvgText } from 'react-native-svg';
 import { ThemedText } from '@/components/themed-text';
 import { useTheme } from '@/hooks/use-theme';
 import { type MapImageLoad, updateMapImageLoad } from '@/services/map-image';
-import { clampMapPan, mapBounds, mapImageRect } from '@/services/map-viewport';
+import { backgroundImageRect, clampMapPan, mapBounds } from '@/services/map-viewport';
 import type { UwbMap, UwbPosition } from '@/types/uwb';
 
 export function MapViewport({
@@ -57,7 +57,7 @@ export function MapViewport({
     return Math.min(460, Math.max(180, fit));
   }, [width, bounds]);
   const viewport = useMemo(() => ({ width, height: stageHeight }), [width, stageHeight]);
-  const rasterRect = mapImageRect(map, viewport);
+  const rasterRect = backgroundImageRect(map, bounds, viewport);
   const limited = clampMapPan(pan, viewport, bounds, zoom);
   const gestureState = useRef({ pan: limited, viewport, bounds, zoom, onDragging });
   useLayoutEffect(() => {
@@ -115,7 +115,7 @@ export function MapViewport({
             { transform: [{ translateX: limited.x }, { translateY: limited.y }, { scale: zoom }] },
           ]}
         >
-          {width > 0 && (
+          {rasterRect && (
             <Image
               key={source}
               accessibilityLabel="重建空间俯视底图"
