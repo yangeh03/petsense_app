@@ -20,7 +20,6 @@ export function VitalsCard({
   daily,
   series,
   buckets,
-  battery,
   updatedAt,
   onOpenCollar,
 }: {
@@ -29,7 +28,6 @@ export function VitalsCard({
   daily: Partial<Record<MetricKey, MetricSummary>> | null;
   series: TelemetrySeries;
   buckets: ObservationBucket[];
-  battery: number | null;
   updatedAt: string | null;
   onOpenCollar: () => void;
 }) {
@@ -125,20 +123,15 @@ export function VitalsCard({
           温度读数偏高，请先核对佩戴和传感器状态。
         </ThemedText>
       )}
-      {(envTemp !== null || battery !== null || updatedAt !== null) && (
+      {(envTemp !== null || updatedAt !== null) && (
         <View style={[styles.subrow, { backgroundColor: theme.background }]}>
           {envTemp !== null && (
-            <ThemedText type="small" themeColor="textSecondary">
+            <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
               环境 {envTemp.value.toFixed(1)}℃
             </ThemedText>
           )}
-          {battery !== null && (
-            <ThemedText type="small" themeColor="textSecondary">
-              电量 {battery}%
-            </ThemedText>
-          )}
           {updatedAt !== null && (
-            <ThemedText type="small" themeColor="textSecondary">
+            <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
               最近更新 {clockTime(updatedAt)}
             </ThemedText>
           )}

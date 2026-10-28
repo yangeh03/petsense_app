@@ -209,7 +209,6 @@ export default function DashboardScreen() {
               daily={data?.metrics ?? null}
               series={series}
               buckets={data?.buckets ?? []}
-              battery={battery}
               updatedAt={frame?.receivedAt ?? null}
               onOpenCollar={() => router.push('/profile')}
             />
