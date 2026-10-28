@@ -198,3 +198,28 @@ class ObservationTests(unittest.TestCase):
         result = self.get().json
         self.assertEqual(result['metrics']['heartRate']['count'], 2)
         self.assertEqual(result['summary']['soundEpisodeCount'], 1)
+
+    def test_day_timeline_runs_and_env_temp_metric(self):
+        # 06:28 accumulates 11s of walking (walk run); 06:29 only standing (idle);
+        # 06:30 has 1s of walking — below the threshold, so it stays idle, and the
+        # offline stretch before 06:28 stays a no-data run.
+        for i in range(12):
+            self.ingest(i + 1, -120 + i)
+        self.ingest(21, -60, action={'label': 'standing', 'confidence': .9})
+        self.ingest(22, -59, action={'label': 'standing', 'confidence': .9})
+        self.ingest(31, 0, health={'valid': True, 'heartRate': 100, 'spo2': 98, 'bodyTemp': 38, 'envTemp': 30})
+        self.ingest(32, 2, health={'valid': True, 'heartRate': 110, 'spo2': 97, 'bodyTemp': 38.5, 'envTemp': 32})
+        result = self.get().json
+        self.assertEqual(result['metrics']['envTemp'], {'avg': 31, 'min': 30, 'max': 32, 'count': 2})
+        timeline = result['timeline']
+        self.assertEqual(timeline['startAt'], '2026-10-24T16:00:00.000Z')
+        self.assertEqual(timeline['slotSeconds'], 60)
+        self.assertEqual(timeline['runs'], [
+            {'state': 'none', 'minutes': 868},
+            {'state': 'walk', 'minutes': 1},
+            {'state': 'idle', 'minutes': 2},
+        ])
+
+    def test_week_response_has_no_day_timeline(self):
+        self.ingest(1)
+        self.assertIsNone(self.get('week').json['timeline'])

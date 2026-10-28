@@ -1,5 +1,5 @@
 export type ObservationPeriod = 'day' | 'week' | 'month';
-export type MetricKey = 'heartRate' | 'spo2' | 'bodyTemp';
+export type MetricKey = 'heartRate' | 'spo2' | 'bodyTemp' | 'envTemp';
 export type MetricSummary = {
   avg: number | null;
   min: number | null;
@@ -22,6 +22,10 @@ export type SoundEvent = {
   observedSeconds: number;
   experimental: boolean;
 };
+/** 今日活动时间轴的连续分钟段：走动 / 静止（含未识别的在线时段）/ 无数据 */
+export type TimelineRunState = 'walk' | 'idle' | 'none';
+export type TimelineRun = { state: TimelineRunState; minutes: number };
+export type DayTimeline = { startAt: string; slotSeconds: number; runs: TimelineRun[] };
 export type Observations = {
   deviceId: string | null;
   period: ObservationPeriod;
@@ -38,4 +42,6 @@ export type Observations = {
   buckets: ObservationBucket[];
   range: { startAt: string; endAt: string };
   retentionDays: number;
+  /** 仅 period=day 返回；旧服务端没有该字段 */
+  timeline?: DayTimeline | null;
 };

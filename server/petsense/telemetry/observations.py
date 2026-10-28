@@ -11,7 +11,10 @@ from petsense.db import iso_z, session_scope, utc_now
 from petsense.db.models import Device, Reading, TelemetryLatest, TelemetryMinute, TelemetryEvent
 
 bp = Blueprint('observations', __name__, url_prefix='/api/app')
-METRICS = ('heartRate', 'spo2', 'bodyTemp')
+METRICS = ('heartRate', 'spo2', 'bodyTemp', 'envTemp')
+# A minute only paints as walking when the classifier attributed enough of it to walking,
+# so single-frame misreads do not colour the day timeline.
+TIMELINE_WALK_MINIMUM_SECONDS = 10
 ACTIONS = {'standing', 'sitting', 'lying down', 'walking'}
 SOUNDS = {'bark', 'howl', 'whine'}
 RETENTION_DAYS = 90
@@ -215,6 +218,7 @@ def observations():
         summary = {'observedSeconds': 0, 'walkingSeconds': 0, 'stationarySeconds': 0,
                    'soundEpisodeCount': len(episodes), 'firstObservedAt': None}
         combined = {}
+        by_minute = {}
         for row in rows:
             if row.minute >= window_start:
                 index = int((row.minute - start).total_seconds() / step.total_seconds())
@@ -230,13 +234,29 @@ def observations():
                 first = iso_z(row.minute)
                 if summary['firstObservedAt'] is None or first < summary['firstObservedAt']:
                     summary['firstObservedAt'] = first
+                by_minute[row.minute] = ('walk' if actions.get('walking', 0) >= TIMELINE_WALK_MINIMUM_SECONDS
+                                         else 'idle' if row.observed_seconds > 0 else 'none')
         for bucket in buckets:
             bucket['metrics'] = _public_metrics(bucket['metrics'])
         events = [{'id': e.id, 'label': e.label, 'startedAt': iso_z(e.started_at),
                    'lastSeenAt': iso_z(e.last_seen_at), 'frames': e.frames,
                    'confidence': round(e.confidence_sum / e.frames, 4),
                    'observedSeconds': e.observed_seconds, 'experimental': bool(e.experimental)} for e in episodes[:20]]
+        # Day timeline: merged per-minute runs of walk / idle / no data, for the honest day bar.
+        timeline = None
+        if period == 'day':
+            runs = []
+            cursor = today
+            while cursor <= now:
+                state = by_minute.get(cursor, 'none')
+                if runs and runs[-1]['state'] == state:
+                    runs[-1]['minutes'] += 1
+                else:
+                    runs.append({'state': state, 'minutes': 1})
+                cursor += timedelta(minutes=1)
+            timeline = {'startAt': iso_z(today), 'slotSeconds': 60, 'runs': runs}
         result = {'deviceId': devices[0] if devices else None, 'period': period, 'latest': {'payload': json.loads(latest.payload), 'receivedAt': iso_z(latest.received_at)} if latest else None,
                   'summary': summary, 'events': events, 'metrics': _public_metrics(combined), 'buckets': buckets,
-                  'range': {'startAt': iso_z(window_start), 'endAt': iso_z(now)}, 'retentionDays': RETENTION_DAYS}
+                  'range': {'startAt': iso_z(window_start), 'endAt': iso_z(now)}, 'retentionDays': RETENTION_DAYS,
+                  'timeline': timeline}
     return result, 200, {'Cache-Control': 'no-store'}

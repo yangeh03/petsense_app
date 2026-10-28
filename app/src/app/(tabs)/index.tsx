@@ -10,15 +10,18 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { PetHero } from '@/components/dashboard/pet-hero';
+import { ActivityCard } from '@/components/dashboard/activity-card';
 import { NotificationBell } from '@/components/alerts/notification-bell';
+import { PetHero } from '@/components/dashboard/pet-hero';
+import { PetStatusStrip } from '@/components/dashboard/pet-status-strip';
+import { VitalsCard } from '@/components/dashboard/vitals-card';
 import { ThemedText } from '@/components/themed-text';
 import { BottomTabInset, Fonts, MaxContentWidth, Shadows, Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useObservations } from '@/hooks/use-observations';
 import { useTelemetry } from '@/hooks/use-telemetry';
 import { useTheme } from '@/hooks/use-theme';
-import { clockTime, duration } from '@/services/observation-view';
+import { clockTime } from '@/services/observation-view';
 import { parseTelemetryMessage } from '@/services/telemetry-service';
 
 export default function DashboardScreen() {
@@ -26,7 +29,7 @@ export default function DashboardScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
-  const { latest: live, displayState, isFresh, now } = useTelemetry();
+  const { latest: live, displayState, isFresh, now, series } = useTelemetry();
   const {
     dashboard,
     observations: data,
@@ -36,7 +39,6 @@ export default function DashboardScreen() {
   } = useObservations('day', displayState !== 'replaying');
   const [pullRefreshing, setPullRefreshing] = useState(false);
   const [mediaRefresh, setMediaRefresh] = useState(0);
-  const [vitalsOpen, setVitalsOpen] = useState(false);
   const pet = dashboard?.pet ?? null;
   const snapshot = data?.latest
     ? parseTelemetryMessage(
@@ -54,21 +56,19 @@ export default function DashboardScreen() {
   const age = frame ? now - Date.parse(frame.receivedAt) : Infinity;
   const current = !!frame && age >= -5000 && age < 10_000 && !replay;
   const health = current && frame?.health?.valid ? frame.health : null;
-  const battery = frame?.battery?.found ? frame.battery.percent : null;
+  const battery = frame?.battery?.found ? Math.round(frame.battery.percent) : null;
   const summary = data?.summary;
   const hasCoverage = !!summary?.firstObservedAt;
-  const statusLabel = !pet?.device_id
-    ? '等待绑定项圈'
-    : replay
-      ? '正在回放实验数据'
-      : matchingLive && current
-        ? '项圈在线'
-        : current
-          ? `最近同步 ${clockTime(frame!.receivedAt)}`
-          : matchingSnapshot
-            ? `最近更新 ${clockTime(matchingSnapshot.receivedAt)}`
-            : '等待项圈数据';
-  const color = current ? theme.online : theme.textSecondary;
+  const online = !!matchingLive && current;
+  const statusLabel = replay
+    ? '正在回放实验数据'
+    : online
+      ? '项圈在线'
+      : current
+        ? `最近同步 ${clockTime(frame!.receivedAt)}`
+        : matchingSnapshot
+          ? `最近更新 ${clockTime(matchingSnapshot.receivedAt)}`
+          : '等待项圈数据';
   const format = (value: number | undefined, decimals = 0) =>
     value !== undefined && Number.isFinite(value) && value > 0 ? value.toFixed(decimals) : '—';
 
@@ -192,102 +192,33 @@ export default function DashboardScreen() {
               }
               refreshVersion={mediaRefresh}
               onEdit={() => router.push('/pet')}
-              onSoundPress={() => router.push('/records')}
             />
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="查看项圈状态"
-              onPress={() => router.push(pet.device_id ? '/profile' : '/setup')}
-              style={styles.status}
-            >
-              <View style={[styles.dot, { backgroundColor: color }]} />
-              <ThemedText type="small" style={{ color }}>
-                {statusLabel}
-              </ThemedText>
-              <ThemedText type="small" themeColor="textSecondary">
-                {battery !== null ? `${Math.round(battery)}% · ` : ''}›
-              </ThemedText>
-            </Pressable>
-            <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
-              <View style={styles.rowBetween}>
-                <ThemedText style={styles.sectionTitle}>健康体征</ThemedText>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityState={{ expanded: vitalsOpen }}
-                  onPress={() => setVitalsOpen(!vitalsOpen)}
-                  style={styles.tap}
-                >
-                  <ThemedText type="small" style={{ color: theme.tint }}>
-                    {vitalsOpen ? '收起说明' : '测量说明'}
-                  </ThemedText>
-                </Pressable>
-              </View>
-              {current ? (
-                <View style={styles.metrics}>
-                  <Metric label="心率" value={format(health?.heartRate)} unit="bpm" />
-                  <Metric label="血氧" value={format(health?.spo2)} unit="%" />
-                  <Metric label="传感器温度" value={format(health?.bodyTemp, 1)} unit="℃" />
-                </View>
-              ) : (
-                <ThemedText type="small" themeColor="textSecondary">
-                  暂无实时读数
-                </ThemedText>
-              )}
-              {current && !health && (
-                <ThemedText type="small" themeColor="textSecondary">
-                  暂无有效读数，请检查佩戴。
-                </ThemedText>
-              )}
-              {health && health.bodyTemp >= 42 && (
-                <ThemedText type="small" style={{ color: theme.warning }}>
-                  温度读数偏高，请先核对佩戴和传感器状态。
-                </ThemedText>
-              )}
-              {vitalsOpen && (
-                <View style={[styles.explanation, { backgroundColor: theme.background }]}>
-                  <ThemedText type="small" themeColor="textSecondary">
-                    温度来自项圈传感器，不等同于体温。
-                  </ThemedText>
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={() => router.push('/profile')}
-                    style={styles.tap}
-                  >
-                    <ThemedText type="smallBold" style={{ color: theme.tint }}>
-                      查看项圈状态 ›
-                    </ThemedText>
-                  </Pressable>
-                </View>
-              )}
-            </View>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="查看完整健康记录"
+            <PetStatusStrip
+              frame={frame}
+              current={current}
+              bound={!!pet.device_id}
+              online={online}
+              statusLabel={statusLabel}
+              battery={battery}
+              onPressCollar={() => router.push(pet.device_id ? '/profile' : '/setup')}
+              onPressSound={() => router.push('/records')}
+            />
+            <VitalsCard
+              health={health}
+              current={current}
+              daily={data?.metrics ?? null}
+              series={series}
+              buckets={data?.buckets ?? []}
+              battery={battery}
+              updatedAt={frame?.receivedAt ?? null}
+              onOpenCollar={() => router.push('/profile')}
+            />
+            <ActivityCard
+              summary={summary ?? null}
+              timeline={data?.timeline}
+              hasCoverage={hasCoverage}
               onPress={() => router.push('/records')}
-              style={[styles.card, { backgroundColor: theme.backgroundElement }]}
-            >
-              <View style={styles.rowBetween}>
-                <ThemedText style={styles.sectionTitle}>今日记录</ThemedText>
-                <ThemedText type="small" themeColor="textSecondary">
-                  {hasCoverage ? `已观测${duration(summary!.observedSeconds)}` : '尚未开始观测'}
-                </ThemedText>
-              </View>
-              <View style={[styles.summary, { backgroundColor: theme.background }]}>
-                <Metric
-                  label="走动"
-                  value={hasCoverage ? duration(summary!.walkingSeconds) : '—'}
-                  compact
-                />
-                <Metric
-                  label="静止"
-                  value={hasCoverage ? duration(summary!.stationarySeconds) : '—'}
-                  compact
-                />
-              </View>
-              <ThemedText type="smallBold" style={{ color: theme.tint }}>
-                查看健康趋势、声音与运动日记 ›
-              </ThemedText>
-            </Pressable>
+            />
             <Pressable
               accessibilityRole="button"
               onPress={() => router.push('/records')}
@@ -324,28 +255,14 @@ function greeting(now: number) {
   return '晚上好';
 }
 
-function Metric({
-  label,
-  value,
-  unit,
-  compact = false,
-}: {
-  label: string;
-  value: string;
-  unit?: string;
-  compact?: boolean;
-}) {
+function Metric({ label, value, unit }: { label: string; value: string; unit?: string }) {
   const theme = useTheme();
   return (
     <View style={styles.metric}>
       <ThemedText type="small" themeColor="textSecondary">
         {label}
       </ThemedText>
-      <ThemedText
-        style={[compact ? styles.compactValue : styles.metricValue, { color: theme.text }]}
-      >
-        {value}
-      </ThemedText>
+      <ThemedText style={[styles.metricValue, { color: theme.text }]}>{value}</ThemedText>
       {unit && (
         <ThemedText type="small" themeColor="textSecondary">
           {unit}
@@ -360,31 +277,11 @@ const styles = StyleSheet.create({
   heading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   welcome: { alignItems: 'center', gap: 4 },
   pageTitle: { fontSize: 26, lineHeight: 34, fontWeight: '700', textAlign: 'center' },
-  status: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 7,
-    paddingVertical: 4,
-    flexWrap: 'wrap',
-  },
-  dot: { width: 6, height: 6, borderRadius: 3 },
   card: { padding: 16, borderRadius: 22, gap: 12, boxShadow: Shadows.card },
-  rowBetween: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
   sectionTitle: { fontSize: 18, lineHeight: 24, fontWeight: '700' },
   metrics: { flexDirection: 'row', gap: 12 },
   metric: { flex: 1, gap: 5 },
   metricValue: { fontSize: 28, lineHeight: 36, fontWeight: '700', fontVariant: ['tabular-nums'] },
-  compactValue: { fontSize: 16, lineHeight: 23, fontWeight: '600' },
-  summary: { flexDirection: 'row', padding: 14, borderRadius: 14, gap: 10 },
-  explanation: { padding: 14, borderRadius: 14, gap: 10 },
   button: { alignSelf: 'flex-start', paddingHorizontal: 18, paddingVertical: 12, borderRadius: 14 },
   notice: { padding: 16, borderRadius: 16, gap: 8 },
-  tap: { paddingVertical: 6 },
 });

@@ -1,5 +1,4 @@
 import { Image } from 'expo-image';
-import { SymbolView } from 'expo-symbols';
 import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
@@ -13,11 +12,10 @@ import {
   shouldPromotePetMedia,
   type PetActionKey,
 } from '@/services/pet-avatar';
-import { soundStatus } from '@/services/sound-view';
 import type { PetAvatarTemplate, PetgifPet, SocialPet } from '@/types/social';
 import type { TelemetryFrame } from '@/types/telemetry';
 
-/** Central digital pet. Exact action asset or static avatar; never a different action. */
+/** 数字宠物即界面：轻点播放互动，长按编辑；不设说明性按钮。 */
 export function PetHero({
   pet,
   petgif,
@@ -27,7 +25,6 @@ export function PetHero({
   statusLabel,
   refreshVersion,
   onEdit,
-  onSoundPress,
 }: {
   pet: SocialPet;
   petgif: PetgifPet | null | undefined;
@@ -37,11 +34,11 @@ export function PetHero({
   statusLabel: string;
   refreshVersion: number;
   onEdit: () => void;
-  onSoundPress: () => void;
 }) {
   const theme = useTheme();
   const [previewAction, setPreviewAction] = useState<PetActionKey | null>(null);
   const [interactionAction, setInteractionAction] = useState<PetActionKey | null>(null);
+  const [interacted, setInteracted] = useState(false);
   useEffect(() => {
     if (!interactionAction) return;
     const timer = setTimeout(() => setInteractionAction(null), 4_000);
@@ -77,7 +74,6 @@ export function PetHero({
   const still = media.staticUrl;
   const uri = animation || still;
   const color = current ? theme.online : theme.textSecondary;
-  const sound = soundStatus(frame, current, !!pet.device_id);
   const actionLabel =
     media.label ??
     (current
@@ -88,6 +84,11 @@ export function PetHero({
   const displayLabel = `${media.isPreview ? '动作预览 · ' : ''}${actionLabel}${
     media.animationState === 'barking' ? ' · 吠叫' : ''
   }`;
+  const playInteraction = () => {
+    if (media.actionKey === null || interactionAction === media.actionKey) return;
+    setInteracted(true);
+    setInteractionAction(media.actionKey);
+  };
   const [displayedMedia, setDisplayedMedia] = useState(
     uri ? { uri, animation: Boolean(animation) } : null,
   );
@@ -111,23 +112,31 @@ export function PetHero({
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`${pet.name}的${animation ? `${displayLabel}动画` : '头像'}${
-          canPreview ? '，轻点切换预设动作，长按编辑宠物档案' : '，编辑宠物档案'
+          canPreview
+            ? '，轻点切换预设动作，长按编辑宠物档案'
+            : media.interactionAvailable
+              ? '，轻点播放互动动画，长按编辑宠物档案'
+              : '，长按编辑宠物档案'
         }`}
-        onLongPress={canPreview ? onEdit : undefined}
+        onLongPress={onEdit}
         onPress={() => {
-          if (!canPreview) {
-            onEdit();
+          if (canPreview) {
+            setInteractionAction(null);
+            setPreviewAction((previous) => {
+              const currentIndex = previous ? previewActions.indexOf(previous) : -1;
+              return previewActions[(currentIndex + 1) % previewActions.length];
+            });
             return;
           }
-          setInteractionAction(null);
-          setPreviewAction((previous) => {
-            const currentIndex = previous ? previewActions.indexOf(previous) : -1;
-            return previewActions[(currentIndex + 1) % previewActions.length];
-          });
+          if (media.interactionAvailable) {
+            playInteraction();
+            return;
+          }
+          onEdit();
         }}
         style={[styles.ring, { borderColor: color, backgroundColor: theme.tintBackground }]}
       >
-        <View style={[styles.portrait, { borderColor: theme.backgroundElement }]}>
+        <View style={styles.portrait}>
           {visibleMedia ? (
             <Image
               source={{ uri: absoluteUrl(visibleMedia.uri) }}
@@ -171,40 +180,11 @@ export function PetHero({
         </View>
       </Pressable>
       <View style={styles.caption}>
-        {media.interactionAvailable && (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="播放转头互动动画"
-            disabled={interactionAction === media.actionKey}
-            onPress={() => setInteractionAction(media.actionKey)}
-            style={[styles.interaction, { backgroundColor: theme.tintBackground }]}
-          >
-            <ThemedText type="smallBold" style={{ color: theme.tint }}>
-              {media.animationState === 'interaction' ? '互动中…' : '动画互动'}
-            </ThemedText>
-          </Pressable>
-        )}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`${sound.label}，查看声音诊断`}
-          onPress={onSoundPress}
-          style={[
-            styles.sound,
-            { backgroundColor: sound.available ? theme.tintBackground : theme.backgroundElement },
-          ]}
-        >
-          <SymbolView
-            name={{ ios: 'waveform', android: 'graphic_eq', web: 'graphic_eq' }}
-            size={16}
-            tintColor={sound.available ? theme.tint : theme.textSecondary}
-          />
-          <ThemedText
-            type="small"
-            style={{ color: sound.available ? theme.tint : theme.textSecondary }}
-          >
-            {sound.label}
+        {current && media.interactionAvailable && !interacted && (
+          <ThemedText type="small" themeColor="textSecondary">
+            轻点它，跟它互动
           </ThemedText>
-        </Pressable>
+        )}
         {failed.length > 0 && (
           <Pressable
             accessibilityRole="button"
@@ -222,27 +202,26 @@ export function PetHero({
   );
 }
 const styles = StyleSheet.create({
-  hero: { alignItems: 'center', gap: 18, paddingTop: 4, paddingBottom: 12 },
+  hero: { alignItems: 'center', gap: 12, paddingTop: 4, paddingBottom: 4 },
   ring: {
-    width: 232,
-    height: 232,
-    borderRadius: 116,
+    width: 180,
+    height: 180,
+    borderRadius: 90,
     borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
   },
   portrait: {
-    width: 220,
-    height: 220,
-    borderRadius: 110,
-    borderWidth: 5,
+    width: 166,
+    height: 166,
+    borderRadius: 83,
     overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
   },
   image: { width: '100%', height: '100%' },
   preload: { position: 'absolute', width: 1, height: 1, opacity: 0 },
-  emoji: { fontSize: 78, lineHeight: 98, fontFamily: Fonts.rounded },
+  emoji: { fontSize: 62, lineHeight: 80, fontFamily: Fonts.rounded },
   badge: {
     position: 'absolute',
     bottom: -10,
@@ -252,22 +231,8 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     paddingHorizontal: 14,
     paddingVertical: 7,
-    maxWidth: 260,
+    maxWidth: 240,
   },
   dot: { width: 6, height: 6, borderRadius: 3 },
-  caption: { alignItems: 'center', gap: 6, paddingTop: 4 },
-  interaction: {
-    minHeight: 44,
-    justifyContent: 'center',
-    paddingHorizontal: 18,
-    borderRadius: 22,
-  },
-  sound: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    borderRadius: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-  },
+  caption: { alignItems: 'center', gap: 6, minHeight: 20, paddingTop: 8 },
 });
