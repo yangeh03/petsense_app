@@ -26,6 +26,7 @@ from petsense.telemetry import realtime as telemetry_realtime
 from petsense.trends import routes as trends_routes
 from petsense.web import routes as web_routes
 from petsense.uwb import routes as uwb_routes
+from petsense.uwb import setup as uwb_setup
 
 
 def create_app(start_background=True):
@@ -58,6 +59,7 @@ def create_app(start_background=True):
     app.register_blueprint(trends_routes.bp)
     app.register_blueprint(web_routes.bp)
     app.register_blueprint(uwb_routes.bp)
+    app.register_blueprint(uwb_setup.bp)
 
     @app.after_request
     def app_cors_headers(response):
