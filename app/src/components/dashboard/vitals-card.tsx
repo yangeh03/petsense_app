@@ -70,16 +70,9 @@ export function VitalsCard({
               },
             ]}
           >
-            <View style={styles.labelRow}>
-              <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
-                {vital.label}
-              </ThemedText>
-              {vital.value !== null && vital.source === 'avg' && (
-                <ThemedText type="small" style={{ color: theme.warning }}>
-                  均值
-                </ThemedText>
-              )}
-            </View>
+            <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
+              {vital.label}
+            </ThemedText>
             <View style={styles.valueRow}>
               <ThemedText
                 style={styles.value}
@@ -166,13 +159,6 @@ const styles = StyleSheet.create({
   tap: { paddingVertical: 6 },
   vitals: { flexDirection: 'row', gap: 10 },
   vital: { flex: 1, gap: 5, minWidth: 0 },
-  labelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 4,
-    minHeight: 18,
-  },
   valueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 4 },
   value: {
     fontSize: 24,
