@@ -3,6 +3,7 @@ import { useCallback, useState } from 'react';
 
 import { useAuth } from '@/hooks/use-auth';
 import { ApiError, request } from '@/services/api';
+import { MapRefresh } from '@/services/map-refresh';
 import { appendMeasuredTrail, positionMatchesMap } from '@/services/map-viewport';
 import type { UwbMap, UwbPosition } from '@/types/uwb';
 
@@ -23,13 +24,13 @@ export function usePositionMap(deviceId: string | undefined) {
   const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState('');
   const [now, setNow] = useState(() => Date.now());
+  const [settledScope, setSettledScope] = useState('');
   useFocusEffect(
     useCallback(() => {
       if (!scope || !deviceId) return;
       let cancelled = false;
       let busy = false;
-      let map: UwbMap | null = null;
-      let loadedMap = false;
+      const maps = new MapRefresh(request);
       let controller: AbortController | null = null;
       async function poll() {
         if (busy) return;
@@ -42,17 +43,11 @@ export function usePositionMap(deviceId: string | undefined) {
             `/uwb/position${query}`,
             { signal: controller.signal },
           );
-          if (response.deviceId !== deviceId) throw new Error('设备数据不匹配');
+          if (!response || response.deviceId !== deviceId)
+            throw new Error('设备数据不完整或不匹配');
+          const positionReceived = Date.now();
           const position = response.position;
-          if (!loadedMap || (position && !positionMatchesMap(position, map))) {
-            const response = await request<{ deviceId: string; map: UwbMap | null }>(
-              `/uwb/map${query}`,
-              { signal: controller.signal },
-            );
-            if (response.deviceId !== deviceId) throw new Error('地图设备不匹配');
-            map = response.map;
-            loadedMap = true;
-          }
+          const map = await maps.refresh(deviceId!, position, controller.signal, Date.now());
           if (cancelled) return;
           const received = Date.now();
           setNow(received);
@@ -61,8 +56,15 @@ export function usePositionMap(deviceId: string | undefined) {
             const same =
               old?.scope === scope &&
               old.map?.mapId === map?.mapId &&
-              old.map?.version === map?.version;
-            const valid = positionMatchesMap(position, map) ? position : null;
+              old.map?.version === map?.version &&
+              old.map?.revision === map?.revision;
+            const remaining = Math.max(
+              0,
+              (position?.remainingMs ?? 0) - (received - positionReceived),
+            );
+            const valid = positionMatchesMap(position, map)
+              ? { ...position!, remainingMs: remaining, fresh: position!.fresh && remaining > 0 }
+              : null;
             const history = appendMeasuredTrail(
               same ? old.trail : [],
               valid,
@@ -78,12 +80,16 @@ export function usePositionMap(deviceId: string | undefined) {
           });
         } catch (failure) {
           if (!cancelled) {
-            if (failure instanceof ApiError && [401, 403].includes(failure.status)) setResult(null);
+            if (failure instanceof ApiError && [401, 403].includes(failure.status)) {
+              maps.clear();
+              setResult(null);
+            }
             setError(failure instanceof Error ? failure.message : '位置加载失败，请重试');
           }
         } finally {
           clearTimeout(timeout);
           busy = false;
+          if (!cancelled) setSettledScope(scope);
         }
       }
       void poll();
@@ -103,7 +109,8 @@ export function usePositionMap(deviceId: string | undefined) {
     position: scoped?.position ?? null,
     trail: scoped?.trail ?? [],
     fresh: !!scoped?.position?.fresh && now < scoped.deadline,
-    error: scope ? error : '',
+    loading: !!scope && settledScope !== scope,
+    error: scope && settledScope === scope ? error : '',
     reload: () => setRevision((n) => n + 1),
   };
 }

@@ -16,6 +16,7 @@ def owned_device(user):
 
 
 @bp.get('/map')
+@bp.get('/map-version')
 @bp.get('/position')
 def get_uwb():
     user, error = require_app_user()
@@ -25,8 +26,10 @@ def get_uwb():
     if error:
         return error
     try:
-        value = (service.map(device) if request.path.endswith('/map') else service.latest(device)) if device else None
+        kind = request.path.rsplit('/', 1)[-1]
+        reader = {'map': service.map, 'map-version': service.map_version, 'position': service.latest}[kind]
+        value = reader(device) if device else None
     except (ValueError, KeyError, OSError, TypeError):
         return {'message': '地图配置不可用，请检查标定配置'}, 503
     return {'success': True, 'deviceId': device,
-            'map' if request.path.endswith('/map') else 'position': value}, 200, {'Cache-Control': 'no-store'}
+            'position' if kind == 'position' else 'map': value}, 200, {'Cache-Control': 'no-store'}

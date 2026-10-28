@@ -1,4 +1,5 @@
 import copy
+import base64
 from datetime import timedelta
 import json
 import math
@@ -7,6 +8,7 @@ import shutil
 import tempfile
 from types import SimpleNamespace
 import unittest
+import zlib
 from unittest.mock import patch
 
 from flask import Flask
@@ -51,6 +53,16 @@ class UwbPositioningTests(unittest.TestCase):
                 'uwb': {'valid': True, 'tagId': 7, 'timer': timer, 'sequence': sequence,
                         'receivedMs': sample, 'anchorMask': 7,
                         'distanceMm': [math.sqrt(2)*1000, math.sqrt(10)*1000, math.sqrt(10)*1000]}}
+
+    def test_image_receipt_matches_the_validated_snapshot_even_if_file_is_replaced(self):
+        bundle = MapBundle(self.root / 'room')
+        expected = bundle.image.read_bytes()
+        bg = bundle.public()['background']
+        self.assertEqual(base64.b64decode(bg['imageDataUri'].split(',', 1)[1]), expected)
+        self.assertEqual(bg['byteLength'], len(expected))
+        self.assertEqual(bg['crc32'], f'{zlib.crc32(expected):08x}')
+        bundle.image.write_bytes(b'incomplete replacement')
+        self.assertEqual(bundle.public()['background'], bg)
 
     def test_known_point_and_transform(self):
         f = self.frame()
@@ -156,6 +168,35 @@ class UwbPositioningTests(unittest.TestCase):
             self.assertIsNone(client.get('/api/app/uwb/position', headers=owner).json['position'])
             self.binding.write_text('{"devices": {}}')
             self.assertIsNone(client.get('/api/app/uwb/map', headers=owner).json['map'])
+
+    def test_map_version_tracks_bindings_without_measurements_and_returns_no_image(self):
+        app = Flask(__name__)
+        app.register_blueprint(routes.bp)
+        client = app.test_client()
+        owner = {'X-Petsense-Session': make_session_token(self.owner)}
+        other = {'X-Petsense-Session': make_session_token(self.other)}
+        url = '/api/app/uwb/map-version?deviceId=collar'
+        with patch.object(routes, 'service', self.service):
+            self.assertEqual(client.get(url).status_code, 401)
+            self.assertEqual(client.get(url, headers=other).status_code, 403)
+            first = client.get(url, headers=owner)
+            self.assertEqual(first.headers['Cache-Control'], 'no-store')
+            metadata = first.json['map']
+            self.assertEqual(set(metadata), {'mapId', 'version', 'revision'})
+            self.assertEqual(metadata['revision'], self.service.map('collar')['revision'])
+            shutil.copytree(self.root / 'room', self.root / 'next')
+            d = copy.deepcopy(self.data)
+            d['version'] = 'v2'
+            (self.root / 'next/map.json').write_text(json.dumps(d))
+            self.binding.write_text(json.dumps({'devices': {'collar': {'directory': 'next', 'tagId': 7}}}))
+            second = client.get(url, headers=owner).json['map']
+            self.assertEqual(second['version'], 'v2')
+            self.assertNotEqual(second['revision'], metadata['revision'])
+            self.assertIsNone(self.service.latest('collar'))
+            self.binding.write_text(json.dumps({'devices': {'collar': {'directory': 'next', 'tagId': 8}}}))
+            self.assertNotEqual(client.get(url, headers=owner).json['map']['revision'], second['revision'])
+            self.binding.write_text('{"devices": {}}')
+            self.assertIsNone(client.get(url, headers=owner).json['map'])
 
     def test_bad_geometry_and_asset_traversal_are_rejected(self):
         for change in ['scale', 'matrix', 'image']:

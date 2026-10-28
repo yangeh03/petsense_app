@@ -1,12 +1,13 @@
 /* PanResponder refs are read/written only inside gesture callbacks. */
 /* eslint-disable react-hooks/refs */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { PanResponder, Pressable, StyleSheet, View } from 'react-native';
 import { Image } from 'expo-image';
+import { ActivityIndicator, PanResponder, Pressable, StyleSheet, View } from 'react-native';
 import Svg, { Circle, Polyline, Text as SvgText } from 'react-native-svg';
 
 import { ThemedText } from '@/components/themed-text';
 import { useTheme } from '@/hooks/use-theme';
+import { type MapImageLoad, updateMapImageLoad } from '@/services/map-image';
 import { backgroundImageRect, clampMapPan, mapBounds } from '@/services/map-viewport';
 import type { UwbMap, UwbPosition } from '@/types/uwb';
 
@@ -16,17 +17,37 @@ export function MapViewport({
   trail,
   fresh,
   onDragging,
+  onRetry,
 }: {
   map: UwbMap;
   position: UwbPosition | null;
   trail: { x: number; y: number }[];
   fresh: boolean;
   onDragging: (value: boolean) => void;
+  onRetry: () => void;
 }) {
   const theme = useTheme();
   const [width, setWidth] = useState(0);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [imageLoad, setImageLoad] = useState<MapImageLoad | null>(null);
+  const [showImageInfo, setShowImageInfo] = useState(false);
+  const bg = map.background;
+  const source = bg.imageDataUri;
+  const currentSource = useRef(source);
+  useLayoutEffect(() => {
+    currentSource.current = source;
+  }, [source]);
+  const currentLoad = imageLoad?.source === source ? imageLoad : null;
+  const imageError = currentLoad?.error ?? '';
+  const imageReady = !!currentLoad?.decoded && !!currentLoad.displayed && !imageError;
+  useEffect(() => {
+    if (imageReady || imageError) return;
+    const timeout = setTimeout(() => {
+      setImageLoad((old) => updateMapImageLoad(old, source, 'error', '底图加载超时，请重新加载'));
+    }, 12000);
+    return () => clearTimeout(timeout);
+  }, [source, imageReady, imageError]);
   const dragStart = useRef({ x: 0, y: 0, pageX: 0, pageY: 0 });
   const bounds = useMemo(() => mapBounds(map), [map]);
   // Stage follows the map aspect ratio so 1.0x fills the view without letterbox bands.
@@ -36,6 +57,7 @@ export function MapViewport({
     return Math.min(460, Math.max(180, fit));
   }, [width, bounds]);
   const viewport = useMemo(() => ({ width, height: stageHeight }), [width, stageHeight]);
+  const rasterRect = backgroundImageRect(map, bounds, viewport);
   const limited = clampMapPan(pan, viewport, bounds, zoom);
   const gestureState = useRef({ pan: limited, viewport, bounds, zoom, onDragging });
   useLayoutEffect(() => {
@@ -76,10 +98,8 @@ export function MapViewport({
       }),
     [],
   );
-  const bg = map.background;
   const point = position?.position;
   const stroke = Math.max(bounds.width, bounds.height) / 350;
-  const backgroundRect = backgroundImageRect(map, bounds, viewport);
   return (
     <View style={styles.wrapper}>
       <View
@@ -95,25 +115,48 @@ export function MapViewport({
             { transform: [{ translateX: limited.x }, { translateY: limited.y }, { scale: zoom }] },
           ]}
         >
-          {backgroundRect && (
+          {rasterRect && (
             <Image
-              source={{ uri: bg.imageDataUri }}
-              style={{
-                position: 'absolute',
-                left: backgroundRect.left,
-                top: backgroundRect.top,
-                width: backgroundRect.width,
-                height: backgroundRect.height,
-              }}
+              key={source}
+              accessibilityLabel="重建空间俯视底图"
+              source={{ uri: source, width: bg.width, height: bg.height }}
+              style={[styles.raster, rasterRect]}
               contentFit="fill"
-              pointerEvents="none"
+              allowDownscaling={false}
+              cachePolicy="none"
+              transition={0}
+              onLoad={({ source: decoded }) => {
+                if (currentSource.current !== source) return;
+                setImageLoad((old) =>
+                  decoded.width === bg.width && decoded.height === bg.height
+                    ? updateMapImageLoad(old, source, 'decoded')
+                    : updateMapImageLoad(
+                        old,
+                        source,
+                        'error',
+                        '底图解码尺寸与原图不一致，请重新加载',
+                      ),
+                );
+              }}
+              onDisplay={() => {
+                if (currentSource.current !== source) return;
+                setImageLoad((old) => updateMapImageLoad(old, source, 'displayed'));
+              }}
+              onError={() => {
+                if (currentSource.current !== source) return;
+                setImageLoad((old) =>
+                  updateMapImageLoad(old, source, 'error', '底图无法解码，请重新加载'),
+                );
+              }}
             />
           )}
           <Svg
             width="100%"
             height="100%"
+            style={styles.overlay}
             viewBox={`${bounds.minX} ${-(bounds.minY + bounds.height)} ${bounds.width} ${bounds.height}`}
             preserveAspectRatio="xMidYMid meet"
+            opacity={imageReady ? 1 : 0}
           >
             <Polyline
               points={[...map.polygon, map.polygon[0]].map(([x, y]) => `${x},${-y}`).join(' ')}
@@ -159,6 +202,17 @@ export function MapViewport({
             )}
           </Svg>
         </View>
+        {!imageReady && (
+          <View
+            pointerEvents="none"
+            style={[styles.loading, { backgroundColor: theme.backgroundSelected }]}
+          >
+            {!imageError && <ActivityIndicator color={theme.tint} />}
+            <ThemedText type="small" themeColor="textSecondary">
+              {imageError || '正在加载底图…'}
+            </ThemedText>
+          </View>
+        )}
       </View>
       <View style={styles.toolbar}>
         <ThemedText type="small" themeColor="textSecondary">
@@ -189,6 +243,53 @@ export function MapViewport({
           ))}
         </View>
       </View>
+      {imageError ? (
+        <Pressable accessibilityRole="button" accessibilityLabel="重新加载底图" onPress={onRetry}>
+          <ThemedText type="smallBold" themeColor="tint">
+            重新加载底图
+          </ThemedText>
+        </Pressable>
+      ) : imageReady ? (
+        <ThemedText type="small" themeColor="textSecondary">
+          {!position?.position
+            ? '已加载标定地图，等待项圈提供位置'
+            : !fresh
+              ? '定位已超时，灰色点为最后位置'
+              : position.status === 'low_quality'
+                ? '当前测距质量偏低，请参考实际环境'
+                : position.quality.insideMap === false
+                  ? '坐标位于标定范围之外，请核对锚点与地图'
+                  : '正在显示项圈的真实位置'}
+        </ThemedText>
+      ) : null}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="查看底图信息"
+        accessibilityState={{ expanded: showImageInfo }}
+        onPress={() => setShowImageInfo((value) => !value)}
+      >
+        <ThemedText type="small" themeColor="textSecondary">
+          底图信息
+        </ThemedText>
+      </Pressable>
+      {showImageInfo && (
+        <View style={styles.toolbar}>
+          <ThemedText type="small" themeColor="textSecondary" selectable>
+            {`原图：${bg.width} × ${bg.height} 像素\n地图：${map.mapId} / ${map.version}\nPNG 校验：通过${bg.byteLength ? ` · ${bg.byteLength} 字节` : ''}\n校验码：${bg.crc32 ?? '未提供'}\n解码与显示：${imageError ? '失败' : imageReady ? '成功' : '等待中'}`}
+          </ThemedText>
+          {!imageError && (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="重新加载底图"
+              onPress={onRetry}
+            >
+              <ThemedText type="smallBold" themeColor="tint">
+                重新加载底图
+              </ThemedText>
+            </Pressable>
+          )}
+        </View>
+      )}
     </View>
   );
 }
@@ -196,6 +297,18 @@ export function MapViewport({
 const styles = StyleSheet.create({
   wrapper: { width: '100%', gap: 12 },
   stage: { width: '100%', borderRadius: 18, overflow: 'hidden' },
+  raster: { position: 'absolute', zIndex: 0 },
+  overlay: { position: 'absolute', top: 0, left: 0, zIndex: 1 },
+  loading: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
   toolbar: { gap: 10 },
   buttons: { flexDirection: 'row', gap: 10 },
   button: { minHeight: 44, minWidth: 44, borderRadius: 12, padding: 12, alignItems: 'center' },

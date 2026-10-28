@@ -11,7 +11,7 @@ const code = ts.transpileModule(
   { compilerOptions: { module: ts.ModuleKind.CommonJS } },
 ).outputText;
 vm.runInNewContext(code, { exports: exportsObject });
-const { clampMapPan, mapBounds, appendMeasuredTrail, positionMatchesMap, backgroundImageRect } =
+const { clampMapPan, mapBounds, backgroundImageRect, appendMeasuredTrail, positionMatchesMap } =
   exportsObject;
 const telemetryExports = {};
 const telemetrySource = ts.transpileModule(
@@ -72,6 +72,24 @@ test('map bounds preserve metre coordinates and non-square image aspect', () => 
   assert.equal(b.minY, -1);
   assert.equal(b.width, 4);
   assert.equal(b.height, 2);
+});
+
+test('raster screen rectangle shares the overlay fit, offsets, aspect ratio and upward map Y', () => {
+  const fitted = backgroundImageRect(map, mapBounds(map), { width: 400, height: 300 });
+  assert.equal(fitted.left, 0);
+  assert.equal(fitted.top, 50);
+  assert.equal(fitted.width, 400);
+  assert.equal(fitted.height, 200);
+  // An anchor outside the raster expands the view to 8 x 4 metres.
+  const expanded = { ...map, anchors: [{ id: 0, position: [6, 3] }] };
+  const rect = backgroundImageRect(expanded, mapBounds(expanded), { width: 400, height: 200 });
+  assert.equal(rect.left, 0);
+  assert.equal(rect.top, 100);
+  assert.equal(rect.width, 200);
+  assert.equal(rect.height, 100);
+  // Physical point (0,0) is pixel (100,150) in both image and SVG projections.
+  assert.equal(rect.left + 200 * (rect.width / 400), 100);
+  assert.equal(rect.top + 100 * (rect.height / 200), 150);
 });
 
 test('pan is clamped after zoom/resize and cannot change physical positions', () => {

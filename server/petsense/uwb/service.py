@@ -75,7 +75,21 @@ class PositionService:
     def map(self, device_id):
         with self.lock:
             binding = self._binding(device_id)
-            return binding[0].public() if binding else None
+            return {**binding[0].public(), 'revision': self._map_revision(binding)} if binding else None
+
+    @staticmethod
+    def _map_revision(binding):
+        # Include the Tag binding so a change clears the previous Tag's trail.
+        return f'{binding[0].fingerprint}:{binding[1]}'
+
+    def map_version(self, device_id):
+        with self.lock:
+            binding = self._binding(device_id)
+            if not binding:
+                return None
+            d = binding[0].data
+            return {'mapId': d['mapId'], 'version': d['version'],
+                    'revision': self._map_revision(binding)}
 
     def enrich(self, frame, device_id, received_at=None, batch_age_ms=0):
         frame.pop('uwbPosition', None)  # Never trust a device-supplied server position.

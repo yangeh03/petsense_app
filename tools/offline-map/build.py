@@ -7,16 +7,19 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 
 import numpy as np
 from PIL import Image
 
 from rebuild_floor_slice_align import read_binary_xyzrgb
+from validate import validate_bundle, validate_config
+from orientation import choose_orientation, oriented_canvas, compose_uwb_transform
 
 
 def rasterize(scene, colors, low, extent, resolution, min_height, max_height):
-    width, height = np.ceil(extent / resolution).astype(int)
-    if width * height > 20_000_000:
+    width, height = np.ceil(extent / resolution - 1e-9).astype(int)
+    if min(width, height) < 1 or max(width, height) > 10000 or width * height > 20_000_000:
         raise ValueError('Raster too large; increase resolution')
     kept = (scene[:, 2] >= min_height) & (scene[:, 2] <= max_height)
     inside = ((scene[:, :2] >= low) & (scene[:, :2] < low + extent)).all(axis=1)
@@ -39,9 +42,13 @@ def build(args):
         raise ValueError('Three distinct anchor indices in 0..7 are required')
     if not (-.5 <= args.min_height < args.max_height <= 4):
         raise ValueError('Invalid height interval')
+    if not np.isfinite(args.obstacle_height) or not .08 < args.obstacle_height <= 4:
+        raise ValueError('Obstacle height must be greater than 0.08 and at most 4 metres')
     if not .005 <= args.resolution <= .1:
         raise ValueError('Resolution must be between 0.005 and 0.1 metres/pixel')
-    floor = json.loads(args.floor.read_text())
+    if getattr(args, 'orientation', 'auto') not in ('auto', 'none') or not np.isfinite(getattr(args, 'rotation_deg', 0)) or abs(getattr(args, 'rotation_deg', 0)) > 360:
+        raise ValueError('Invalid orientation mode or extra rotation (must be within +/-360 degrees)')
+    floor = json.loads(args.floor.read_text(encoding='utf-8'))
     scale = float(floor['scale_prior'])
     basis = np.asarray([floor['floor_axis_x_3d'], floor['floor_axis_y_3d'], floor['floor_up_normal_3d']], dtype=float)
     origin = np.asarray(floor['floor_origin_3d'], dtype=float)
@@ -49,46 +56,89 @@ def build(args):
         raise ValueError('Invalid confirmed floor')
     if not np.isfinite(origin).all() or not np.allclose(basis @ basis.T, np.eye(3), atol=1e-5):
         raise ValueError('Floor axes must be finite and orthonormal')
-    anchors = json.loads(args.anchors.read_text())['anchors_xyz_m']
-    alignment = json.loads(args.alignment.read_text())
+    anchors = json.loads(args.anchors.read_text(encoding='utf-8'))['anchors_xyz_m']
+    alignment = json.loads(args.alignment.read_text(encoding='utf-8'))
+    selected = []
+    for index in args.anchor_indices:
+        coordinate = anchors[f'A{index}']
+        if not isinstance(coordinate, list) or len(coordinate) not in (2, 3):
+            raise ValueError('Anchor coordinates must be XY or XYZ lists')
+        if not all(type(v) in (int, float) and np.isfinite(v) for v in coordinate):
+            raise ValueError('Anchor coordinates must be finite')
+        selected.append({'id': index, 'uwb': coordinate[:2]})
+    transform = {'scale': alignment['scale'], 'matrix': alignment['rotation_matrix'],
+                 'translation': alignment['translation_m']}
+    # Reject bad calibration before reading the large PLY or running morphology.
+    validate_config({'schemaVersion': 1, 'mapId': args.map_id, 'version': args.version,
+                     'units': 'm', 'anchors': selected, 'uwbTransform': transform,
+                     'polygon': [[0, 0], [1, 0], [0, 1]]})
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=f'.{args.output.name}-', dir=args.output.parent) as temp:
+        staging = Path(temp) / 'bundle'
+        staging.mkdir()
+        export(args, staging, floor, scale, basis, origin, selected, transform)
+        validate_bundle(staging)
+        if args.output.exists():
+            raise ValueError('Output was created during the build; refusing to replace it')
+        staging.rename(args.output)
+    print(f'Map bundle written to {args.output}; assign device and Tag separately in runtime bindings.json')
+
+
+def export(args, output, floor, scale, basis, origin, anchors, transform):
     points, colors = read_binary_xyzrgb(args.pointcloud)
     scene = (points - origin) @ basis.T / scale
     kept = (scene[:, 2] >= args.min_height) & (scene[:, 2] <= args.max_height)
     if kept.sum() < 100:
         raise ValueError('Height band is empty or too sparse')
-    args.output.mkdir(parents=True)
     here = Path(__file__).parent
     subprocess.run([sys.executable, str(here/'rebuild_accessible_space.py'),
                     '--pointcloud', str(args.pointcloud.resolve()), '--transform', str(args.floor.resolve()),
-                    '--height-m', str(args.obstacle_height), '--output-dir', str(args.output/'diagnostics')], check=True)
+                    '--height-m', str(args.obstacle_height), '--output-dir', str(output/'diagnostics')], check=True)
     subprocess.run([sys.executable, str(here/'rebuild_export_accessible_map.py'),
-                    '--boundary', str(args.output/'diagnostics/reachable_boundary.csv'),
-                    '--floor-transform', str(args.floor.resolve()), '--output', str(args.output/'polygon.json')], check=True)
-    grid = np.load(args.output/'diagnostics/navigation_grid.npz')
+                    '--boundary', str(output/'diagnostics/reachable_boundary.csv'),
+                    '--floor-transform', str(args.floor.resolve()), '--output', str(output/'polygon.json')], check=True)
+    geometry = json.loads((output/'polygon.json').read_text(encoding='utf-8'))
+    geometry['source_boundary'] = 'diagnostics/reachable_boundary.csv'
+    (output/'polygon.json').write_text(json.dumps(geometry, ensure_ascii=False, indent=2, allow_nan=False)+'\n', encoding='utf-8')
+    grid = np.load(output/'diagnostics/navigation_grid.npz')
     low = grid['low'] / scale
     h, w = grid['reachable'].shape
     extent = np.array([w, h]) * float(grid['cell_reconstruction_units']) / scale
-    raster = rasterize(scene, colors, low, extent, args.resolution, args.min_height, args.max_height)
+    matrix, translation, orientation = choose_orientation(geometry['coordinates'],
+        getattr(args, 'orientation', 'auto'), getattr(args, 'rotation_deg', 0))
+    orientation['sourceUwbTransform'] = transform
+    orientation['sourceBackground'] = {'origin': low.tolist(), 'extent': extent.tolist()}
+    # Bound the same original floor region before rotating; distant outliers must
+    # not enter through the new canvas's padded corners.
+    visible = ((scene[:, :2] >= low) & (scene[:, :2] < low + extent)).all(axis=1)
+    render_scene = scene[visible].copy()
+    render_scene[:, :2] = render_scene[:, :2] @ matrix.T + translation
+    new_low, new_extent = oriented_canvas(low, extent, args.resolution, matrix, translation)
+    raster = rasterize(render_scene, colors[visible], new_low, new_extent, args.resolution, args.min_height, args.max_height)
     height, width = raster.shape[:2]
-    Image.fromarray(raster).save(args.output/'floorplan.png')
-    polygon = json.loads((args.output/'polygon.json').read_text())['coordinates']
+    Image.fromarray(raster).save(output/'floorplan.png')
+    polygon = (np.asarray(geometry['coordinates']) @ matrix.T + translation).tolist()
+    geometry.update(coordinates=polygon, coordinate_frame='map', source_boundary_frame='confirmed-floor')
+    (output/'polygon.json').write_text(json.dumps(geometry, ensure_ascii=False, indent=2, allow_nan=False)+'\n', encoding='utf-8')
+    (output/'orientation.json').write_text(json.dumps(orientation, ensure_ascii=False, indent=2, allow_nan=False)+'\n', encoding='utf-8')
     manifest = {
         'schemaVersion': 1, 'mapId': args.map_id, 'version': args.version,
         'name': args.name, 'units': 'm', 'polygon': polygon,
-        'anchors': [{'id': i, 'uwb': anchors[f'A{i}'][:2]} for i in args.anchor_indices],
-        'uwbTransform': {'scale': alignment['scale'], 'matrix': alignment['rotation_matrix'],
-                         'translation': alignment['translation_m']},
-        'background': {'file': 'floorplan.png', 'origin': low.tolist(),
+        'anchors': anchors,
+        'uwbTransform': compose_uwb_transform(transform, matrix, translation),
+        'background': {'file': 'floorplan.png', 'origin': new_low.tolist(),
                        'metersPerPixel': args.resolution, 'width': int(width), 'height': int(height)},
         'staleAfterMs': 2000,
         'provenance': {'pointcloud': args.pointcloud.name, 'floor': args.floor.name,
                        'selectedFloor': floor.get('selected_floor_candidate'),
                        'modelUnitsPerMeter': scale, 'heightBandM': [args.min_height, args.max_height],
+                       'orientation': orientation,
                        'note': 'Height crop, not semantic ceiling segmentation; scale/floor require confirmation.'},
     }
-    (args.output/'map.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2)+'\n')
-    shutil.copyfile(args.floor, args.output/'confirmed-floor.json')
-    print(f'Map bundle written to {args.output}; assign device and Tag separately in runtime bindings.json')
+    (output/'map.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2, allow_nan=False)+'\n', encoding='utf-8')
+    shutil.copyfile(args.floor, output/'confirmed-floor.json')
+    print(f"Orientation: {orientation['method']}, rotation={orientation['rotationDeg']:.3f} deg; "
+          f"image={width} x {height}, ambiguous={orientation['ambiguous']}")
 
 
 def main():
@@ -103,7 +153,13 @@ def main():
     parser.add_argument('--obstacle-height', type=float, default=1.)
     parser.add_argument('--resolution', type=float, default=.01)
     parser.add_argument('--anchor-indices', type=int, nargs=3, default=[0, 1, 2])
-    build(parser.parse_args())
+    parser.add_argument('--orientation', choices=['auto', 'none'], default='auto')
+    parser.add_argument('--rotation-deg', type=float, default=0,
+                        help='Extra counterclockwise rotation after automatic alignment; use none for a manual angle')
+    try:
+        build(parser.parse_args())
+    except (ValueError, KeyError, TypeError, OSError, subprocess.CalledProcessError) as error:
+        parser.exit(2, f'Map build failed: {error}\n')
 
 
 if __name__ == '__main__':

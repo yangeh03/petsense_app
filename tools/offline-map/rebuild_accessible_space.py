@@ -110,6 +110,8 @@ def main() -> int:
     high += pad
     width = int(math.ceil((high[0] - low[0]) / cell)) + 1
     grid_height = int(math.ceil((high[1] - low[1]) / cell)) + 1
+    if width * grid_height > 20_000_000:
+        raise ValueError('Navigation grid too large; verify the confirmed floor scale and pointcloud extent')
     shape = (grid_height, width)
     print(f"  grid={width} x {grid_height}, cell={args.cell_m:.3f} m")
 
