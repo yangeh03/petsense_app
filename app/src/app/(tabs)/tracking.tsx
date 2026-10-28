@@ -50,7 +50,7 @@ export default function TrackingScreen() {
           <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
             <ThemedText type="smallBold">{location.map.name}</ThemedText>
             <MapViewport
-              key={`${location.map.mapId}:${location.map.version}`}
+              key={`${location.map.mapId}:${location.map.version}:${location.map.revision ?? ''}`}
               map={location.map}
               position={location.position}
               trail={location.trail}

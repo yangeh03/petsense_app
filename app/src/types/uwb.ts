@@ -18,6 +18,7 @@ export type UwbMap = {
   deviceId?: string;
   mapId: string;
   version: string;
+  revision?: string;
   name: string;
   units: 'm';
   polygon: [number, number][];

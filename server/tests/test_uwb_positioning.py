@@ -169,6 +169,35 @@ class UwbPositioningTests(unittest.TestCase):
             self.binding.write_text('{"devices": {}}')
             self.assertIsNone(client.get('/api/app/uwb/map', headers=owner).json['map'])
 
+    def test_map_version_tracks_bindings_without_measurements_and_returns_no_image(self):
+        app = Flask(__name__)
+        app.register_blueprint(routes.bp)
+        client = app.test_client()
+        owner = {'X-Petsense-Session': make_session_token(self.owner)}
+        other = {'X-Petsense-Session': make_session_token(self.other)}
+        url = '/api/app/uwb/map-version?deviceId=collar'
+        with patch.object(routes, 'service', self.service):
+            self.assertEqual(client.get(url).status_code, 401)
+            self.assertEqual(client.get(url, headers=other).status_code, 403)
+            first = client.get(url, headers=owner)
+            self.assertEqual(first.headers['Cache-Control'], 'no-store')
+            metadata = first.json['map']
+            self.assertEqual(set(metadata), {'mapId', 'version', 'revision'})
+            self.assertEqual(metadata['revision'], self.service.map('collar')['revision'])
+            shutil.copytree(self.root / 'room', self.root / 'next')
+            d = copy.deepcopy(self.data)
+            d['version'] = 'v2'
+            (self.root / 'next/map.json').write_text(json.dumps(d))
+            self.binding.write_text(json.dumps({'devices': {'collar': {'directory': 'next', 'tagId': 7}}}))
+            second = client.get(url, headers=owner).json['map']
+            self.assertEqual(second['version'], 'v2')
+            self.assertNotEqual(second['revision'], metadata['revision'])
+            self.assertIsNone(self.service.latest('collar'))
+            self.binding.write_text(json.dumps({'devices': {'collar': {'directory': 'next', 'tagId': 8}}}))
+            self.assertNotEqual(client.get(url, headers=owner).json['map']['revision'], second['revision'])
+            self.binding.write_text('{"devices": {}}')
+            self.assertIsNone(client.get(url, headers=owner).json['map'])
+
     def test_bad_geometry_and_asset_traversal_are_rejected(self):
         for change in ['scale', 'matrix', 'image']:
             d = copy.deepcopy(self.data)
