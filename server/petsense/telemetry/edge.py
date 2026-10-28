@@ -76,3 +76,8 @@ def reading_response(row):
 @bp.get('/edge/')
 def dashboard():
     return send_from_directory(str(Path(__file__).parent), 'edge_dashboard.html')
+
+
+@bp.get('/edge-collection.js')
+def collection_script():
+    return send_from_directory(str(Path(__file__).parent), 'edge_collection.js')

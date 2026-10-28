@@ -242,6 +242,13 @@ class CollectionStore:
                 if (not frame.get('utc_us') or frame.get('clock_age_us', 0) > 300000000
                         or time.time_ns()//1000 - state.get('received_us', 0) > 15000000):
                     return {'error': 'device clock not ready; wait for synchronized live status'}, 409
+                if frame.get('capture_active') and frame.get('session_id') != sid:
+                    return {'error': 'another session is already recording'}, 409
+                if frame.get('sd_ready') is False or frame.get('disk_errors') or frame.get('queue_drops') or frame.get('storage_draining') and not frame.get('capture_active'):
+                    return {'error': 'SD not ready, draining, or reporting errors'}, 409
+                free = frame.get('sd_free_bytes')
+                if isinstance(free, (int, float)) and free <= 1048576:
+                    return {'error': 'SD free space is below the 1 MiB reserve'}, 409
             # A queued MQTT command is not a device acknowledgement.
             command = dict(type='collection_' + action, session=sid)
             if action == 'arm':

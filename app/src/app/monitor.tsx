@@ -8,6 +8,7 @@ import { useTelemetry } from '@/hooks/use-telemetry';
 import { useTheme } from '@/hooks/use-theme';
 import { clockTime, currentPrediction } from '@/services/observation-view';
 import { parseTelemetryMessage } from '@/services/telemetry-service';
+import { storageSpace } from '@/services/storage-space';
 
 /** Engineering detail is a deliberate second layer, including only fields actually reported. */
 export default function MonitorScreen() {
@@ -153,6 +154,14 @@ export default function MonitorScreen() {
             {more ? '收起技术参数 −' : '展开技术参数 ＋'}
           </ThemedText>
         </Pressable>
+        <Row
+          label="SD 剩余 / 总容量"
+          value={
+            fresh
+              ? `${storageSpace(edge?.sdFreeBytes)} / ${storageSpace(edge?.sdTotalBytes)}`
+              : '等待设备在线'
+          }
+        />
         {more && (
           <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
             <Row label="模型" value={edge?.modelVersion || unavailable} />

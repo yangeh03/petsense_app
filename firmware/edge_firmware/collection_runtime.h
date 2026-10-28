@@ -27,6 +27,18 @@ static uint32_t lastBatchAttempt = 0;
 static File journal;
 static String journalPath;
 static uint32_t journalDurable = 0;
+static uint64_t sdTotalBytes = 0, sdUsedBytes = 0;
+static bool sdSpaceKnown = false, storageDraining = false;
+
+// Only the storage worker touches the filesystem; telemetry reads this cache.
+static void refreshStorageSpace() {
+  uint64_t total = cardReady ? SD_MMC.totalBytes() : 0;
+  uint64_t used = cardReady ? SD_MMC.usedBytes() : 0;
+  portENTER_CRITICAL(&stateMux);
+  sdTotalBytes = total; sdUsedBytes = used;
+  sdSpaceKnown = total > 0 && used <= total;
+  portEXIT_CRITICAL(&stateMux);
+}
 
 static uint32_t recordCrc(const uint8_t *data, size_t size) {
   uint32_t crc = 0xffffffff;
@@ -97,10 +109,12 @@ static void samplingWorker(void *) {
     last=start;
     serviceHealthModule(); captureAudioFeatureStep();
     String payload=buildCloudPayload();
-    char session[81], marker[81]; bool active; ClockAnchor anchor;
+    char session[81], marker[81]; bool active, spaceKnown, draining; ClockAnchor anchor;
+    uint64_t totalBytes, usedBytes;
     portENTER_CRITICAL(&stateMux);
     active=captureActive; strlcpy(session,activeSession,sizeof(session));
     strlcpy(marker,markerId,sizeof(marker)); anchor=clockAnchor;
+    totalBytes=sdTotalBytes; usedBytes=sdUsedBytes; spaceKnown=sdSpaceKnown; draining=storageDraining;
     portEXIT_CRITICAL(&stateMux);
     if(strcmp(seenMarker,marker)!=0) {strlcpy(seenMarker,marker,sizeof(seenMarker));stillSamples=0;armed=false;}
     float magnitude=sqrtf(imuData.accel[0]*imuData.accel[0]+imuData.accel[1]*imuData.accel[1]+imuData.accel[2]*imuData.accel[2]);
@@ -122,6 +136,10 @@ static void samplingWorker(void *) {
     payload+=",\"missed_deadlines\":"+String(missedDeadlines)+",\"queue_drops\":"+String(queueDrops);
     payload+=",\"disk_errors\":"+String(diskErrors)+",\"persisted_rows\":"+String(persistedRows);
     payload+=",\"sd_ready\":"+String(cardReady?"true":"false")+",\"capture_active\":"+String(active?"true":"false");
+    payload+=",\"sd_total_bytes\":"+(spaceKnown?decimal64(totalBytes):String("null"));
+    payload+=",\"sd_used_bytes\":"+(spaceKnown?decimal64(usedBytes):String("null"));
+    payload+=",\"sd_free_bytes\":"+(spaceKnown?decimal64(totalBytes-usedBytes):String("null"));
+    payload+=",\"storage_draining\":"+String(draining?"true":"false");
     payload+=",\"armed_marker\":\""+String(marker)+"\",\"marker_ready\":"+String(armed?"true":"false");
     payload+=",\"capture_cost_us\":"+decimal64(esp_timer_get_time()-start);
     payload+=",\"marker_id\":\""+String(trigger?marker:"")+"\"}";
@@ -179,11 +197,12 @@ static void storageWorker(void *) {
   SD_MMC.setPins(SDMMC_CLK_PIN,SDMMC_CMD_PIN,SDMMC_D0_PIN);
   cardReady=SD_MMC.begin("/sdcard",true,false,SDMMC_INIT_FREQ_KHZ,8) && SD_MMC.cardType()!=CARD_NONE;
   if(cardReady) {
+    refreshStorageSpace();
     String report=auditCard();
     xSemaphoreTake(liveMutex,portMAX_DELAY);auditReport=report;xSemaphoreGive(liveMutex);
   }
   xSemaphoreGive(diskMutex);
-  CaptureRecord record;
+  CaptureRecord record; uint32_t lastSpace=millis(), lastStop=0;
   while(true) {
     CaptureCommand command;
     if(xQueueReceive(commandQueue,&command,0)==pdTRUE) {
@@ -196,7 +215,8 @@ static void storageWorker(void *) {
             SD_MMC.setPins(SDMMC_CLK_PIN,SDMMC_CMD_PIN,SDMMC_D0_PIN);
             cardReady=SD_MMC.begin("/sdcard",true,false,SDMMC_INIT_FREQ_KHZ,8) && SD_MMC.cardType()!=CARD_NONE;
           }
-          if(cardReady && uxQueueMessagesWaiting(storageQueue)==0) {
+          refreshStorageSpace();
+          if(cardReady && sdSpaceKnown && sdTotalBytes-sdUsedBytes>1024*1024 && uxQueueMessagesWaiting(storageQueue)==0) {
             if(journal) {journal.flush();journal.close();}
             SD_MMC.mkdir("/collection_v2");
             journalPath="/collection_v2/"+String(command.session)+"_"+String(bootId)+".psj";
@@ -220,7 +240,7 @@ static void storageWorker(void *) {
         xSemaphoreTake(liveMutex,portMAX_DELAY);auditReport=report;xSemaphoreGive(liveMutex);
       } else if(strcmp(command.type,"collection_stop")==0) {
         portENTER_CRITICAL(&stateMux);
-        if(strcmp(command.session,activeSession)==0) {captureActive=false;markerId[0]=0;}
+        if(strcmp(command.session,activeSession)==0) {captureActive=false;markerId[0]=0;lastStop=millis();storageDraining=true;}
         portEXIT_CRITICAL(&stateMux);
       } else if(strcmp(command.type,"collection_arm")==0 && safeId(command.marker)) {
         portENTER_CRITICAL(&stateMux);
@@ -229,6 +249,7 @@ static void storageWorker(void *) {
       }
     }
     if(xQueueReceive(storageQueue,&record,pdMS_TO_TICKS(10))==pdTRUE) {
+      portENTER_CRITICAL(&stateMux);storageDraining=true;portEXIT_CRITICAL(&stateMux);
       xSemaphoreTake(diskMutex,portMAX_DELAY);
       uint32_t header[]={0x32534e50,record.length,recordCrc((uint8_t *)record.json,record.length)};
       if(!journal || journal.write((uint8_t *)header,sizeof(header))!=sizeof(header) ||
@@ -242,6 +263,14 @@ static void storageWorker(void *) {
       xSemaphoreTake(diskMutex,portMAX_DELAY);
       journal.flush(); journalDurable=journal.size(); persistedRows+=unflushed; unflushed=0;lastFlush=millis();
       xSemaphoreGive(diskMutex);
+    }
+    bool draining=unflushed>0 || uxQueueMessagesWaiting(storageQueue)>0 || (lastStop && millis()-lastStop<300);
+    portENTER_CRITICAL(&stateMux);
+    storageDraining=draining;
+    portEXIT_CRITICAL(&stateMux);
+    if(millis()-lastSpace>=10000) {
+      xSemaphoreTake(diskMutex,portMAX_DELAY);refreshStorageSpace();xSemaphoreGive(diskMutex);
+      lastSpace=millis();
     }
     vTaskDelay(1);
   }
@@ -359,7 +388,7 @@ void loop() {
   networkPauseUntil=0;
   if(!clockSentUs || millis()-lastClockSent>=30000) {
     clockSentUs=esp_timer_get_time();clockNonce++;lastClockSent=millis();
-    String request="{\"device\":\""+String(MQTT_CLIENT_ID)+"\",\"boot\":\""+String(bootId)+"\",\"nonce\":"+decimal64(clockNonce)+",\"t0_us\":"+decimal64(clockSentUs)+"}";
+    String request="{\"device\":\""+String(DEVICE_ID)+"\",\"boot\":\""+String(bootId)+"\",\"nonce\":"+decimal64(clockNonce)+",\"t0_us\":"+decimal64(clockSentUs)+"}";
     mqttPublishText("petsense/sensor/clock_v2",request);
   }
   if(millis()-lastPublish>=1000) {
@@ -370,6 +399,8 @@ void loop() {
     if(xSemaphoreTake(liveMutex,pdMS_TO_TICKS(5))==pdTRUE) {live=latestLive;xSemaphoreGive(liveMutex);}
     if(live.length()) {
       mqttPublishText("petsense/sensor/edge_v1",live);
+      String status="{\"device\":\""+String(DEVICE_ID)+"\",\"frame\":"+live+"}";
+      mqttPublishText("petsense/sensor/collection_status",status);
     }
   }
   delay(5);

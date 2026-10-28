@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/hooks/use-theme';
 import { useAuth } from '@/hooks/use-auth';
 import { fetchMyDevice, loadToken } from '@/services/api';
+import { storageSpace } from '@/services/storage-space';
 import {
   api,
   bj,
@@ -612,6 +613,11 @@ function CollectionScreen({ ownerId }: { ownerId: number }) {
         · 落盘 {device?.persisted_rows ?? 0} 条{'\n'}
         缺失时隙 {device?.missed_deadlines ?? 0} · 队列丢样 {device?.queue_drops ?? 0} · 写入错误{' '}
         {device?.disk_errors ?? 0}
+        {'\n'}SD 剩余 / 总容量：
+        {fresh
+          ? `${storageSpace(device?.sd_free_bytes)} / ${storageSpace(device?.sd_total_bytes)}`
+          : '等待设备在线'}
+        {device?.storage_draining && !device?.capture_active ? ' · 正在完成写入，请勿断电' : ''}
       </Text>
       {Platform.OS === 'web' ? (
         <View style={[styles.preview, { backgroundColor: theme.backgroundSelected }]}>
