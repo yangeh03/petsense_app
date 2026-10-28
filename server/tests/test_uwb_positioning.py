@@ -1,4 +1,5 @@
 import copy
+import base64
 from datetime import timedelta
 import json
 import math
@@ -7,6 +8,7 @@ import shutil
 import tempfile
 from types import SimpleNamespace
 import unittest
+import zlib
 from unittest.mock import patch
 
 from flask import Flask
@@ -51,6 +53,16 @@ class UwbPositioningTests(unittest.TestCase):
                 'uwb': {'valid': True, 'tagId': 7, 'timer': timer, 'sequence': sequence,
                         'receivedMs': sample, 'anchorMask': 7,
                         'distanceMm': [math.sqrt(2)*1000, math.sqrt(10)*1000, math.sqrt(10)*1000]}}
+
+    def test_image_receipt_matches_the_validated_snapshot_even_if_file_is_replaced(self):
+        bundle = MapBundle(self.root / 'room')
+        expected = bundle.image.read_bytes()
+        bg = bundle.public()['background']
+        self.assertEqual(base64.b64decode(bg['imageDataUri'].split(',', 1)[1]), expected)
+        self.assertEqual(bg['byteLength'], len(expected))
+        self.assertEqual(bg['crc32'], f'{zlib.crc32(expected):08x}')
+        bundle.image.write_bytes(b'incomplete replacement')
+        self.assertEqual(bundle.public()['background'], bg)
 
     def test_known_point_and_transform(self):
         f = self.frame()

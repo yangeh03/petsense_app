@@ -6,6 +6,7 @@ import json
 import math
 from pathlib import Path
 import re
+import zlib
 
 
 @dataclass(frozen=True)
@@ -105,11 +106,14 @@ class MapBundle:
         for key in ['width', 'height']:
             if type(bg[key]) is not int or not 1 <= bg[key] <= 10000:
                 raise ValueError('Invalid image dimensions')
+        if bg['width'] * bg['height'] > 20_000_000:
+            raise ValueError('Map image has too many pixels')
         if tuple(int.from_bytes(image[i:i+4], 'big') for i in [16, 20]) != (bg['width'], bg['height']):
             raise ValueError('Image dimensions do not match manifest')
         self.origin = xy(bg['origin'])
         self.resolution = number(bg['metersPerPixel'], .0001, 10)
         self.fingerprint = hashlib.sha256(raw + image).hexdigest()
+        self.image_bytes = image
 
     def public(self):
         d, c = self.data, self.config
@@ -118,7 +122,10 @@ class MapBundle:
         return {'schemaVersion': 1, 'mapId': d['mapId'], 'version': d['version'],
                 'name': d.get('name', d['mapId']), 'units': 'm', 'polygon': c.map_polygon_m,
                 'anchors': [{'id': i, 'position': point(p)} for i, p in zip(c.anchor_indices, c.anchors_uwb_m)],
-                'background': {**d['background'], 'imageDataUri': 'data:image/png;base64,' + base64.b64encode(self.image.read_bytes()).decode()},
+                'background': {**d['background'],
+                               'byteLength': len(self.image_bytes),
+                               'crc32': f'{zlib.crc32(self.image_bytes):08x}',
+                               'imageDataUri': 'data:image/png;base64,' + base64.b64encode(self.image_bytes).decode()},
                 'staleAfterMs': round(c.stale_after_seconds * 1000)}
 
 
