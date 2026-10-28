@@ -118,6 +118,9 @@ static void edgeStep(const String& raw, bool gap) {
   if(health)cJSON_AddItemToObject(result,"health",cJSON_Duplicate(health,true));
   cJSON* battery=cJSON_GetObjectItem(frame,"battery");
   if(battery)cJSON_AddItemToObject(result,"battery",cJSON_Duplicate(battery,true));
+  // UWB remains available during model warmup or invalid IMU/audio windows.
+  cJSON* uwb=cJSON_GetObjectItem(frame,"uwb");
+  if(uwb)cJSON_AddItemToObject(result,"uwb",cJSON_Duplicate(uwb,true));
   char* text=cJSON_PrintUnformatted(result);
   if(text){edgeSummary=text;cJSON_free(text);}
   cJSON_Delete(result);cJSON_Delete(frame);

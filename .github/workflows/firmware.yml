@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'firmware/petsense_esp32/**'
+      - 'firmware/edge_firmware/**'
       - 'firmware/tests/**'
       - 'firmware/check-build.sh'
       - 'server/tests/fixtures/uwb_wire.json'
@@ -12,6 +13,7 @@ on:
   pull_request:
     paths:
       - 'firmware/petsense_esp32/**'
+      - 'firmware/edge_firmware/**'
       - 'firmware/tests/**'
       - 'firmware/check-build.sh'
       - 'server/tests/fixtures/uwb_wire.json'
@@ -43,5 +45,5 @@ jobs:
       # pyserial at compile time, which the runner's setup-python lacks.
       - name: Install pyserial for bundled esptool
         run: python -m pip install pyserial
-      - name: Compile acquisition firmware without production credentials
+      - name: Compile both firmwares without production credentials
         run: bash firmware/check-build.sh

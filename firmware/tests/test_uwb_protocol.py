@@ -8,7 +8,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def compile_parser(output, device_id=None):
+def compile_parser(output, device_id=None, sketch='petsense_esp32'):
     output = Path(output)
     # Never create credentials or generated files in the sketch directory.
     (output.parent / 'secrets.h').write_text(
@@ -16,21 +16,22 @@ def compile_parser(output, device_id=None):
     # The board header also declares unrelated modem/audio string constants.
     command = ['g++', '-std=c++17', '-Wall', '-Wextra', '-Werror', '-Wno-unused-variable',
                '-I', str(output.parent), '-I', str(ROOT / 'firmware/tests/include'),
-               '-I', str(ROOT / 'firmware/petsense_esp32')]
+               '-I', str(ROOT / 'firmware' / sketch)]
     if device_id:
         command.append(f'-DPETSENSE_DEVICE_ID="{device_id}"')
     subprocess.run(command + [str(ROOT / 'firmware/tests/uwb_protocol_test.cpp'),
-                              str(ROOT / 'firmware/petsense_esp32/uwb_protocol.cpp'),
+                              str(ROOT / 'firmware' / sketch / 'uwb_protocol.cpp'),
                               '-o', str(output)], check=True)
 
 
 class UwbProtocolTests(unittest.TestCase):
+    sketch = 'petsense_esp32'
     @classmethod
     def setUpClass(cls):
         cls.holder = tempfile.TemporaryDirectory()
         cls.addClassCleanup(cls.holder.cleanup)
         cls.binary = Path(cls.holder.name) / 'uwb-test'
-        compile_parser(cls.binary)
+        compile_parser(cls.binary, sketch=cls.sketch)
 
     def run_case(self, name):
         return subprocess.check_output([str(self.binary), name], text=True)
@@ -60,8 +61,18 @@ class UwbProtocolTests(unittest.TestCase):
 
     def test_custom_device_id_updates_both_topics(self):
         binary = Path(self.holder.name) / 'uwb-custom'
-        compile_parser(binary, 'collar-test-002')
+        compile_parser(binary, 'collar-test-002', self.sketch)
         data = json.loads(subprocess.check_output([str(binary), 'contract'], text=True))
         self.assertEqual(data['deviceId'], 'collar-test-002')
         self.assertEqual(data['topic'], 'petsense/sensor/collar-test-002')
         self.assertEqual(data['commandTopic'], 'petsense/device/collar-test-002/command')
+
+
+class EdgeUwbProtocolTests(UwbProtocolTests):
+    sketch = 'edge_firmware'
+
+    def test_both_sketches_use_identical_wire_parser(self):
+        # Arduino builds sketches independently; guard their vendored parser copies.
+        for name in ('uwb_protocol.h', 'uwb_protocol.cpp'):
+            self.assertEqual((ROOT / 'firmware/petsense_esp32' / name).read_bytes(),
+                             (ROOT / 'firmware/edge_firmware' / name).read_bytes())

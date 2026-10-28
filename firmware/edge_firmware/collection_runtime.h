@@ -1,5 +1,6 @@
 #pragma once
 #include "edge_inference.h"
+#include "uwb_runtime.h"
 
 // Sampling owns all sensor drivers; storage owns writes; Arduino loop owns modem AT.
 static constexpr size_t RECORD_MAX = 3072;
@@ -108,7 +109,11 @@ static void samplingWorker(void *) {
     if(sampleGap) { uint32_t lost=(start-last)/100000-1; missedDeadlines+=lost; sequence+=lost; }
     last=start;
     serviceHealthModule(); captureAudioFeatureStep();
+    // Snapshot before buildCloudPayload stamps ts_ms: receivedMs must not be
+    // newer than the frame timestamp when RX runs concurrently on the other core.
+    const UwbPacket uwb=snapshotUwb();
     String payload=buildCloudPayload();
+    appendUwbSnapshot(payload,uwb);
     char session[81], marker[81]; bool active, spaceKnown, draining; ClockAnchor anchor;
     uint64_t totalBytes, usedBytes;
     portENTER_CRITICAL(&stateMux);
@@ -364,7 +369,10 @@ static bool readJournalBatch() {
 }
 
 void setup() {
-  DebugSerial.begin(921600,SERIAL_8N1,44,43);delay(1500);
+  DebugSerial.begin(UWB_BAUD,SERIAL_8N1,UWB_RX_PIN,DEBUG_TX_PIN);delay(1500);
+  if(xTaskCreatePinnedToCore(uwbWorker,"uwb-rx",3072,nullptr,2,nullptr,0)!=pdPASS) {
+    DebugSerial.println("FATAL: UWB task creation failed");while(true)delay(1000);
+  }
   if(!edgeSelfTest()) {while(true)delay(1000);}
   snprintf(bootId,sizeof(bootId),"%08lx%08lx",(unsigned long)esp_random(),(unsigned long)esp_random());
   storageQueue=xQueueCreate(24,sizeof(CaptureRecord));commandQueue=xQueueCreate(8,sizeof(CaptureCommand));
@@ -378,7 +386,7 @@ void setup() {
      xTaskCreatePinnedToCore(storageWorker,"sd-journal",10000,nullptr,1,nullptr,0)!=pdPASS) {
     DebugSerial.println("FATAL: task creation failed");while(true)delay(1000);
   }
-  DebugSerial.println("EDGE DOG MLP READY; 10Hz sampling, 1Hz summaries; no automatic SD recording");
+  DebugSerial.println("EDGE DOG MLP + UWB READY; BU03 TX1 -> GPIO42 at 115200; 1Hz summaries; no automatic SD recording");
   modemReady=initCellularNetwork();if(modemReady)mqttConnect();
 }
 

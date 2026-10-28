@@ -2,6 +2,8 @@
 #include "secrets.h"
 #include "esp_timer.h"
 #include "cJSON.h"
+#include "uwb_protocol.h"
+#include "board_config.h"
 TaskHandle_t collectorTask = nullptr;
 bool collectionHandleCommand();
 #include <Wire.h>
@@ -12,8 +14,7 @@ bool collectionHandleCommand();
 #include "driver/i2s.h"
 
 // =====================================================
-// 调试输出：UART0
-// ESP32-S3 默认 UART0: TX=GPIO43, RX=GPIO44
+// UART0 RX=GPIO42 receives BU03; TX=GPIO43 remains debug output.
 // =====================================================
 HardwareSerial DebugUart(0);
 
@@ -22,41 +23,57 @@ public:
   explicit DualDebugSerial(HardwareSerial &uart) : _uart(uart) {}
 
   void begin(unsigned long baud, uint32_t config, int8_t rxPin, int8_t txPin) {
+#if ARDUINO_USB_CDC_ON_BOOT
     Serial.begin(baud);
+#endif
+    _uart.setRxBufferSize(UWB_UART_RX_BUFFER_SIZE);
     _uart.begin(baud, config, rxPin, txPin);
   }
 
   size_t write(uint8_t value) override {
     size_t written = _uart.write(value);
+#if ARDUINO_USB_CDC_ON_BOOT
     if (Serial) {
       Serial.write(value);
     }
+#endif
     return written;
   }
 
   size_t write(const uint8_t *buffer, size_t size) override {
     size_t written = _uart.write(buffer, size);
+#if ARDUINO_USB_CDC_ON_BOOT
     if (Serial) {
       Serial.write(buffer, size);
     }
+#endif
     return written;
   }
 
   int available() {
-    return (Serial ? Serial.available() : 0) + _uart.available();
+    // UART0 input belongs exclusively to the UWB worker.
+#if ARDUINO_USB_CDC_ON_BOOT
+    return Serial ? Serial.available() : 0;
+#else
+    return 0;
+#endif
   }
 
   int read() {
+#if ARDUINO_USB_CDC_ON_BOOT
     if (Serial && Serial.available()) {
       return Serial.read();
     }
-    return _uart.read();
+#endif
+    return -1;
   }
 
   void flush() {
+#if ARDUINO_USB_CDC_ON_BOOT
     if (Serial) {
       Serial.flush();
     }
+#endif
     _uart.flush();
   }
 
@@ -120,29 +137,21 @@ static const uint8_t SD_MAX_OPEN_FILES = 16;
 static const int SDMMC_INIT_FREQ_KHZ = 20000;
 
 // ---------- 健康检测 UART ----------
-static const int HEALTH_RX_PIN = 40;  // ESP32 RX <- health module TX
-static const int HEALTH_TX_PIN = 41;  // ESP32 TX -> health module RX
 static const uint32_t HEALTH_BAUD = 9600;
 HardwareSerial HealthSerial(1);       // UART1, RX=GPIO40, TX=GPIO41
 
 // ---------- A7670E 4G MQTT ----------
-static const int MODEM_RX_PIN = 17;   // ESP32 RX <- A7670E TX
-static const int MODEM_TX_PIN = 18;   // ESP32 TX -> A7670E RX
 static const uint32_t MODEM_BAUD = 115200;
 HardwareSerial ModemSerial(2);
 
 static const char *CELLULAR_APN = "ctnet";
 static const char *MQTT_BROKER = "81.71.71.31";
 static const uint16_t MQTT_PORT = 80;
-static const char *MQTT_TOPIC = "petsense/sensor/esp32-001";
 static const char *MQTT_AUDIO_TOPIC = "petsense/sensor/audio";
 static const char *MQTT_AUDIO_FILE_TOPIC = "petsense/sensor/audio_file";
 static const char *MQTT_AUDIO_WAV_TOPIC = "petsense/sensor/audio_wav";
-static const char *MQTT_COMMAND_TOPIC = "petsense/device/petsense-esp32-001/command";
 static const char *MQTT_USERNAME = "petsense-device";
 static const char *MQTT_PASSWORD = PETSENSE_MQTT_PASSWORD;
-static const char *MQTT_CLIENT_ID = "esp32-001";
-static const char *DEVICE_ID = "petsense-esp32-001";
 static const uint32_t MQTT_RETRY_INTERVAL_MS = 60000;
 static const bool AUDIO_STREAM_ENABLED = false;
 static const bool AUDIO_FILE_ENABLED = true;
