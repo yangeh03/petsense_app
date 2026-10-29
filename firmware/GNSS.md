@@ -23,7 +23,8 @@ time and adds `ageMs` / `remainingMs`; clients expire it after receipt as well.
 
 The existing authenticated latest telemetry API and device-scoped WebSocket
 carry this object. Public laboratory debug and legacy SSE endpoints omit GPS. App Monitor
-details display fix status, WGS84 latitude/longitude and UTC; these coordinates
+details display fix status, WGS84 latitude/longitude and UTC. The Location tab
+also shows a Leaflet GPS map alongside indoor UWB (see `docs/GPS_LOCATION.md`); these coordinates
 are independent of the indoor UWB map coordinate system.
 
 For hardware verification: connect the antenna to **GNSS**, place it with a
