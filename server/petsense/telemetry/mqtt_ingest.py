@@ -243,11 +243,15 @@ def on_message(client, userdata, msg):
                 raise ValueError('Oversize edge summary')
             payload = json.loads(msg.payload)
             device_id = edge.validate(payload)
+            payload.pop('uwbPosition', None)
             serialized = json.dumps(payload, allow_nan=False, separators=(',', ':'))
             ts = store(msg.topic, serialized, device_id)
             if ts is None:
                 return
             _touch_device_last_seen(device_id)
+            uwb_service.enrich(payload, device_id, ts)
+            stats.remember_uwb(payload, iso_z(ts), device_id)
+            serialized = json.dumps(payload, allow_nan=False, separators=(',', ':'))
             broadcast_packet(json.dumps({'topic': msg.topic, 'payload': serialized,
                                          'received_at': iso_z(ts)}), device_id)
         except Exception as error:

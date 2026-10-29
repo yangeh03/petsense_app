@@ -20,7 +20,7 @@ from petsense.uwb.maps import Registry, MapBundle
 from petsense.uwb.service import PositionService
 from petsense.uwb import routes
 from petsense.uwb import service as service_module
-from petsense.telemetry import mqtt_ingest, realtime
+from petsense.telemetry import edge, mqtt_ingest, realtime
 from test_ws_scope import FakeWS
 
 ASSET = Path(__file__).resolve().parents[1] / 'petsense/uwb/assets/reconstruction-room-v1'
@@ -145,6 +145,62 @@ class UwbPositioningTests(unittest.TestCase):
             device.owner_id = self.other
             device.claimed_at = db.utc_now() + timedelta(seconds=1)
         self.assertIsNone(self.service.latest('collar'))
+
+    def ingest_edge(self, frame):
+        payload = dict(frame, source='esp32_mlp', boot_id='edge-boot', seq=frame['ts_ms'],
+                       action={'label': 'standing', 'confidence': .9},
+                       sound={'label': 'quiet', 'confidence': 0}, health={})
+        owner, other = FakeWS(), FakeWS()
+        with patch.object(service_module, 'service', self.service), \
+                patch.object(mqtt_ingest.actions_service, 'enrich_frame_with_action') as action, \
+                patch.dict(realtime.ws_clients, {owner: (self.owner, frozenset({'collar'})),
+                                                other: (self.other, frozenset({'other'}))}, clear=True):
+            mqtt_ingest.on_message(None, None, SimpleNamespace(topic=edge.TOPIC,
+                                  payload=json.dumps(payload).encode()))
+            action.assert_not_called()  # Preserve board-side inference.
+        self.assertEqual(other.sent, [])
+        self.assertEqual(len(owner.sent), 1)
+        return json.loads(json.loads(owner.sent[0])['payload'])
+
+    def test_edge_summary_positions_and_keeps_action_and_raw_uwb(self):
+        frame = self.ingest_edge(self.frame())
+        self.assertAlmostEqual(frame['uwbPosition']['position']['x'], 1)
+        self.assertAlmostEqual(frame['uwbPosition']['position']['y'], 1)
+        self.assertEqual(frame['action'], {'label': 'standing', 'confidence': .9})
+        self.assertEqual(frame['uwb'], self.frame()['uwb'])
+        latest = mqtt_ingest.stats.last_uwb_frames['collar']['payload']
+        self.assertEqual(latest['uwbPosition'], frame['uwbPosition'])
+
+    def test_edge_duplicate_measurement_does_not_extend_freshness_and_disconnect_expires(self):
+        with patch('petsense.uwb.service.time.monotonic', return_value=10):
+            self.ingest_edge(self.frame())
+        with patch('petsense.uwb.service.time.monotonic', return_value=11):
+            frame = self.ingest_edge(self.frame(sample=1100))
+            self.assertEqual(frame['uwbPosition']['remainingMs'], 1000)
+        frame = self.frame(sample=1300)
+        frame['uwb']['valid'] = False
+        result = self.ingest_edge(frame)
+        self.assertFalse(result['uwbPosition']['fresh'])
+        self.assertEqual(result['uwbPosition']['status'], 'stale')
+
+    def test_edge_untrusted_position_is_removed_even_without_matching_tag(self):
+        frame = self.frame()
+        frame['uwb']['tagId'] = 8
+        frame['uwbPosition'] = {'position': {'x': 999, 'y': 999}}
+        result = self.ingest_edge(frame)
+        self.assertNotIn('uwbPosition', result)
+        from petsense.db.models import Reading
+        from sqlalchemy import select
+        with db.session_scope() as session:
+            raw = session.execute(select(Reading.payload).where(Reading.device_id == 'collar')).scalar_one()
+        self.assertNotIn('uwbPosition', json.loads(raw))
+
+    def test_edge_missing_anchors_keeps_summary_but_does_not_fabricate_a_position(self):
+        frame = self.frame()
+        frame['uwb']['anchorMask'] = 1
+        result = self.ingest_edge(frame)
+        self.assertNotIn('uwbPosition', result)
+        self.assertEqual(result['action']['label'], 'standing')
 
     def test_precise_coordinates_do_not_enter_legacy_unscoped_sse(self):
         packet = json.dumps({'payload': json.dumps({'uwb': {'valid': True}, 'uwbPosition': {'position': {'x': 1, 'y': 2}}})})

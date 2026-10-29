@@ -68,6 +68,45 @@ test('real edge schema preserves resting prediction and quiet zero confidence', 
   assert.equal(frame.edge.sound.confidence, 0);
   assert.equal(frame.battery.percent, 0);
 });
+
+test('edge summary carries UWB ranges and server position alongside board predictions', () => {
+  const uwb = {
+    valid: true,
+    receivedMs: 100,
+    timer: 123,
+    tagId: 7,
+    anchorId: 2,
+    sequence: 31,
+    anchorMask: 7,
+    kalmanEnabled: false,
+    distanceMm: [1000, 2000, 3000, 0, 0, 0, 0, 0],
+    rawMm: [1000, 2000, 3000, 0, 0, 0, 0, 0],
+    kalmanMm: [0, 0, 0, 0, 0, 0, 0, 0],
+  };
+  const uwbPosition = {
+    schemaVersion: 1,
+    deviceId: 'edge',
+    mapId: 'room',
+    mapVersion: 'v1',
+    status: 'ok',
+    fresh: true,
+    position: { x: 1, y: 1 },
+    remainingMs: 1500,
+    quality: { score: 1, residualM: 0, insideMap: true },
+  };
+  const frame = parse({ ...raw, uwb, uwbPosition });
+  assert.deepEqual(JSON.parse(JSON.stringify(frame.uwb)), uwb);
+  assert.deepEqual(JSON.parse(JSON.stringify(frame.uwbPosition)), uwbPosition);
+  assert.equal(frame.edge.action.label, 'lying down');
+  assert.equal(frame.edge.sound.label, 'quiet');
+  const stale = parse({
+    ...raw,
+    uwb: { ...uwb, valid: false },
+    uwbPosition: { ...uwbPosition, status: 'stale', fresh: false, remainingMs: 0 },
+  });
+  assert.equal(stale.uwb.valid, false);
+  assert.equal(stale.uwbPosition.fresh, false);
+});
 test('unknown labels and malformed confidence never become confident predictions', () => {
   const frame = parse({
     ...raw,
