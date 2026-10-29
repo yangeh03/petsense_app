@@ -16,7 +16,7 @@ import urllib.error
 import urllib.request
 
 MANAGED_FILES = (
-    "petsense", "wsgi.py",
+    "petsense", "wsgi.py", "map_tools",
     "alembic", "alembic.ini",
     "models/random_forest_1s.joblib",
     "action-dashboard/index.html",
@@ -160,6 +160,9 @@ def main():
                         "-i", "https://mirrors.cloud.tencent.com/pypi/simple",
                         "-r", str(release / "server/requirements.lock")], check=True)
         subprocess.run([python, "-m", "unittest", "discover", "-s", "server/tests", "-v"],
+                       cwd=release, check=True,
+                       env={**os.environ, "PETSENSE_MQTT_DISABLED": "1"})
+        subprocess.run([python, "-m", "unittest", "discover", "-s", "server/map_tools/tests", "-v"],
                        cwd=release, check=True,
                        env={**os.environ, "PETSENSE_MQTT_DISABLED": "1"})
         # 模型优先用发布包内的；包不含模型（常态）时用现网文件校验加载

@@ -84,6 +84,7 @@ jobs:
           filters: |
             server:
               - 'server/**'
+              - 'tools/offline-map/**'
               - '.github/workflows/ci.yml'
       # workflow_dispatch 视为强制部署（保持原 Run workflow 语义）
       - name: 决定是否执行
@@ -110,6 +111,7 @@ jobs:
         run: |
           python -m compileall -q server
           python -m unittest discover -s server/tests -v
+          python -m unittest discover -s tools/offline-map/tests -v
       - name: 验证动作模型可加载
         if: steps.decide.outputs.run == 'true'
         working-directory: server
@@ -177,7 +179,7 @@ jobs:
           printf '%s\n' "$KNOWN_HOSTS" > "$hosts_file"
           # gzip + 排除 29MB 的动作模型（服务器已有同一份，deploy 会复用现网文件校验），
           # 把跨境传输从 29MB 压到几十 KB，避免被跨境链路限速拖死
-          git archive --format=tar.gz HEAD -- server ':(exclude)server/models' | ssh \
+          git archive --format=tar HEAD -- server tools/offline-map ':(exclude)server/models' | python server/deploy/package_release.py | ssh \
             -i "$key_file" -o IdentitiesOnly=yes -o BatchMode=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$hosts_file" \
             -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=6 \

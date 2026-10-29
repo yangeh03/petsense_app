@@ -139,7 +139,7 @@ class Registry:
         self.path = Path(bindings)
         self.cache = {}
 
-    def for_device(self, device):
+    def for_device(self, device, identity=None):
         if not self.path.exists():
             return None
         if self.path.stat().st_size > 100_000:
@@ -152,6 +152,8 @@ class Registry:
             return None
         if not isinstance(entry, dict):
             raise ValueError('Invalid device binding')
+        if 'ownerId' in entry and identity != (entry['ownerId'], entry.get('claimedAt')):
+            return None
         root = self.path.parent.resolve()
         directory = (root / entry['directory']).resolve()
         if not directory.is_relative_to(root):

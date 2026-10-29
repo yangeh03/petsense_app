@@ -99,7 +99,12 @@ export default function TrackingScreen() {
         )}
         {dashboard?.pet?.device_id && (
           <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
-            <UwbSetup key={dashboard.pet.device_id} deviceId={dashboard.pet.device_id} />
+            <UwbSetup
+              key={dashboard.pet.device_id}
+              deviceId={dashboard.pet.device_id}
+              onPublished={location.reload}
+              onDragging={setDragging}
+            />
           </View>
         )}
         {location.error !== '' && (

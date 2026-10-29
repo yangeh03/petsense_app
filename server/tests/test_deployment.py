@@ -8,9 +8,24 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "deploy"))
 from deploy_server import MANAGED_FILES, activate, check_health
 from receive import extract_archive
+from package_release import package
 
 
 class DeploymentTests(unittest.TestCase):
+    def test_offline_tools_are_packaged_inside_receiver_allowlist(self):
+        source = io.BytesIO()
+        with tarfile.open(fileobj=source, mode='w') as archive:
+            for name in ['server/wsgi.py', 'tools/offline-map/setup_align.py', 'other/file']:
+                info = tarfile.TarInfo(name)
+                info.size = 4
+                archive.addfile(info, io.BytesIO(b'code'))
+        source.seek(0)
+        target = io.BytesIO()
+        package(source, target)
+        target.seek(0)
+        with tarfile.open(fileobj=target, mode='r:gz') as archive:
+            self.assertEqual(archive.getnames(), ['server/wsgi.py', 'server/map_tools/setup_align.py'])
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

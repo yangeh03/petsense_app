@@ -28,3 +28,13 @@ typing_extensions==4.12.2
 urllib3==2.8.0
 Werkzeug==3.1.8
 wsproto==1.3.2
+# Offline point-cloud export worker (isolated subprocess, no GUI).
+matplotlib==3.9.4
+contourpy==1.3.2
+cycler==0.12.1
+fonttools==4.60.1
+kiwisolver==1.4.9
+packaging==25.0
+pyparsing==3.2.5
+python-dateutil==2.9.0.post0
+six==1.17.0
