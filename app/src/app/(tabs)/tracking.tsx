@@ -6,6 +6,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { MapViewport } from '@/components/location/map-viewport';
+import { DisplayPlanCard } from '@/components/location/display-plan';
+import { useDisplayPlan } from '@/hooks/use-display-plan';
 import { GpsMap } from '@/components/location/gps-map';
 import { UwbSetup } from '@/components/location/uwb-setup';
 import { BottomTabInset, MaxContentWidth, Shadows, Spacing } from '@/constants/theme';
@@ -46,6 +48,7 @@ export default function TrackingScreen() {
   const matching = latest?.deviceId === dashboard?.pet?.device_id && isFresh ? latest : null;
   const hasRanges = matching?.uwb?.valid && matching.uwb.distanceMm.length > 0;
   const location = usePositionMap(dashboard?.pet?.device_id);
+  const display = useDisplayPlan(dashboard?.pet?.device_id);
   const [dragging, setDragging] = useState(false);
   return (
     <ScrollView
@@ -71,7 +74,15 @@ export default function TrackingScreen() {
           </View>
         </View>
         <ThemedText style={styles.sectionTitle}>室内 UWB 定位</ThemedText>
-        {location.map && (
+        {display.plan && (
+          <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
+            <DisplayPlanCard
+              key={`${display.plan.planId}:${display.plan.revision}`}
+              plan={display.plan}
+            />
+          </View>
+        )}
+        {!display.plan && !display.loading && !display.error && location.map && (
           <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
             <ThemedText type="smallBold">{location.map.name}</ThemedText>
             <MapViewport
@@ -85,7 +96,7 @@ export default function TrackingScreen() {
             />
           </View>
         )}
-        {location.loading && (
+        {(display.loading || (!display.plan && location.loading)) && (
           <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
             <ActivityIndicator color={theme.tint} />
             <ThemedText type="small" themeColor="textSecondary">
@@ -93,34 +104,38 @@ export default function TrackingScreen() {
             </ThemedText>
           </View>
         )}
-        {!location.map && !location.loading && (
-          <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
-            <View style={[styles.icon, { backgroundColor: theme.tintBackground }]}>
-              <SymbolView
-                name={{ ios: 'location.slash', android: 'location_off', web: 'location_off' }}
-                size={32}
-                tintColor={theme.tint}
-              />
-            </View>
-            <ThemedText style={styles.sectionTitle}>
-              {hasRanges ? '已收到测距，尚未完成户型标定' : '等待室内定位数据'}
-            </ThemedText>
-            <ThemedText themeColor="textSecondary" style={styles.description}>
-              {hasRanges
-                ? '项圈提供了真实测距数据，但尚不能据此确定房间。完成锚点与户型标定后，才能显示位置。'
-                : '当前没有收到可用的 UWB 坐标。完成锚点与地图标定后，这里会显示室内位置。'}
-            </ThemedText>
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => router.push('/monitor')}
-              style={[styles.button, { backgroundColor: theme.tintBackground }]}
-            >
-              <ThemedText type="smallBold" style={{ color: theme.tint }}>
-                查看项圈能力 ›
+        {!display.plan &&
+          !display.loading &&
+          !display.error &&
+          !location.map &&
+          !location.loading && (
+            <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
+              <View style={[styles.icon, { backgroundColor: theme.tintBackground }]}>
+                <SymbolView
+                  name={{ ios: 'location.slash', android: 'location_off', web: 'location_off' }}
+                  size={32}
+                  tintColor={theme.tint}
+                />
+              </View>
+              <ThemedText style={styles.sectionTitle}>
+                {hasRanges ? '已收到测距，尚未完成户型标定' : '等待室内定位数据'}
               </ThemedText>
-            </Pressable>
-          </View>
-        )}
+              <ThemedText themeColor="textSecondary" style={styles.description}>
+                {hasRanges
+                  ? '项圈提供了真实测距数据，但尚不能据此确定房间。完成锚点与户型标定后，才能显示位置。'
+                  : '当前没有收到可用的 UWB 坐标。完成锚点与地图标定后，这里会显示室内位置。'}
+              </ThemedText>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => router.push('/monitor')}
+                style={[styles.button, { backgroundColor: theme.tintBackground }]}
+              >
+                <ThemedText type="smallBold" style={{ color: theme.tint }}>
+                  查看项圈能力 ›
+                </ThemedText>
+              </Pressable>
+            </View>
+          )}
         <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
           <ThemedText style={styles.sectionTitle}>GPS 定位</ThemedText>
           <ThemedText
@@ -158,7 +173,14 @@ export default function TrackingScreen() {
             />
           </View>
         )}
-        {location.error !== '' && (
+        {display.error !== '' && (
+          <Pressable accessibilityRole="button" onPress={display.reload}>
+            <ThemedText type="small" themeColor="textSecondary">
+              {display.error} · 点击重试
+            </ThemedText>
+          </Pressable>
+        )}
+        {!display.plan && location.error !== '' && (
           <Pressable accessibilityRole="button" onPress={location.reload}>
             <ThemedText type="small" themeColor="textSecondary">
               位置暂未更新：{location.error} · 点击重试
