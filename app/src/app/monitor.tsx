@@ -35,6 +35,9 @@ export default function MonitorScreen() {
         ? snapshot
         : null;
   const age = frame ? now - Date.parse(frame.receivedAt) : Infinity;
+  const gps = frame?.gps;
+  const gpsFresh =
+    gps?.valid && age >= -5000 && age < gps.remainingMs && displayState !== 'replaying';
   const fresh = !!frame && age >= -5000 && age < 10_000 && displayState !== 'replaying';
   const edge = frame?.edge;
   const prediction = currentPrediction(frame, !!frame);
@@ -198,6 +201,29 @@ export default function MonitorScreen() {
                   : unavailable
               }
             />
+            <Row
+              label="GPS 状态"
+              value={
+                gpsFresh
+                  ? '已定位'
+                  : gps?.valid
+                    ? '定位已过期'
+                    : {
+                        disabled: '已关闭',
+                        starting: '启动中',
+                        searching: '搜星中',
+                        stale: '定位已过期',
+                        error: '定位异常',
+                      }[gps?.status || ''] || unavailable
+              }
+            />
+            <Row
+              label="GPS 经纬度（WGS84）"
+              value={
+                gpsFresh ? `${gps.latitude?.toFixed(7)}, ${gps.longitude?.toFixed(7)}` : unavailable
+              }
+            />
+            <Row label="GPS UTC" value={gpsFresh ? gps.utc || unavailable : unavailable} />
             <Row
               label="设备运行"
               value={frame ? `${Math.floor(frame.tsMs / 1000)}秒` : unavailable}

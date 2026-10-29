@@ -115,6 +115,14 @@ export type EdgeInference = {
 
 /** 解析后的传感器帧 */
 export type TelemetryFrame = {
+  gps?: {
+    valid: boolean;
+    status: string;
+    latitude: number | null;
+    longitude: number | null;
+    utc: string | null;
+    remainingMs: number;
+  };
   uwbPosition?: import('@/types/uwb').UwbPosition;
   edge?: EdgeInference;
   deviceId: string;

@@ -292,6 +292,8 @@ void stopEventCapture();
 // =====================================================
 // A7670E 4G / MQTT
 // =====================================================
+#include "gnss_runtime.h"
+
 static void appendModemAsyncChar(char ch);
 static bool handleModemAsyncCommands();
 
@@ -359,6 +361,7 @@ void modemSendLine(const String &cmd) {
 }
 
 static void appendModemAsyncChar(char ch) {
+  feedGnss(ch);
   modemAsyncBuffer += ch;
   if (modemAsyncBuffer.length() > 2400) {
     modemAsyncBuffer.remove(0, modemAsyncBuffer.length() - 1200);
@@ -652,6 +655,9 @@ bool modemWaitPromptAndWrite(const String &cmd, const uint8_t *data, size_t data
 }
 
 bool initCellularNetwork() {
+  gnssController.reset(millis());
+  updateGnssSnapshot();
+  ModemSerial.setRxBufferSize(4096);
   ModemSerial.begin(MODEM_BAUD, SERIAL_8N1, MODEM_RX_PIN, MODEM_TX_PIN);
   delay(1200);
   modemDrain(500);
@@ -1219,6 +1225,7 @@ String buildCloudPayload() {
   appendInt32Array(payload, uwb.kalmanMm, UWB_DISTANCE_COUNT);
   payload += "}}";
 
+  appendGnssSnapshot(payload, snapshotGnss());
   return payload;
 }
 
@@ -1407,6 +1414,7 @@ static bool appendCloudBatchSample() {
   appendInt32Array(cloudBatchPayload, uwb.kalmanMm, UWB_DISTANCE_COUNT);
   cloudBatchPayload += "]}";
 
+  appendGnssSnapshot(cloudBatchPayload, snapshotGnss());
   cloudBatchCount++;
   return true;
 }
@@ -1419,7 +1427,11 @@ void publishCloudSnapshot() {
     return;
   }
 
-  cloudBatchPayload += "],\"count\":";
+  // Include time spent waiting for the AT channel/reconnection in GPS age.
+  if (!mqttConnected && !mqttConnect()) return;
+  cloudBatchPayload += "],\"sent_ms\":";
+  cloudBatchPayload += millis();
+  cloudBatchPayload += ",\"count\":";
   cloudBatchPayload += cloudBatchCount;
   cloudBatchPayload += '}';
 
@@ -3535,6 +3547,15 @@ void loop() {
   }
 
   captureAudioFeatureStep();
+
+  if (serviceGnss()) {
+    if (millis() - lastCloudSampleMs >= CLOUD_SAMPLE_INTERVAL_MS) {
+      lastCloudSampleMs = millis();
+      appendCloudBatchSample();
+    }
+    delay(5);
+    return;
+  }
 
   if (AUDIO_STREAM_ENABLED) {
     publishAudioStreamFrame();

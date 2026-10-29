@@ -121,6 +121,8 @@ static void edgeStep(const String& raw, bool gap) {
   // UWB remains available during model warmup or invalid IMU/audio windows.
   cJSON* uwb=cJSON_GetObjectItem(frame,"uwb");
   if(uwb)cJSON_AddItemToObject(result,"uwb",cJSON_Duplicate(uwb,true));
+  cJSON* gps=cJSON_GetObjectItem(frame,"gps");
+  if(gps)cJSON_AddItemToObject(result,"gps",cJSON_Duplicate(gps,true));
   char* text=cJSON_PrintUnformatted(result);
   if(text){edgeSummary=text;cJSON_free(text);}
   cJSON_Delete(result);cJSON_Delete(frame);

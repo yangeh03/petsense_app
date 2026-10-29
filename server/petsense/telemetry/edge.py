@@ -60,14 +60,17 @@ def debug_latest():
             .where(Reading.device_id == DEBUG_DEVICE_ID, Reading.topic == TOPIC)
             .order_by(Reading.id.desc()).limit(1)
         ).first()
-    return reading_response(row)
+    return reading_response(row, public=True)
 
 
-def reading_response(row):
+def reading_response(row, public=False):
+    payload = json.loads(row.payload) if row else None
+    if public and isinstance(payload, dict):
+        payload.pop("gps", None)
     age = max(0, (utc_now() - row.received_at).total_seconds()) if row else None
     response = jsonify(online=age is not None and age < 10,
                        age_s=round(age, 2) if age is not None else None,
-                       payload=json.loads(row.payload) if row else None)
+                       payload=payload)
     response.headers['Cache-Control'] = 'no-store'
     return response
 
