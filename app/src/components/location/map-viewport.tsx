@@ -18,6 +18,8 @@ export function MapViewport({
   fresh,
   onDragging,
   onRetry,
+  onImageReady,
+  preview = false,
 }: {
   map: UwbMap;
   position: UwbPosition | null;
@@ -25,6 +27,8 @@ export function MapViewport({
   fresh: boolean;
   onDragging: (value: boolean) => void;
   onRetry: () => void;
+  onImageReady?: (ready: boolean) => void;
+  preview?: boolean;
 }) {
   const theme = useTheme();
   const [width, setWidth] = useState(0);
@@ -41,6 +45,10 @@ export function MapViewport({
   const currentLoad = imageLoad?.source === source ? imageLoad : null;
   const imageError = currentLoad?.error ?? '';
   const imageReady = !!currentLoad?.decoded && !!currentLoad.displayed && !imageError;
+  useEffect(() => {
+    onImageReady?.(imageReady);
+    return () => onImageReady?.(false);
+  }, [imageReady, onImageReady]);
   useEffect(() => {
     if (imageReady || imageError) return;
     const timeout = setTimeout(() => {
@@ -251,15 +259,17 @@ export function MapViewport({
         </Pressable>
       ) : imageReady ? (
         <ThemedText type="small" themeColor="textSecondary">
-          {!position?.position
-            ? '已加载标定地图，等待项圈提供位置'
-            : !fresh
-              ? '定位已超时，灰色点为最后位置'
-              : position.status === 'low_quality'
-                ? '当前测距质量偏低，请参考实际环境'
-                : position.quality.insideMap === false
-                  ? '坐标位于标定范围之外，请核对锚点与地图'
-                  : '正在显示项圈的真实位置'}
+          {preview
+            ? '绕边轨迹配准预览 · 尚未启用为实时地图'
+            : !position?.position
+              ? '已加载标定地图，等待项圈提供位置'
+              : !fresh
+                ? '定位已超时，灰色点为最后位置'
+                : position.status === 'low_quality'
+                  ? '当前测距质量偏低，请参考实际环境'
+                  : position.quality.insideMap === false
+                    ? '坐标位于标定范围之外，请核对锚点与地图'
+                    : '正在显示项圈的真实位置'}
         </ThemedText>
       ) : null}
       <Pressable

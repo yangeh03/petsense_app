@@ -38,14 +38,14 @@ class PositionService:
         self.lock = threading.RLock()
 
     def _binding(self, device_id):
-        bound = self.registry.for_device(device_id)
-        if not bound:
-            return None
         with db.session_scope() as session:
             device = session.get(Device, device_id)
             if device is None:
                 return None
             owner = (device.owner_id, iso_z(device.claimed_at))
+        bound = self.registry.for_device(device_id, owner)
+        if not bound:
+            return None
         bundle, tag = bound
         return bundle, tag, (*owner, bundle.fingerprint, tag)
 

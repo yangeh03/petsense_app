@@ -20,6 +20,7 @@ from petsense.experiments import recorder
 from petsense.telemetry import audio as audio_module
 from petsense.telemetry import edge, observations
 from petsense.uwb import service as uwb_service
+from petsense.uwb import setup as uwb_setup
 from petsense.telemetry.realtime import broadcast_packet
 
 _trim_counter = 0
@@ -249,6 +250,7 @@ def on_message(client, userdata, msg):
             if ts is None:
                 return
             _touch_device_last_seen(device_id)
+            uwb_setup.ingest(payload, device_id)
             uwb_service.enrich(payload, device_id, ts)
             stats.remember_uwb(payload, iso_z(ts), device_id)
             serialized = json.dumps(payload, allow_nan=False, separators=(',', ':'))
@@ -295,6 +297,7 @@ def on_message(client, userdata, msg):
                 last_ms = frames[-1].get('ts_ms')
                 sample_ms = frame.get('ts_ms')
                 batch_age = ((last_ms - sample_ms) & uwb_service.MASK) if type(last_ms) is int and type(sample_ms) is int else 0
+                uwb_setup.ingest(frame, device_id, batch_age)
                 uwb_service.enrich(frame, device_id, ts, batch_age)
                 frame_payload = json.dumps(frame, ensure_ascii=False, separators=(',', ':'))
                 packet = json.dumps({'topic': msg.topic, 'payload': frame_payload, 'received_at': iso_z(ts)})
@@ -319,6 +322,7 @@ def on_message(client, userdata, msg):
     if ts is None:
         return
     if device_id and isinstance(payload_dict, dict):
+        uwb_setup.ingest(payload_dict, device_id)
         uwb_service.enrich(payload_dict, device_id, ts)
         payload_str = json.dumps(payload_dict, ensure_ascii=False, separators=(',', ':'))
     packet = json.dumps({'topic': msg.topic, 'payload': payload_str, 'received_at': iso_z(ts)})

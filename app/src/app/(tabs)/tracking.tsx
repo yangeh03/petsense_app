@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { MapViewport } from '@/components/location/map-viewport';
+import { UwbSetup } from '@/components/location/uwb-setup';
 import { BottomTabInset, MaxContentWidth, Shadows, Spacing } from '@/constants/theme';
 import { useObservations } from '@/hooks/use-observations';
 import { usePositionMap } from '@/hooks/use-position-map';
@@ -94,6 +95,16 @@ export default function TrackingScreen() {
                 查看项圈能力 ›
               </ThemedText>
             </Pressable>
+          </View>
+        )}
+        {dashboard?.pet?.device_id && (
+          <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
+            <UwbSetup
+              key={dashboard.pet.device_id}
+              deviceId={dashboard.pet.device_id}
+              onPublished={location.reload}
+              onDragging={setDragging}
+            />
           </View>
         )}
         {location.error !== '' && (
