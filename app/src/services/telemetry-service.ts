@@ -270,6 +270,39 @@ export function reconnectTelemetry() {
   telemetryService.reconnect();
 }
 
+function parseGps(raw: unknown): TelemetryFrame['gps'] {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const gps = raw as Record<string, unknown>;
+  if (gps.source !== 'A7670E_GNSS' || gps.crs !== 'WGS84') return undefined;
+  const valid =
+    gps.enabled === true &&
+    gps.valid === true &&
+    typeof gps.latitude === 'number' &&
+    Number.isFinite(gps.latitude) &&
+    Math.abs(gps.latitude) <= 90 &&
+    typeof gps.longitude === 'number' &&
+    Number.isFinite(gps.longitude) &&
+    Math.abs(gps.longitude) <= 180 &&
+    typeof gps.utc === 'string' &&
+    gps.utc.endsWith('Z') &&
+    Number.isFinite(Date.parse(gps.utc)) &&
+    typeof gps.remainingMs === 'number' &&
+    gps.remainingMs > 0 &&
+    gps.remainingMs <= 15000;
+  return {
+    valid,
+    status: valid
+      ? 'fixed'
+      : ['disabled', 'starting', 'searching', 'stale', 'error'].includes(String(gps.status))
+        ? String(gps.status)
+        : 'error',
+    latitude: valid ? (gps.latitude as number) : null,
+    longitude: valid ? (gps.longitude as number) : null,
+    utc: valid ? (gps.utc as string) : null,
+    remainingMs: valid ? (gps.remainingMs as number) : 0,
+  };
+}
+
 export function parseTelemetryMessage(raw: unknown): TelemetryFrame | null {
   if (typeof raw !== 'string') return null;
   let packet: TelemetryPacket;
@@ -293,7 +326,14 @@ export function parseTelemetryMessage(raw: unknown): TelemetryFrame | null {
   if (!payload || Array.isArray(payload)) return null;
 
   // 音频分片 / 重组进度帧没有 health 结构，APP 端不消费
-  if (!payload.health && !payload.battery && !payload.imu && !payload.audio && !payload.uwb)
+  if (
+    !payload.health &&
+    !payload.battery &&
+    !payload.imu &&
+    !payload.audio &&
+    !payload.uwb &&
+    !payload.gps
+  )
     return null;
   if (typeof payload.deviceId !== 'string' || !Number.isFinite(payload.ts_ms)) return null;
 
@@ -366,11 +406,14 @@ export function parseTelemetryMessage(raw: unknown): TelemetryFrame | null {
     experiment: validExperiment(payload.experiment)
       ? (payload.experiment as TelemetryFrame['experiment'])
       : undefined,
+    gps: parseGps(payload.gps),
     uwb: validUwb(payload.uwb) ? (payload.uwb as TelemetryFrame['uwb']) : undefined,
     uwbPosition: parseUwbPosition(payload.uwbPosition, payload.deviceId as string),
     action: validAction(payload.action) ? (payload.action as TelemetryFrame['action']) : undefined,
   };
-  return frame.health || frame.battery || frame.imu || frame.audio || frame.uwb ? frame : null;
+  return frame.health || frame.battery || frame.imu || frame.audio || frame.uwb || frame.gps
+    ? frame
+    : null;
 }
 
 export function parseUwbPosition(value: unknown, deviceId: string): UwbPosition | undefined {

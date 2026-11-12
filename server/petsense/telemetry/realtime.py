@@ -66,25 +66,27 @@ class Forwarder:
 fwd = Forwarder()
 
 
-def broadcast_packet(packet_str, device_id=None):
-    """同一份报文发 SSE 队列与 WS 客户端，清理发送失败的僵尸连接。
-
-    device_id 标记报文归属设备，WS 按连接作用域过滤；None=系统帧发全体。
-    """
-    # Legacy internal SSE has no per-user scope. Never add precise map
-    # coordinates to that channel; keep them on the authenticated WS/API.
+def public_packet(packet_str):
+    """Legacy SSE has no owner scope; omit both indoor and GNSS positions."""
     internal = packet_str
-    if 'uwbPosition' in packet_str:
+    if 'uwbPosition' in packet_str or '"gps"' in packet_str or '\\"gps\\"' in packet_str:
         try:
             packet = json.loads(packet_str)
             payload = packet.get('payload')
             was_text = isinstance(payload, str)
             payload = json.loads(payload) if was_text else dict(payload)
             payload.pop('uwbPosition', None)
+            payload.pop('gps', None)
             packet['payload'] = json.dumps(payload) if was_text else payload
             internal = json.dumps(packet)
         except (ValueError, TypeError, AttributeError):
             internal = ''
+    return internal
+
+
+def broadcast_packet(packet_str, device_id=None):
+    """WS keeps owner-scoped telemetry; legacy SSE omits precise locations."""
+    internal = public_packet(packet_str)
     if internal:
         fwd.broadcast(internal)
     for client, (_, devices) in list(ws_clients.items()):
@@ -131,7 +133,8 @@ def sse_stream():
     def generate():
         try:
             if row:
-                yield f'data: {json.dumps({"topic": row.topic, "payload": row.payload, "received_at": iso_z(row.received_at)})}\n\n'
+                initial = public_packet(json.dumps({"topic": row.topic, "payload": row.payload, "received_at": iso_z(row.received_at)}))
+                yield f'data: {initial}\n\n' if initial else ': waiting\n\n'
             else:
                 yield ': waiting\n\n'
             while True:

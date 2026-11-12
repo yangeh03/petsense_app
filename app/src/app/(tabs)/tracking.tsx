@@ -1,25 +1,48 @@
 import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { MapViewport } from '@/components/location/map-viewport';
+import { GpsMap } from '@/components/location/gps-map';
 import { UwbSetup } from '@/components/location/uwb-setup';
 import { BottomTabInset, MaxContentWidth, Shadows, Spacing } from '@/constants/theme';
 import { useObservations } from '@/hooks/use-observations';
 import { usePositionMap } from '@/hooks/use-position-map';
 import { useTelemetry } from '@/hooks/use-telemetry';
 import { useTheme } from '@/hooks/use-theme';
+import { gpsView } from '@/services/gps-view';
+import { parseTelemetryMessage } from '@/services/telemetry-service';
 
 /** Coordinates require both real UWB measurements and a calibrated layout; never substitute a demo route. */
 export default function TrackingScreen() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { dashboard } = useObservations('day');
-  const { latest, isFresh } = useTelemetry();
+  const { dashboard, observations } = useObservations('day');
+  const { latest, isFresh, now, displayState } = useTelemetry();
+  const snapshot = useMemo(
+    () =>
+      observations?.latest
+        ? parseTelemetryMessage(
+            JSON.stringify({
+              topic: 'petsense/sensor/snapshot',
+              payload: observations.latest.payload,
+              received_at: observations.latest.receivedAt,
+            }),
+          )
+        : null,
+    [observations],
+  );
+  const gps = gpsView(
+    dashboard?.pet?.device_id,
+    latest,
+    snapshot,
+    now,
+    displayState === 'replaying',
+  );
   const matching = latest?.deviceId === dashboard?.pet?.device_id && isFresh ? latest : null;
   const hasRanges = matching?.uwb?.valid && matching.uwb.distanceMm.length > 0;
   const location = usePositionMap(dashboard?.pet?.device_id);
@@ -43,10 +66,11 @@ export default function TrackingScreen() {
           <ThemedText style={styles.title}>位置</ThemedText>
           <View style={[styles.tag, { backgroundColor: theme.tintBackground }]}>
             <ThemedText type="smallBold" style={{ color: theme.tint }}>
-              {location.map ? '室内定位' : '筹备中'}
+              室内 / GPS
             </ThemedText>
           </View>
         </View>
+        <ThemedText style={styles.sectionTitle}>室内 UWB 定位</ThemedText>
         {location.map && (
           <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
             <ThemedText type="smallBold">{location.map.name}</ThemedText>
@@ -79,12 +103,12 @@ export default function TrackingScreen() {
               />
             </View>
             <ThemedText style={styles.sectionTitle}>
-              {hasRanges ? '已收到测距，尚未完成户型标定' : '当前还不能确定它的位置'}
+              {hasRanges ? '已收到测距，尚未完成户型标定' : '等待室内定位数据'}
             </ThemedText>
             <ThemedText themeColor="textSecondary" style={styles.description}>
               {hasRanges
                 ? '项圈提供了真实测距数据，但尚不能据此确定房间。完成锚点与户型标定后，才能显示位置。'
-                : '当前没有收到可用的位置坐标，因此无法显示房间或移动轨迹。动作识别仍可在「今日」查看。'}
+                : '当前没有收到可用的 UWB 坐标。完成锚点与地图标定后，这里会显示室内位置。'}
             </ThemedText>
             <Pressable
               accessibilityRole="button"
@@ -97,6 +121,33 @@ export default function TrackingScreen() {
             </Pressable>
           </View>
         )}
+        <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
+          <ThemedText style={styles.sectionTitle}>GPS 定位</ThemedText>
+          <ThemedText
+            type="smallBold"
+            style={{ color: gps.point ? theme.online : theme.textSecondary }}
+          >
+            {gps.status}
+          </ThemedText>
+          {gps.point ? (
+            <>
+              <GpsMap key={dashboard?.pet?.device_id} point={gps.point} onDragging={setDragging} />
+              <ThemedText type="small" themeColor="textSecondary">
+                纬度 {gps.point.latitude.toFixed(7)} · 经度 {gps.point.longitude.toFixed(7)}
+              </ThemedText>
+              <ThemedText type="small" themeColor="textSecondary">
+                定位时间（UTC）{gps.utc}
+              </ThemedText>
+            </>
+          ) : (
+            <ThemedText type="small" themeColor="textSecondary">
+              收到项圈的有效卫星定位后，地图会在这里显示实时位置。坐标过期时会停止显示定位点。
+            </ThemedText>
+          )}
+          <ThemedText type="small" themeColor="textSecondary">
+            位置来自项圈 GNSS，使用 WGS84 坐标；底图需要联网。
+          </ThemedText>
+        </View>
         {dashboard?.pet?.device_id && (
           <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
             <UwbSetup
@@ -115,13 +166,9 @@ export default function TrackingScreen() {
           </Pressable>
         )}
         <View style={[styles.info, { borderColor: theme.backgroundSelected }]}>
-          <ThemedText type="smallBold">
-            {location.map ? '室内定位 · 室外定位筹备中' : '室内 / 室外定位筹备中'}
-          </ThemedText>
+          <ThemedText type="smallBold">室内定位与 GPS 同时显示</ThemedText>
           <ThemedText type="small" themeColor="textSecondary">
-            {location.map
-              ? '地图来自实际空间重建。拖动只改变视野；灰色点表示最后位置，室外定位尚未接入。'
-              : '正在完善室内标定和室外定位能力；没有可用定位数据时，我们不会用演示轨迹代替。'}
+            室内位置使用重建地图和 UWB 测距，GPS 使用项圈卫星定位。两路数据分别显示，暂不自动切换。
           </ThemedText>
         </View>
       </View>

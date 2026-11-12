@@ -20,3 +20,7 @@ export const TELEMETRY_WS_URL = process.env.EXPO_PUBLIC_TELEMETRY_URL ?? 'ws://8
  * 真机调试时把 localhost 换成电脑局域网 IP，或用 EXPO_PUBLIC_API_BASE_URL 覆盖。
  */
 export const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL ?? 'http://localhost:8080';
+
+/** WGS84/Web Mercator raster tiles; replace with a compatible HTTPS provider if needed. */
+export const GPS_TILE_URL =
+  process.env.EXPO_PUBLIC_GPS_TILE_URL ?? 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';

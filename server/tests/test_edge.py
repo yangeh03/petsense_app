@@ -55,6 +55,21 @@ class EdgeTests(unittest.TestCase):
             mqtt_ingest.on_message(None, None, SimpleNamespace(topic=edge.TOPIC, payload=b'{}'))
             store.assert_not_called()
 
+    def test_gps_roundtrip_is_owner_scoped_and_bad_gps_preserves_action(self):
+        from test_gps import frame
+        self.payload.update(frame())
+        self.ingest()
+        value = self.client.get('/api/app/edge/latest', headers=self.headers).json['payload']
+        self.assertTrue(value['gps']['valid'])
+        self.assertEqual(value['gps']['latitude'], 31.2223881)
+        self.assertIsNone(self.client.get('/api/app/edge/latest', headers=self.other_headers).json['payload'])
+        self.payload['gps']['latitude'] = float('nan')
+        self.payload['ts_ms'] += 1000
+        self.ingest()
+        value = self.client.get('/api/app/edge/latest', headers=self.headers).json['payload']
+        self.assertFalse(value['gps']['valid'])
+        self.assertEqual(value['action']['label'], 'standing')
+
     def test_static_page_has_no_device_data(self):
         result = self.client.get('/edge')
         self.assertEqual(result.status_code, 200)
@@ -63,6 +78,8 @@ class EdgeTests(unittest.TestCase):
         result.close()
 
     def test_public_debug_is_fixed_to_lab_device(self):
+        from test_gps import frame
+        self.payload.update(frame())
         self.ingest()
         url = '/api/debug/edge/latest'
         self.assertIsNone(self.client.get(url + '?deviceId=test-edge').json['payload'])
@@ -74,5 +91,6 @@ class EdgeTests(unittest.TestCase):
         result = self.client.get(url)
         self.assertEqual(result.status_code, 200)
         self.assertEqual(result.json['payload']['deviceId'], edge.DEBUG_DEVICE_ID)
+        self.assertNotIn('gps', result.json['payload'])
         self.assertEqual(result.headers['Cache-Control'], 'no-store')
         self.assertEqual(self.client.get('/api/app/edge/latest').status_code, 401)

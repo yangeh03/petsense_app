@@ -112,8 +112,10 @@ static void samplingWorker(void *) {
     // Snapshot before buildCloudPayload stamps ts_ms: receivedMs must not be
     // newer than the frame timestamp when RX runs concurrently on the other core.
     const UwbPacket uwb=snapshotUwb();
+    const GnssSnapshot gps=snapshotGnss();
     String payload=buildCloudPayload();
     appendUwbSnapshot(payload,uwb);
+    appendGnssSnapshot(payload,gps);
     char session[81], marker[81]; bool active, spaceKnown, draining; ClockAnchor anchor;
     uint64_t totalBytes, usedBytes;
     portENTER_CRITICAL(&stateMux);
@@ -394,6 +396,9 @@ void loop() {
   processModemAsyncInput();
   if(networkPauseUntil && (int32_t)(millis()-networkPauseUntil)<0) {delay(10);return;}
   networkPauseUntil=0;
+  if(serviceGnss()) {delay(5);return;}
+  // Reconnect before taking latestLive: reconnects may take tens of seconds.
+  if(!mqttConnected && !mqttConnect()) {delay(5);return;}
   if(!clockSentUs || millis()-lastClockSent>=30000) {
     clockSentUs=esp_timer_get_time();clockNonce++;lastClockSent=millis();
     String request="{\"device\":\""+String(DEVICE_ID)+"\",\"boot\":\""+String(bootId)+"\",\"nonce\":"+decimal64(clockNonce)+",\"t0_us\":"+decimal64(clockSentUs)+"}";

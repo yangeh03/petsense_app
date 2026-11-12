@@ -19,6 +19,7 @@ from petsense.db.models import Device, Reading
 from petsense.experiments import recorder
 from petsense.telemetry import audio as audio_module
 from petsense.telemetry import edge, observations
+from petsense.telemetry import gps
 from petsense.uwb import service as uwb_service
 from petsense.uwb import setup as uwb_setup
 from petsense.telemetry.realtime import broadcast_packet
@@ -109,6 +110,7 @@ def compact_sample_to_payload(batch, sample):
     return {
         'deviceId': batch.get('deviceId'),
         'ts_ms': sample.get('t'),
+        **({'gps': sample['gps']} if 'gps' in sample else {}),
         'experiment': {
             'active': bool(list_at(e, 0, False)),
             'id': list_at(e, 1, ''),
@@ -243,6 +245,7 @@ def on_message(client, userdata, msg):
             if len(msg.payload) > 65536:
                 raise ValueError('Oversize edge summary')
             payload = json.loads(msg.payload)
+            gps.normalize(payload)
             device_id = edge.validate(payload)
             payload.pop('uwbPosition', None)
             serialized = json.dumps(payload, allow_nan=False, separators=(',', ':'))
@@ -288,15 +291,18 @@ def on_message(client, userdata, msg):
         frames = expand_sensor_batch(payload_dict)
         if frames:
             for frame in frames:
+                last_ms = frames[-1].get('ts_ms')
+                sample_ms = frame.get('ts_ms')
+                batch_age = ((last_ms - sample_ms) & uwb_service.MASK) if type(last_ms) is int and type(sample_ms) is int else 0
+                sent_ms = payload_dict.get('sent_ms', last_ms)
+                gps_age = ((sent_ms - sample_ms) & uwb_service.MASK) if type(sent_ms) is int and type(sample_ms) is int else batch_age
+                gps.normalize(frame, gps_age)
                 frame.pop('uwbPosition', None)
                 actions_service.enrich_frame_with_action(frame)
                 frame_payload = json.dumps(frame, ensure_ascii=False, separators=(',', ':'))
                 ts = store(msg.topic, frame_payload, device_id)
                 if ts is None:
                     continue
-                last_ms = frames[-1].get('ts_ms')
-                sample_ms = frame.get('ts_ms')
-                batch_age = ((last_ms - sample_ms) & uwb_service.MASK) if type(last_ms) is int and type(sample_ms) is int else 0
                 uwb_setup.ingest(frame, device_id, batch_age)
                 uwb_service.enrich(frame, device_id, ts, batch_age)
                 frame_payload = json.dumps(frame, ensure_ascii=False, separators=(',', ':'))
@@ -314,6 +320,7 @@ def on_message(client, userdata, msg):
             return
 
     if device_id and isinstance(payload_dict, dict):
+        gps.normalize(payload_dict)
         payload_dict.pop('uwbPosition', None)
         actions_service.enrich_frame_with_action(payload_dict)
         payload_str = json.dumps(payload_dict, ensure_ascii=False, separators=(',', ':'))

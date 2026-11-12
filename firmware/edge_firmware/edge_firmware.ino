@@ -461,6 +461,8 @@ void stopEventCapture();
 // =====================================================
 // A7670E 4G / MQTT
 // =====================================================
+#include "gnss_runtime.h"
+
 static void appendModemAsyncChar(char ch);
 static bool handleModemAsyncCommands();
 
@@ -495,6 +497,7 @@ void modemSendLine(const String &cmd) {
 }
 
 static void appendModemAsyncChar(char ch) {
+  feedGnss(ch);
   modemAsyncBuffer += ch;
   if (modemAsyncBuffer.length() > 2400) {
     modemAsyncBuffer.remove(0, modemAsyncBuffer.length() - 1200);
@@ -795,6 +798,9 @@ bool modemWaitPromptAndWrite(const String &cmd, const uint8_t *data, size_t data
 }
 
 bool initCellularNetwork() {
+  gnssController.reset(millis());
+  updateGnssSnapshot();
+  ModemSerial.setRxBufferSize(4096);
   ModemSerial.begin(MODEM_BAUD, SERIAL_8N1, MODEM_RX_PIN, MODEM_TX_PIN);
   delay(1200);
   modemDrain(500);
