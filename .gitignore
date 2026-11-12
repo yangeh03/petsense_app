@@ -10,3 +10,9 @@
 # project documents (local only)
 /doc
 example
+
+# 海报与系统设计产物（仅本地保留）
+docs/poster/
+docs/Agent 系统设计/
+/output/
+/tmp/
