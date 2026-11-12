@@ -11,7 +11,7 @@
 
 ## 客户端要点
 
-- 页面在 `app/src/app/`（(tabs) 四 tab + login/create/user/monitor/setup 弹层，setup 为首次引导与设备配对页），实时监测组件在 `app/src/components/live/`，WebSocket 遥测客户端在 `app/src/services/telemetry-service.ts`，实时数据 Hook 在 `app/src/hooks/use-telemetry.ts`，帧类型在 `app/src/types/telemetry.ts`，主题在 `app/src/constants/theme.ts`，回放数据集在 `app/src/data/replay-dataset.ts`
+- 页面在 `app/src/app/`（`(tabs)` 含今日、位置、记录、社区、我的，以及 login/create/user/monitor/setup 等页面；setup 为首次引导与设备配对页），实时监测组件在 `app/src/components/live/`，WebSocket 遥测客户端在 `app/src/services/telemetry-service.ts`，实时数据 Hook 在 `app/src/hooks/use-telemetry.ts`，帧类型在 `app/src/types/telemetry.ts`，主题在 `app/src/constants/theme.ts`，回放数据集在 `app/src/data/replay-dataset.ts`
 - 实时链路：设备 → MQTT（腾讯云）→ server（按设备归属过滤）→ WebSocket `/ws?token=`（需登录，服务端只推当前用户名下设备的帧；未登录返回 `unauthenticated` 状态）→ `telemetry-service.ts`（自动重连）→ `useTelemetry()`；连接地址在 `app/src/config.ts`，可用 `EXPO_PUBLIC_TELEMETRY_URL` 覆盖；设备归属在 devices 表（一人一设备，认领即绑定宠物，`/api/app/device/*`）
 - 遥测双模式：`EXPO_PUBLIC_TELEMETRY_MODE=replay npm run start:replay` 离线循环回放真实实验数据集（由 `app/tools/gen-replay-dataset.cjs` 从云端 cloud_data 生成）
 - 路径别名：`@/*` → `app/src/*`，`@/assets/*` → `app/assets/*`
@@ -25,6 +25,13 @@
 - 动画：优先用 Reanimated（React Compiler 已开启，RN Animated 的 ref 写法会被 lint 拦截）
 - 遥测帧解析只改 `app/src/services/telemetry-service.ts`，`health.valid === false` 的帧不进时间序列
 - 服务端按域加模块：新路由放进对应域的包，新域先建子包再在 `petsense/app.py` 的 `create_app()` 里注册 blueprint
+
+## 近期项目状态（2026-10-29 核对远端 main）
+
+- 项目还包括 `firmware/` 和 `tools/offline-map/`。UWB 定位代码集中在 `server/petsense/uwb/`；设备测距经 MQTT 入站，服务端按设备归属、Tag 和标定地图解算并通过鉴权接口及 WebSocket 提供位置，App 位置页消费服务端结果。地图版本变化会触发刷新；失联时保留标识明确的最后位置。
+- 远端 main 已合入 edge 固件 BU03 测距上传、三基站触碰标定，以及绕边采集、点云对齐预览与确认发布。操作和限制分别见 `docs/uwb-guided-setup.md`、`docs/uwb-walk-alignment.md`；自动对齐候选仍需人工预览确认，地面参数需人工确认，当前触碰标定假定同一测距平面。采集和任务锁基于单进程，扩展多进程前需改为共享协调。
+- 离线建图工具及其依赖与在线定位分工见 `tools/offline-map/README.md` 和 `docs/UWB_INTEGRATION.md`。真实设备、实地定位误差及原生端表现需按实际验收结果判断；历史文档中的模拟数据或浏览器测试不能证明硬件闭环已经完成。
+- 截至本次核对远端为 `c53966b`；本地工作区可能落后或含未提交改动，后续工作先检查 `git status` 和远端，不覆盖用户工作。
 
 ## 模拟器 UI 端到端验证（computer use 实战经验）
 
