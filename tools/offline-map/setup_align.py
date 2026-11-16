@@ -129,19 +129,27 @@ def run(job_path):
     # polygon.json already has the same orientation/origin as floorplan.png.
     # Fit directly into this final frame; do not compose its orientation twice.
     candidates = []
-    raw = original.load_xy_csv(root / 'trail.csv', 'x_m', 'y_m', updated_only=True)
-    clean = original.preprocess(raw, 5, .75, .015)
-    if len(clean) < 10:
-        raise ValueError('too few clean boundary points')
     polygon = np.asarray(json.loads((native / 'map.json').read_text(encoding='utf-8'))['polygon'])
     manifest = json.loads((native / 'map.json').read_text(encoding='utf-8'))
     raw_grid = benchmark.load_raw_trail(root / 'trail.csv')
+    if len(raw_grid) < 10:
+        raise ValueError('有效原始定位点不足 10 个，请检查测距链路后重新绕边采集')
     print('Running ZIP grid_global_x_scale (raw trajectory, X mirror, bounded scale .85–1.15)', flush=True)
     candidates.append(extra_candidate('grid', grid_fit(raw_grid, native, root), raw_grid, native, root, manifest, job))
     if (root / 'alignment.json').is_file():
         candidates.append(extra_candidate('manual', benchmark.load_transform(root / 'alignment.json'),
                                           raw_grid, native, root, manifest, job, manual=True))
-    for name, mirror in [('normal', False), ('mirror', True)]:
+    # ZIP polygon diagnostics use different cleaning from the default raw-grid
+    # fit. A large step can leave too few polygon points; keep the grid preview.
+    warnings = []
+    try:
+        raw = original.load_xy_csv(root / 'trail.csv', 'x_m', 'y_m', updated_only=True)
+        clean = original.preprocess(raw, 5, .75, .015)
+    except ValueError:
+        clean = np.empty((0, 2))
+    if len(clean) < 10:
+        warnings.append(f'多边形诊断清洗后仅 {len(clean)} 点，已跳过；栅格对齐使用 {len(raw_grid)} 个原始有效点')
+    for name, mirror in ([('normal', False), ('mirror', True)] if len(clean) >= 10 else []):
         prefix = root / name
         command = [sys.executable, str(here / 'uwb_polygon_boundary_align.py'),
                    '-i', str(root / 'trail.csv'), '-m', str(native / 'polygon.json'),
@@ -182,9 +190,13 @@ def run(job_path):
         candidates.append({'id': name, 'eligible': quality(report), 'report': report,
                            'trail': original.evenly_subsample(mapped, 600).tolist()})
     # Follow the final ZIP default for reconstruction maps. Polygon fits remain diagnostics.
-    result = {'candidates': candidates, 'recommended': 'grid',
+    message = ('自动对齐完成，请核对轮廓和移动方向后启用；对称场地可能存在方向歧义'
+               if candidates[0]['eligible'] else '已生成对齐预览，但质量未达启用要求；请先检查轨迹与地图，暂不能启用')
+    if warnings:
+        message += '。' + '；'.join(warnings)
+    result = {'candidates': candidates, 'recommended': 'grid', 'warnings': warnings,
               'needsReview': True,
-              'message': '自动对齐完成，请核对轮廓和移动方向后启用；对称场地可能存在方向歧义'}
+              'message': message}
     write(root / 'result.json', result)
 
 
