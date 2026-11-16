@@ -23,14 +23,21 @@ from . import setup_jobs
 
 bp = Blueprint('uwb_setup', __name__, url_prefix='/api/app/uwb/setup')
 
+# Collect more independent 1 Hz uplink frames and tolerate normal UWB drift.
+TOUCH_DURATION_S = 20
+TOUCH_MIN_SAMPLES = 8
+TOUCH_MAX_CENTRAL_SPREAD_M = .8
+TOUCH_MAX_RECIPROCAL_DIFFERENCE_M = .8
+TOUCH_MAX_DISTANCE_MM = 500
+
 
 def solve_anchors(rows):
     """Classical MDS; fix A0 at origin, A1 on +x, A2 above x axis."""
     distances = np.asarray(rows, dtype=float)
     if distances.shape != (3, 3) or not np.isfinite(distances).all():
         raise ValueError('三个基站的测距不完整，请重采')
-    if np.max(np.abs(distances - distances.T)) > .35:
-        raise ValueError('两次触碰得到的距离相差超过 35 cm，请重采')
+    if np.max(np.abs(distances - distances.T)) > TOUCH_MAX_RECIPROCAL_DIFFERENCE_M:
+        raise ValueError('两次触碰得到的距离相差超过 80 cm，请重采')
     distances = (distances + distances.T) / 2
     np.fill_diagonal(distances, 0)
     sides = distances[np.triu_indices(3, 1)]
@@ -118,8 +125,8 @@ class SetupStore:
             raise ValueError('请按 A0、A1、A2 顺序完成标定')
         self.active[identity] = {'samples': [], 'seen': set()}
         state.update(phase='touching', anchors=None,
-                     capture={'anchor': index, 'endsAt': self.clock() + 6, 'samples': 0},
-                     message=f'请保持 Tag 贴近 A{index}，不要移动')
+                     capture={'anchor': index, 'endsAt': self.clock() + TOUCH_DURATION_S, 'samples': 0},
+                     message=f'请保持 Tag 贴近 A{index}，静止采集 {TOUCH_DURATION_S} 秒，以倒计时为准')
         state.update(walk=None, alignment=None, published=None)
         state['rows'][index:] = [None] * (3 - index)
         self.save(identity, state)
@@ -210,6 +217,10 @@ class SetupStore:
         if state is None:
             return None
         state = dict(state)
+        state['touchConfig'] = {'durationS': TOUCH_DURATION_S, 'minSamples': TOUCH_MIN_SAMPLES,
+                                'maxDistanceCm': TOUCH_MAX_DISTANCE_MM / 10,
+                                'maxCentralSpreadCm': TOUCH_MAX_CENTRAL_SPREAD_M * 100,
+                                'maxReciprocalDifferenceCm': TOUCH_MAX_RECIPROCAL_DIFFERENCE_M * 100}
         inputs = self.folder(identity) / 'inputs'
         state['inputs'] = {key: {'present': (inputs / name).is_file(),
                               'path': str(inputs / name),
@@ -232,12 +243,15 @@ class SetupStore:
         active = self.active.pop(identity, {'samples': []})
         samples = active['samples']
         state.update(phase='touch_ready', capture=None)
-        if len(samples) < 3:
-            state['message'] = '有效测距不足 3 帧，请保持贴近并重试；检查其余两个基站是否在线'
+        if len(samples) < TOUCH_MIN_SAMPLES:
+            state['message'] = f'有效测距不足 {TOUCH_MIN_SAMPLES} 帧（收到 {len(samples)} 帧），请保持贴近并重试；检查其余两个基站是否在线'
         else:
             values = np.asarray(samples)
-            if np.max(np.ptp(values, axis=0)) > .4:
-                state['message'] = '测距波动超过 40 cm，请保持静止并重试'
+            # One transient spike must not invalidate an otherwise stable capture.
+            # Keep the median for anchor distances and assess the central 80%.
+            low, high = np.quantile(values, [.1, .9], axis=0)
+            if np.max(high - low) > TOUCH_MAX_CENTRAL_SPREAD_M:
+                state['message'] = '中间 80% 测距波动超过 80 cm，请保持静止并重试'
             else:
                 index = capture['anchor']
                 state['rows'][index] = np.median(values, axis=0).tolist()
@@ -281,7 +295,7 @@ class SetupStore:
             if any(type(distances[i]) not in (int, float) or not math.isfinite(distances[i])
                    or not 50 <= distances[i] <= 30000 for i in range(3) if i != index):
                 return
-            if type(distances[index]) not in (int, float) or not 0 <= distances[index] <= 250:
+            if type(distances[index]) not in (int, float) or not 0 <= distances[index] <= TOUCH_MAX_DISTANCE_MM:
                 return
             active = self.active[identity]
             key = (timer, sequence)

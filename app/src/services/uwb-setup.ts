@@ -29,6 +29,13 @@ export type UwbSetupSession = {
   rows: (number[] | null)[];
   anchors: number[][] | null;
   capture: { anchor: number; endsAt: number; samples: number } | null;
+  touchConfig?: {
+    durationS: number;
+    minSamples: number;
+    maxDistanceCm: number;
+    maxCentralSpreadCm: number;
+    maxReciprocalDifferenceCm: number;
+  };
   jobId?: string;
   walk?: {
     id: string;

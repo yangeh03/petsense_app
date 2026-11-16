@@ -37,6 +37,7 @@
 ## 定位项目状态（2026-11-12 按仓库代码和文档核对）
 
 - 项目还包括 `firmware/` 和 `tools/offline-map/`。UWB 定位代码集中在 `server/petsense/uwb/`；设备测距经 MQTT 入站，服务端按设备归属、Tag 和标定地图解算并通过鉴权接口及 WebSocket 提供位置，App 位置页消费服务端结果。地图版本变化会触发刷新；失联时保留标识明确的最后位置。
+- 触碰标定（2026-11-17 调整）：每基站采集 20 秒、至少 8 个不同有效帧；中间 80% 测距跨度和双向中值差上限均为 80 cm，贴近距离上限 50 cm。保留逐路中值、帧新鲜度/去重和非共线检查；当前 edge 约 1 Hz 上传，通过延长采集增加样本，不改变固件频率。参数通过 setup 响应的 `touchConfig` 提供，App 以服务端倒计时为准，见 `docs/uwb-guided-setup.md`。
 - 远端 main 已合入 edge 固件 BU03 测距上传、三基站触碰标定，以及绕边采集、点云对齐预览与确认发布。操作和限制分别见 `docs/uwb-guided-setup.md`、`docs/uwb-walk-alignment.md`；自动对齐候选仍需人工预览确认，地面参数需人工确认，当前触碰标定假定同一测距平面。采集和任务锁基于单进程，扩展多进程前需改为共享协调。
 - 离线建图工具及其依赖与在线定位分工见 `tools/offline-map/README.md` 和 `docs/UWB_INTEGRATION.md`。真实设备、实地定位误差及原生端表现需按实际验收结果判断；历史文档中的模拟数据或浏览器测试不能证明硬件闭环已经完成。
 - A7670E GNSS 通过现有 4G 遥测上传，位置页与室内 UWB 并列显示；真实项圈定位和原生端仍需实机验收，见 `firmware/GNSS.md` 和 `docs/GPS_LOCATION.md`。

@@ -99,9 +99,15 @@ export function UwbSetup({
     <View style={{ gap: Spacing.three }}>
       <ThemedText type="smallBold">新环境 · 基站标定</ThemedText>
       <ThemedText type="small" themeColor="textSecondary">
-        固定 A0、A1、A2，避免三点共线。将 Tag 依次贴近每个基站（25 cm 内），点击对应按键后保持静止 6
-        秒。其余两个基站须在线。
+        固定 A0、A1、A2，避免三点共线。将 Tag
+        依次贴近每个基站，点击对应按键后保持静止，直到页面倒计时结束。其余两个基站须在线。
       </ThemedText>
+      {session?.touchConfig && (
+        <ThemedText type="small" themeColor="textSecondary">
+          每个基站采集 {session.touchConfig.durationS} 秒 · 至少 {session.touchConfig.minSamples}{' '}
+          个有效帧 · Tag 与基站距离不超过 {session.touchConfig.maxDistanceCm} cm
+        </ThemedText>
+      )}
       {!session && (
         <>
           <TextInput
