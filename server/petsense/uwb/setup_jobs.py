@@ -55,6 +55,15 @@ def run_worker(job):
             process.wait()
             raise ValueError('点云处理超过 30 分钟，请检查输入规模和后台日志') from None
     if code:
+        # Return a useful bounded diagnosis; keep raw tracebacks and paths in logs.
+        with (job / 'worker.log').open('rb') as output:
+            output.seek(0, 2)
+            output.seek(max(0, output.tell() - 8192))
+            tail = output.read().decode('utf-8', errors='replace')
+        if 'too few clean boundary points' in tail:
+            raise ValueError('轨迹清洗后有效点不足，未生成对齐预览；请检查测距跳变或中断后重试')
+        if '有效原始定位点不足' in tail or 'trajectory must contain at least 10 valid points' in tail:
+            raise ValueError('有效定位点不足，未生成对齐预览；请检查测距链路后重新绕边采集')
         raise ValueError('点云或轨迹处理失败，请检查人工输入及 worker.log；可修正后重试')
 
 

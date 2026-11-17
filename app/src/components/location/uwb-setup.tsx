@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, TextInput, View } from 'react-native';
+import { ActivityIndicator, Pressable, TextInput, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
@@ -24,6 +24,7 @@ export function UwbSetup({
   const [error, setError] = useState('');
   const [actionError, setActionError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [pendingAction, setPendingAction] = useState('');
   const [now, setNow] = useState(() => Date.now());
   const pending = useRef(false);
   const generation = useRef(0);
@@ -75,6 +76,7 @@ export function UwbSetup({
     pending.current = true;
     mutation.current++;
     setBusy(true);
+    setPendingAction(action);
     const current = generation.current;
     try {
       const result = await request<{ session: Session }>(`/uwb/setup${action}`, {
@@ -92,6 +94,7 @@ export function UwbSetup({
     } finally {
       pending.current = false;
       setBusy(false);
+      setPendingAction('');
     }
   }
 
@@ -99,9 +102,15 @@ export function UwbSetup({
     <View style={{ gap: Spacing.three }}>
       <ThemedText type="smallBold">新环境 · 基站标定</ThemedText>
       <ThemedText type="small" themeColor="textSecondary">
-        固定 A0、A1、A2，避免三点共线。将 Tag 依次贴近每个基站（25 cm 内），点击对应按键后保持静止 6
-        秒。其余两个基站须在线。
+        固定 A0、A1、A2，避免三点共线。将 Tag
+        依次贴近每个基站，点击对应按键后保持静止，直到页面倒计时结束。其余两个基站须在线。
       </ThemedText>
+      {session?.touchConfig && (
+        <ThemedText type="small" themeColor="textSecondary">
+          每个基站采集 {session.touchConfig.durationS} 秒 · 至少 {session.touchConfig.minSamples}{' '}
+          个有效帧 · Tag 与基站距离不超过 {session.touchConfig.maxDistanceCm} cm
+        </ThemedText>
+      )}
       {!session && (
         <>
           <TextInput
@@ -225,7 +234,11 @@ export function UwbSetup({
                 ))}
               <ActionButton
                 label={
-                  session.phase === 'processing' ? '后台正在处理，请稍候…' : '生成俯视图并自动对齐'
+                  pendingAction === '/align'
+                    ? '正在提交对齐任务…'
+                    : session.phase === 'processing'
+                      ? '后台正在处理，请稍候…'
+                      : '生成俯视图并自动对齐'
                 }
                 onPress={() => void act('/align')}
                 disabled={
@@ -235,6 +248,19 @@ export function UwbSetup({
                   !session.inputs?.pointcloud.present
                 }
               />
+              <View accessibilityLiveRegion="polite" style={{ gap: Spacing.two }}>
+                {(pendingAction === '/align' || session.phase === 'processing') && (
+                  <ActivityIndicator color={theme.tint} />
+                )}
+                <ThemedText type="small" themeColor="textSecondary">
+                  {pendingAction === '/align'
+                    ? '正在提交对齐任务，请稍候。'
+                    : session.phase === 'processing'
+                      ? '正在生成俯视图并搜索对齐，完成后将在下方显示预览，可离开页面后返回查看。'
+                      : session.message}
+                </ThemedText>
+                {actionError !== '' && <ThemedText type="small">{actionError}</ThemedText>}
+              </View>
               {session.alignment &&
                 session.jobId &&
                 ['alignment_review', 'published'].includes(session.phase) && (

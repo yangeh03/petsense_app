@@ -1,4 +1,5 @@
 import hashlib
+import csv
 import json
 from pathlib import Path
 import sys
@@ -15,6 +16,34 @@ import setup_align as adapter
 
 
 class SetupAlignmentTests(unittest.TestCase):
+    def test_sparse_polygon_cleaning_does_not_block_raw_grid_preview(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'job.json').write_text(json.dumps({'mapId': 'room', 'version': 'v1', 'walkId': 'walk'}))
+            with (root / 'trail.csv').open('w', newline='') as stream:
+                writer = csv.writer(stream)
+                writer.writerow(['x_m', 'y_m', 'raw_x_m', 'raw_y_m', 'valid_fix', 'pos_updated'])
+                for index in range(45):
+                    x = index * .01 if index < 8 else 3 + index * .02
+                    writer.writerow([x, 0, x, 0, 1, 1])
+
+            def fake_build(*args, **kwargs):
+                (root / 'native').mkdir()
+                (root / 'native/map.json').write_text(json.dumps({'polygon': [[0, 0], [4, 0], [4, 3]]}))
+
+            grid = {'id': 'grid', 'eligible': False, 'report': {}, 'trail': []}
+            with patch.object(adapter.subprocess, 'run', side_effect=fake_build) as commands, \
+                 patch.object(adapter, 'grid_fit') as fit, \
+                 patch.object(adapter, 'extra_candidate', return_value=grid):
+                adapter.run(root / 'job.json')
+            self.assertEqual(len(fit.call_args.args[0]), 45)
+            self.assertEqual(commands.call_count, 1)  # Only building, no polygon subprocess.
+            result = json.loads((root / 'result.json').read_text())
+            self.assertEqual(result['recommended'], 'grid')
+            self.assertEqual(result['candidates'], [grid])
+            self.assertIn('暂不能启用', result['message'])
+            self.assertIn('45 个原始有效点', result['warnings'][0])
+
     def test_proven_algorithms_are_byte_identical_to_user_zip_sources(self):
         sources = {
             'uwb_polygon_boundary_align.py': '823209f09bd7e5a3432d6e58062110b77674f7115afabecfc7f919284d4149f2',

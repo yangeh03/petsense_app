@@ -3,6 +3,7 @@ import json
 import math
 from pathlib import Path
 import shutil
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -111,6 +112,21 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(ready['phase'], 'alignment_review')
         self.assertEqual(ready['alignment']['recommended'], 'grid')
         self.assertFalse(self.store.jobs)
+
+    def test_worker_point_failure_is_reported_without_exposing_traceback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            job = Path(directory)
+            (job / 'setup_align.py').write_text('')
+
+            def failing_worker(*args, **kwargs):
+                kwargs['stdout'].write('private path /home/private\nValueError: too few clean boundary points\n')
+                return SimpleNamespace(wait=lambda timeout: 1)
+
+            with patch.object(setup_jobs, 'tools_root', return_value=job), \
+                 patch.object(setup_jobs.subprocess, 'Popen', side_effect=failing_worker):
+                with self.assertRaisesRegex(ValueError, '轨迹清洗后有效点不足') as failure:
+                    setup_jobs.run_worker(job)
+            self.assertNotIn('/home/private', str(failure.exception))
 
     def seed_device(self):
         fresh_db(self)
