@@ -173,13 +173,15 @@ export function MapViewport({
               strokeWidth={stroke}
               opacity={0.6}
             />
-            <Polyline
-              points={trail.map((p) => `${p.x},${-p.y}`).join(' ')}
-              fill="none"
-              stroke={theme.tint}
-              strokeWidth={stroke * 1.5}
-              opacity={fresh ? 0.8 : 0.25}
-            />
+            {preview && (
+              <Polyline
+                points={trail.map((p) => `${p.x},${-p.y}`).join(' ')}
+                fill="none"
+                stroke={theme.tint}
+                strokeWidth={stroke * 1.5}
+                opacity={fresh ? 0.8 : 0.25}
+              />
+            )}
             {map.anchors.map((anchor) => (
               <SvgText
                 key={anchor.id}
