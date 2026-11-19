@@ -95,7 +95,7 @@ export function ActivityCard({
         按项圈动作识别估算，仅统计项圈在线且识别有效的时段。
       </ThemedText>
       <ThemedText type="smallBold" style={{ color: theme.tint }}>
-        查看健康趋势、声音与运动日记 ›
+        查看健康趋势与声音记录 ›
       </ThemedText>
     </Pressable>
   );

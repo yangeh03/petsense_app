@@ -10,7 +10,6 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { DiaryModal } from '@/components/dashboard/diary-modal';
 import { SoundTimeline } from '@/components/observations/sound-timeline';
 import { TrendPanel } from '@/components/observations/trend-panel';
 import { ThemedText } from '@/components/themed-text';
@@ -54,7 +53,6 @@ export default function RecordsScreen() {
   const [period, setPeriod] = useState<ObservationPeriod>('day');
   const { dashboard, observations, busy, error, reload } = useObservations(period);
   const [refreshing, setRefreshing] = useState(false);
-  const [diaryVisible, setDiaryVisible] = useState(false);
   const pet = dashboard?.pet ?? null;
   const summary = observations?.summary;
   const hasCoverage = !!summary?.firstObservedAt;
@@ -228,38 +226,9 @@ export default function RecordsScreen() {
               <ThemedText style={styles.sectionTitle}>声音记录</ThemedText>
               <SoundTimeline events={observations?.events ?? []} />
             </View>
-
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="查看运动日记"
-              onPress={() => setDiaryVisible(true)}
-              style={[styles.card, { backgroundColor: theme.backgroundElement }]}
-            >
-              <ThemedText style={styles.sectionTitle}>运动日记 ›</ThemedText>
-              <ThemedText type="small" themeColor="textSecondary">
-                {pet.petgif_id
-                  ? '把当天真实活动整理成一段可分享的日记。'
-                  : '可查看已有日记；制作新日记需要专属数字形象。'}
-              </ThemedText>
-            </Pressable>
           </>
         )}
       </View>
-      {pet ? (
-        <DiaryModal
-          visible={diaryVisible}
-          onClose={() => setDiaryVisible(false)}
-          onShared={() => {
-            setDiaryVisible(false);
-            void reload();
-          }}
-          petName={pet.name}
-          petId={pet.id}
-          userId={user?.id ?? -1}
-          petgifId={pet.petgif_id ?? null}
-          activeMinutes={Math.floor((summary?.walkingSeconds ?? 0) / 60)}
-        />
-      ) : null}
     </ScrollView>
   );
 }
