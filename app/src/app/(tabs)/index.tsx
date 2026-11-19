@@ -218,20 +218,6 @@ export default function DashboardScreen() {
               hasCoverage={hasCoverage}
               onPress={() => router.push('/records')}
             />
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => router.push('/records')}
-              style={[styles.card, { backgroundColor: theme.backgroundElement }]}
-            >
-              <ThemedText type="smallBold">
-                {pet.petgif_id ? '制作运动日记 ›' : '查看运动日记条件 ›'}
-              </ThemedText>
-              {!pet.petgif_id && (
-                <ThemedText type="small" themeColor="textSecondary">
-                  预设动画仅用于首页展示；需要个人 PetGIF 数字形象才能生成日记。
-                </ThemedText>
-              )}
-            </Pressable>
           </>
         ) : (
           !busy && (

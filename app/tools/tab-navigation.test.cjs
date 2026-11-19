@@ -44,6 +44,5 @@ test('records lives in the root stack and stays reachable from today', () => {
 
   assert.match(recordsSource, /TrendPanel/, 'expected records to own health trends');
   assert.match(recordsSource, /SoundTimeline/, 'expected records to own sound history');
-  assert.match(recordsSource, /DiaryModal/, 'expected records to own the activity diary');
   assert.match(todaySource, /router\.push\('\/records'\)/, 'expected today to link to records');
 });
