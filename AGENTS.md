@@ -54,6 +54,7 @@
 - Metro 已被占用时使用空闲端口，先检查 `/status`。`--localhost` 可能只监听 IPv6 `::1`，此时 Expo Go 用 `exp://localhost:<端口>`，不要使用 IPv4 `127.0.0.1` 打开 Metro。App 的 API 地址按隔离后端实际监听地址配置。
 - `idb` 若找不到默认的 `idb_companion`，连接时通过 `--companion-path` 指向可用二进制。默认 HID 报 `Mach port invalid` 时，使用 `idb ui tap/set-value --api ax-coresimulator`，从无障碍树取元素坐标。每次导航后重新读树，避开过场中同时出现的两页元素。
 - iOS 原生标签栏和透明 Stack 标题栏会覆盖内容。固定输入区在键盘收起时要留出标签栏空间，`KeyboardAvoidingView` 的 `padding` 模式会覆盖自身的底部 padding，留白应设在输入区外层。记录来源区放入页面安全布局，并在模拟器截图检查遮挡。
+- Expo Router 58 的 iOS NativeTabs 为伙伴页提供的底部安全区已经反映标签栏位置。固定输入区使用该值一次，避免叠加 `BottomTabInset`。iPhone 的标签栏在底部，iPad 的标签栏可在顶部，验收时分别检查。
 
 # Expo HAS CHANGED
 

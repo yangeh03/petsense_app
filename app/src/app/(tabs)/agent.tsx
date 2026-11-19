@@ -15,7 +15,7 @@ import { SymbolView } from 'expo-symbols';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
-import { BottomTabInset, Fonts, MaxContentWidth, Shadows } from '@/constants/theme';
+import { Fonts, MaxContentWidth, Shadows } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
 import { fetchDashboard } from '@/services/api';
@@ -72,7 +72,7 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
   const [soundDays, setSoundDays] = useState(0);
   const [showLearning, setShowLearning] = useState(false);
   const [showTargets, setShowTargets] = useState(false);
-  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  const [keyboardOpen, setKeyboardOpen] = useState(() => Keyboard.isVisible());
   const followReply = useRef(false);
   useEffect(() => {
     const show = Keyboard.addListener('keyboardWillShow', () => setKeyboardOpen(true));
@@ -230,6 +230,8 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
         flex: 1,
         backgroundColor: theme.background,
         paddingTop: insets.top,
+        paddingLeft: insets.left,
+        paddingRight: insets.right,
       }}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
@@ -505,7 +507,8 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
             styles.footer,
             Platform.OS === 'ios' &&
               !keyboardOpen && {
-                marginBottom: BottomTabInset + insets.bottom,
+                // NativeTabs supplies an inset that already includes the tab bar.
+                marginBottom: insets.bottom,
               },
           ]}
         >
