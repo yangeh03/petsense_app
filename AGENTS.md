@@ -11,7 +11,7 @@
 
 ## 客户端要点
 
-- 页面在 `app/src/app/`（`(tabs)` 含今日、位置、记录、社区、我的，以及 login/create/user/monitor/setup 等页面；setup 为首次引导与设备配对页），实时监测组件在 `app/src/components/live/`，WebSocket 遥测客户端在 `app/src/services/telemetry-service.ts`，实时数据 Hook 在 `app/src/hooks/use-telemetry.ts`，帧类型在 `app/src/types/telemetry.ts`，主题在 `app/src/constants/theme.ts`，回放数据集在 `app/src/data/replay-dataset.ts`
+- 页面在 `app/src/app/`（`(tabs)` 含今日、位置、伙伴、社区、我的，记录为根 Stack `/records`；另有 login/create/user/monitor/setup 等页面；setup 为首次引导与设备配对页），实时监测组件在 `app/src/components/live/`，WebSocket 遥测客户端在 `app/src/services/telemetry-service.ts`，实时数据 Hook 在 `app/src/hooks/use-telemetry.ts`，帧类型在 `app/src/types/telemetry.ts`，主题在 `app/src/constants/theme.ts`，回放数据集在 `app/src/data/replay-dataset.ts`
 - 实时链路：设备 → MQTT（腾讯云）→ server（按设备归属过滤）→ WebSocket `/ws?token=`（需登录，服务端只推当前用户名下设备的帧；未登录返回 `unauthenticated` 状态）→ `telemetry-service.ts`（自动重连）→ `useTelemetry()`；连接地址在 `app/src/config.ts`，可用 `EXPO_PUBLIC_TELEMETRY_URL` 覆盖；设备归属在 devices 表（一人一设备，认领即绑定宠物，`/api/app/device/*`）
 - 遥测双模式：`EXPO_PUBLIC_TELEMETRY_MODE=replay npm run start:replay` 离线循环回放真实实验数据集（由 `app/tools/gen-replay-dataset.cjs` 从云端 cloud_data 生成）
 - 路径别名：`@/*` → `app/src/*`，`@/assets/*` → `app/assets/*`
@@ -53,7 +53,18 @@
 - 判定界面状态用 `xcrun simctl io booted screenshot`（直接截设备屏，不受窗口位置/遮挡影响）；定位按钮可用 PIL 按品牌色扫描像素再除以 3 换算逻辑 pt
 - 判定请求是否真正到达服务端：`cloud-ssh tencent 'sudo journalctl -u petsense.service --since "2 min ago"'` 看每条请求的状态码，这是"客户端没发出去"还是"服务端报错"的铁证
 - 生产测试账号关联真实宠物资料，不要修改；凭据通过安全渠道获取，不写入仓库。纯接口测试在 `server/` 下用 `PETSENSE_ROOT=/tmp/xxx PETSENSE_MQTT_DISABLED=1 .venv/bin/python wsgi.py` 起隔离实例（临时 root 会自动 alembic 建库），测完清理
+- 模拟器验收统一使用指定账号 `petsense`，密码由用户提供，不写进源码、文档或提交。需要创建测试宠物、发送测试消息或验证写入时，在隔离后端准备同名账号，再用该账号从 App 登录。
+- 涉及历史记录、观测问答和学习累计的验收，优先用指定账号从云端读取真实观测。先检查日期范围及有效覆盖，再挑选有数据的时段。新接口尚未部署时，可用授权的云端只读数据副本在隔离实例验收；本地空库用于缺数据、写入和故障场景，空库通过只算相应场景通过。验收记录须注明数据来源、时段和实际经过的接口。
+- Metro 已被占用时使用空闲端口，先检查 `/status`。`--localhost` 可能只监听 IPv6 `::1`，此时 Expo Go 用 `exp://localhost:<端口>`，不要使用 IPv4 `127.0.0.1` 打开 Metro。App 的 API 地址按隔离后端实际监听地址配置。
+- `idb` 若找不到默认的 `idb_companion`，连接时通过 `--companion-path` 指向可用二进制。默认 HID 报 `Mach port invalid` 时，使用 `idb ui tap/set-value --api ax-coresimulator`，从无障碍树取元素坐标。每次导航后重新读树，避开过场中同时出现的两页元素。
+- iOS 原生标签栏和透明 Stack 标题栏会覆盖内容。固定输入区在键盘收起时要留出标签栏空间，`KeyboardAvoidingView` 的 `padding` 模式会覆盖自身的底部 padding，留白应设在输入区外层。记录来源区放入页面安全布局，并在模拟器截图检查遮挡。
+- Expo Router 58 的 iOS NativeTabs 为伙伴页提供的底部安全区已经反映标签栏位置。固定输入区使用该值一次，避免叠加 `BottomTabInset`。iPhone 的标签栏在底部，iPad 的标签栏可在顶部，验收时分别检查。
 
 # Expo HAS CHANGED
 
 Read the exact versioned docs at https://docs.expo.dev/versions/v58.0.0/ before writing any code.
+
+## Agent 开发入口
+
+- 第一阶段开发说明与当前验证边界见 `docs/agent-phase-one.md`；产品、路线和最小契约分别见 `docs/agent-product-integration-design.md`、`docs/agent-implementation-work-packages.md`、`docs/agent-p00-contract.md`。
+- 新 Agent 服务端域在 `server/petsense/agent/`，App 使用独立业务服务，不混入遥测解析。模型凭据仅由服务端环境或外部文件读取，不纳入 Git。

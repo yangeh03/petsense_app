@@ -54,6 +54,8 @@ class TelemetryMinute(Base):
     minute = Column(UTCDatetime, primary_key=True)
     metrics = Column(Text, nullable=False, default='{}')
     actions = Column(Text, nullable=False, default='{}')
+    source_versions = Column(Text, nullable=False, default='[]')
+    sound_observed_seconds = Column(Float, nullable=False, default=0)
     observed_seconds = Column(Float, nullable=False, default=0)
     frames = Column(Integer, nullable=False, default=0)
 

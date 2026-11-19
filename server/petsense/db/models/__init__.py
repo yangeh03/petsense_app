@@ -21,5 +21,7 @@ __all__ = [
     'Story', 'StoryView', 'DiscoveryLocation', 'DiscoveryQuery', 'SocialNotification', 'SocialOutbox',
     'Reading', 'ActionPrediction', 'Device', 'TelemetryLatest', 'TelemetryMinute', 'TelemetryEvent',
     'CollectionSession', 'CollectionFrame', 'CollectionVideo', 'JournalCrc', 'PetgifDiaryJob',
-    'PetgifIdentity',
+    'PetgifIdentity', 'AgentTurn', 'AgentLearningDay',
 ]
+
+from petsense.db.models.agent import AgentTurn, AgentLearningDay

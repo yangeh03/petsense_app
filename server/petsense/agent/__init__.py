@@ -1,0 +1,1 @@
+"""Shared companion conversation domain."""

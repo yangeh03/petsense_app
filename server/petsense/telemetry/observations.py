@@ -87,6 +87,13 @@ def ingest_observation(session, payload, received_at):
                 actions = json.loads(minute.actions)
                 actions[label] = actions.get(label, 0) + seconds
                 minute.actions = json.dumps(actions)
+            from petsense.agent.learning import record_interval
+            if label in ACTIONS:
+                record_interval(session, owner, device, 'actions', previous.get('modelVersion'), start, seconds)
+            previous_sound = prediction(previous, 'sound') if previous.get('source') == 'esp32_mlp' else None
+            if previous_sound and previous_sound.get('label') in SOUNDS | {'quiet', 'other'}:
+                minute.sound_observed_seconds += seconds
+                record_interval(session, owner, device, 'sounds', previous.get('modelVersion'), start, seconds)
             start = end
     minute = _minute(session, device, owner, received_at)
     minute.frames += 1
