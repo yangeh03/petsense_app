@@ -1,3 +1,4 @@
+import { usePathname } from 'expo-router';
 import { SymbolView } from 'expo-symbols';
 import { Tabs, TabList, TabSlot, TabTrigger } from 'expo-router/ui';
 import { Pressable, StyleSheet, View } from 'react-native';
@@ -14,7 +15,7 @@ import { useTheme } from '@/hooks/use-theme';
 export default function AppTabs() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
-  const pathname = typeof window !== 'undefined' ? window.location.pathname : '/';
+  const pathname = usePathname();
   const isActive = (href: string) =>
     pathname === href || (href !== '/' && pathname.startsWith(href));
   // TabList asChild 的子元素不能接收样式数组，需压平

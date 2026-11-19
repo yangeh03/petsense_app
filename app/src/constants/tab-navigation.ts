@@ -8,18 +8,18 @@ export const APP_TABS = [
     selectedIcon: { ios: 'house.fill', android: 'home_filled', web: 'home' },
   },
   {
-    name: 'records',
-    href: '/records',
-    label: '记录',
-    icon: { ios: 'chart.line.uptrend.xyaxis', android: 'monitoring', web: 'monitoring' },
-    selectedIcon: { ios: 'chart.line.uptrend.xyaxis', android: 'monitoring', web: 'monitoring' },
-  },
-  {
     name: 'tracking',
     href: '/tracking',
     label: '位置',
     icon: { ios: 'mappin.and.ellipse', android: 'place', web: 'place' },
     selectedIcon: { ios: 'mappin.and.ellipse.circle', android: 'place', web: 'place' },
+  },
+  {
+    name: 'agent',
+    href: '/agent',
+    label: '伙伴',
+    icon: { ios: 'bubble.left.and.bubble.right', android: 'chat', web: 'chat' },
+    selectedIcon: { ios: 'bubble.left.and.bubble.right.fill', android: 'chat', web: 'chat' },
   },
   {
     name: 'community',

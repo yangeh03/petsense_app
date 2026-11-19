@@ -4,7 +4,7 @@ const path = require('node:path');
 const { test } = require('node:test');
 
 const navigationPath = path.join(__dirname, '../src/constants/tab-navigation.ts');
-const recordsPath = path.join(__dirname, '../src/app/(tabs)/records.tsx');
+const recordsPath = path.join(__dirname, '../src/app/records.tsx');
 
 test('shared navigation defines the five owner-facing tabs in order', () => {
   assert.ok(fs.existsSync(navigationPath), 'expected a shared tab navigation module');
@@ -20,15 +20,15 @@ test('shared navigation defines the five owner-facing tabs in order', () => {
   const { APP_TABS } = module.exports;
   assert.deepEqual(
     Array.from(APP_TABS, (tab) => tab.name),
-    ['index', 'records', 'tracking', 'community', 'profile'],
+    ['index', 'tracking', 'agent', 'community', 'profile'],
   );
   assert.deepEqual(
     Array.from(APP_TABS, (tab) => tab.label),
-    ['今日', '记录', '位置', '社区', '我的'],
+    ['今日', '位置', '伙伴', '社区', '我的'],
   );
   assert.deepEqual(
     Array.from(APP_TABS, (tab) => tab.href),
-    ['/', '/records', '/tracking', '/community', '/profile'],
+    ['/', '/tracking', '/agent', '/community', '/profile'],
   );
   for (const tab of APP_TABS) {
     assert.equal(typeof tab.icon.ios, 'string');
@@ -37,8 +37,8 @@ test('shared navigation defines the five owner-facing tabs in order', () => {
   }
 });
 
-test('records tab has its own route instead of hiding history on today', () => {
-  assert.ok(fs.existsSync(recordsPath), 'expected a dedicated records tab route');
+test('records lives in the root stack and stays reachable from today', () => {
+  assert.ok(fs.existsSync(recordsPath), 'expected a secondary records route');
   const recordsSource = fs.readFileSync(recordsPath, 'utf8');
   const todaySource = fs.readFileSync(path.join(__dirname, '../src/app/(tabs)/index.tsx'), 'utf8');
 

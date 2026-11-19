@@ -11,7 +11,7 @@
 
 ## 客户端要点
 
-- 页面在 `app/src/app/`（`(tabs)` 含今日、位置、记录、社区、我的，以及 login/create/user/monitor/setup 等页面；setup 为首次引导与设备配对页），实时监测组件在 `app/src/components/live/`，WebSocket 遥测客户端在 `app/src/services/telemetry-service.ts`，实时数据 Hook 在 `app/src/hooks/use-telemetry.ts`，帧类型在 `app/src/types/telemetry.ts`，主题在 `app/src/constants/theme.ts`，回放数据集在 `app/src/data/replay-dataset.ts`
+- 页面在 `app/src/app/`（`(tabs)` 含今日、位置、伙伴、社区、我的，记录为根 Stack `/records`；另有 login/create/user/monitor/setup 等页面；setup 为首次引导与设备配对页），实时监测组件在 `app/src/components/live/`，WebSocket 遥测客户端在 `app/src/services/telemetry-service.ts`，实时数据 Hook 在 `app/src/hooks/use-telemetry.ts`，帧类型在 `app/src/types/telemetry.ts`，主题在 `app/src/constants/theme.ts`，回放数据集在 `app/src/data/replay-dataset.ts`
 - 实时链路：设备 → MQTT（腾讯云）→ server（按设备归属过滤）→ WebSocket `/ws?token=`（需登录，服务端只推当前用户名下设备的帧；未登录返回 `unauthenticated` 状态）→ `telemetry-service.ts`（自动重连）→ `useTelemetry()`；连接地址在 `app/src/config.ts`，可用 `EXPO_PUBLIC_TELEMETRY_URL` 覆盖；设备归属在 devices 表（一人一设备，认领即绑定宠物，`/api/app/device/*`）
 - 遥测双模式：`EXPO_PUBLIC_TELEMETRY_MODE=replay npm run start:replay` 离线循环回放真实实验数据集（由 `app/tools/gen-replay-dataset.cjs` 从云端 cloud_data 生成）
 - 路径别名：`@/*` → `app/src/*`，`@/assets/*` → `app/assets/*`
@@ -54,3 +54,8 @@
 # Expo HAS CHANGED
 
 Read the exact versioned docs at https://docs.expo.dev/versions/v58.0.0/ before writing any code.
+
+## Agent 开发入口
+
+- 第一阶段开发说明与当前验证边界见 `docs/agent-phase-one.md`；产品、路线和最小契约分别见 `docs/agent-product-integration-design.md`、`docs/agent-implementation-work-packages.md`、`docs/agent-p00-contract.md`。
+- 新 Agent 服务端域在 `server/petsense/agent/`，App 使用独立业务服务，不混入遥测解析。模型凭据仅由服务端环境或外部文件读取，不纳入 Git。

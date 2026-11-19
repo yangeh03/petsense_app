@@ -1,6 +1,6 @@
 # Agent P00：跨端最小契约与实施前提
 
-状态：设计契约草案，尚未实现或验证真实服务。产品和技术决策负责人：项目负责人（用户）；跨域接口、数据库迁移、App 导航、后台启动及外部服务决策均由其统筹。以下为 P01–P20 的共同语义，具体路径、字段类型、数据库结构、流协议由对应 spec 确定。
+状态：最小语义契约；阶段1已部分实现并联调，实际状态见[实施记录](./agent-phase-one.md)。产品和技术决策负责人：项目负责人（用户）；跨域接口、数据库迁移、App 导航、后台启动及外部服务决策均由其统筹。以下为 P01–P20 的共同语义，具体路径、字段类型、数据库结构、流协议由对应 spec 确定。
 
 依据：[产品设计](./agent-product-integration-design.md)、[工作包顺序](./agent-implementation-work-packages.md)。
 
@@ -56,8 +56,8 @@
 
 | 能力 | 当前决定 | 已验证与待验证 |
 | --- | --- | --- |
-| 模型 | MiniMax；API key 后续提供 | 未做真实调用；P03 验证账户、模型 ID、流式、工具调用与费用 |
-| 图片 | 使用 MiniMax 多模态输入 | 账户可用模型、格式、大小及真实往返待 P03/P11 验证 |
+| 模型 | MiniMax；API key 后续提供 | 阶段1已验证国内端点、M3.1-Flash 文本、流式及工具往返；生产配置和额度管理仍按实施部署核对 |
+| 图片 | 使用 MiniMax 多模态输入 | 256×256 JPEG 纯色测试已正确识别；16×16 PNG 测试曾误认，不能据此推定图片理解可靠，App 图片输入与完整验证由 P11 完成 |
 | 搜索 | 用户指定使用 MiniMax 自带搜索 | [官方旧版 ChatCompletion 文档](https://platform.minimaxi.com/document/%E5%AF%B9%E8%AF%9D?key=36954880539f4e2ab8b13067)描述的 `web_search` 限定 MiniMax-Text-01；[Token Plan 页面](https://platform.minimaxi.com/subscribe/token-plan)列有 MCP 搜索并标为编程场景工具。尚不能据此确认目标多模态模型、账户套餐及 App 服务端的生产接入方式、来源链接和阅读能力；P03/P12 必须实测并核对适用条款 |
 | 原生推送 | 用户指定 Expo；暂按 iOS 和 Android 规划，使用 Expo Notifications 和 Expo Push Service 作为实施方案 | [Expo SDK 58 文档](https://docs.expo.dev/versions/v58.0.0/sdk/notifications/)支持两平台及 Expo push token；需准备各平台推送凭据和原生构建，Android 远程推送不能依赖 Expo Go。账户、凭据及真实推送尚未验证，P18 分平台真机验收 |
 | 位置语义 | 定位同学后续提供文本标签 | 接口、时间有效性和版本尚未交付；区域能力单独验收，不阻塞动作/声音 |

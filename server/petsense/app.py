@@ -41,7 +41,9 @@ def create_app(start_background=True):
     db.init_db()
     observations.backfill()
 
+    from petsense.agent.routes import bp as agent_bp
     app = Flask('petsense')
+    app.register_blueprint(agent_bp)
     app.register_blueprint(mqtt_ingest.collection_store.blueprint())
     telemetry_realtime.sock.init_app(app)
     app.register_blueprint(telemetry_realtime.bp)
