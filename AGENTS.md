@@ -50,6 +50,10 @@
 - 判定界面状态用 `xcrun simctl io booted screenshot`（直接截设备屏，不受窗口位置/遮挡影响）；定位按钮可用 PIL 按品牌色扫描像素再除以 3 换算逻辑 pt
 - 判定请求是否真正到达服务端：`cloud-ssh tencent 'sudo journalctl -u petsense.service --since "2 min ago"'` 看每条请求的状态码，这是"客户端没发出去"还是"服务端报错"的铁证
 - 生产测试账号关联真实宠物资料，不要修改；凭据通过安全渠道获取，不写入仓库。纯接口测试在 `server/` 下用 `PETSENSE_ROOT=/tmp/xxx PETSENSE_MQTT_DISABLED=1 .venv/bin/python wsgi.py` 起隔离实例（临时 root 会自动 alembic 建库），测完清理
+- 模拟器验收统一使用指定账号 `petsense`，密码由用户提供，不写进源码、文档或提交。需要创建测试宠物、发送测试消息或验证写入时，在隔离后端准备同名账号，再用该账号从 App 登录。
+- Metro 已被占用时使用空闲端口，先检查 `/status`。`--localhost` 可能只监听 IPv6 `::1`，此时 Expo Go 用 `exp://localhost:<端口>`，不要使用 IPv4 `127.0.0.1` 打开 Metro。App 的 API 地址按隔离后端实际监听地址配置。
+- `idb` 若找不到默认的 `idb_companion`，连接时通过 `--companion-path` 指向可用二进制。默认 HID 报 `Mach port invalid` 时，使用 `idb ui tap/set-value --api ax-coresimulator`，从无障碍树取元素坐标。每次导航后重新读树，避开过场中同时出现的两页元素。
+- iOS 原生标签栏和透明 Stack 标题栏会覆盖内容。固定输入区在键盘收起时要留出标签栏空间，`KeyboardAvoidingView` 的 `padding` 模式会覆盖自身的底部 padding，留白应设在输入区外层。记录来源区放入页面安全布局，并在模拟器截图检查遮挡。
 
 # Expo HAS CHANGED
 

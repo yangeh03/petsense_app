@@ -97,62 +97,6 @@ export default function RecordsScreen() {
           <ThemedText style={{ color: theme.tint }}>回到今日</ThemedText>
         </Pressable>
       ) : null}
-      {selected ? (
-        <View style={{ padding: 20 }}>
-          <View style={{ flexDirection: 'row', gap: 20 }}>
-            {(['segment', 'day', 'week'] as const).map((level) => (
-              <Pressable
-                key={level}
-                onPress={() => exploreRange(level)}
-                accessibilityRole="button"
-                accessibilityState={{ selected: rangeLevel === level }}
-              >
-                <ThemedText
-                  style={{ color: rangeLevel === level ? theme.tint : theme.textSecondary }}
-                >
-                  {level === 'segment' ? '引用时段' : level === 'day' ? '这一天' : '这一周'}
-                </ThemedText>
-              </Pressable>
-            ))}
-          </View>
-          <ThemedText>
-            {new Date(selected.startAt).toLocaleString('zh-CN', {
-              timeZone: 'Asia/Shanghai',
-              hour12: false,
-            })}{' '}
-            至{' '}
-            {new Date(selected.endAt).toLocaleString('zh-CN', {
-              timeZone: 'Asia/Shanghai',
-              hour12: false,
-            })}
-          </ThemedText>
-          <ThemedText>
-            已记录声音片段 {selected.soundEventCount} 次 · 声音覆盖{' '}
-            {Math.round(selected.soundObservedSeconds / 60)} 分钟
-          </ThemedText>
-          {Object.entries(selected.metrics)
-            .filter(([, metric]) => metric.avg !== null)
-            .map(([key, metric]) => (
-              <ThemedText key={key}>
-                {(
-                  {
-                    heartRate: '平均心率',
-                    spo2: '平均血氧',
-                    bodyTemp: '平均传感器温度',
-                    envTemp: '平均环境温度',
-                  } as Record<string, string>
-                )[key] ?? key}
-                ：{metric.avg}
-              </ThemedText>
-            ))}
-          <ThemedText>
-            {selected.actionObservedSeconds > 0
-              ? `实际覆盖 ${Math.round(selected.actionObservedSeconds / 60)} 分钟 · 走动 ${Math.round((selected.actionSeconds.walking ?? 0) / 60)} 分钟`
-              : '这段时间还没有足够的活动记录，暂时无法判断活动量'}
-          </ThemedText>
-        </View>
-      ) : null}
-      {rangeError ? <ThemedText>{rangeError}</ThemedText> : null}
       <View
         style={[
           styles.container,
@@ -169,6 +113,62 @@ export default function RecordsScreen() {
           </ThemedText>
         </View>
 
+        {selected ? (
+          <View style={[styles.card, { backgroundColor: theme.backgroundElement, gap: 8 }]}>
+            <View style={{ flexDirection: 'row', gap: 20 }}>
+              {(['segment', 'day', 'week'] as const).map((level) => (
+                <Pressable
+                  key={level}
+                  onPress={() => exploreRange(level)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: rangeLevel === level }}
+                >
+                  <ThemedText
+                    style={{ color: rangeLevel === level ? theme.tint : theme.textSecondary }}
+                  >
+                    {level === 'segment' ? '引用时段' : level === 'day' ? '这一天' : '这一周'}
+                  </ThemedText>
+                </Pressable>
+              ))}
+            </View>
+            <ThemedText>
+              {new Date(selected.startAt).toLocaleString('zh-CN', {
+                timeZone: 'Asia/Shanghai',
+                hour12: false,
+              })}{' '}
+              至{' '}
+              {new Date(selected.endAt).toLocaleString('zh-CN', {
+                timeZone: 'Asia/Shanghai',
+                hour12: false,
+              })}
+            </ThemedText>
+            <ThemedText>
+              已记录声音片段 {selected.soundEventCount} 次 · 声音覆盖{' '}
+              {Math.round(selected.soundObservedSeconds / 60)} 分钟
+            </ThemedText>
+            {Object.entries(selected.metrics)
+              .filter(([, metric]) => metric.avg !== null)
+              .map(([key, metric]) => (
+                <ThemedText key={key}>
+                  {(
+                    {
+                      heartRate: '平均心率',
+                      spo2: '平均血氧',
+                      bodyTemp: '平均传感器温度',
+                      envTemp: '平均环境温度',
+                    } as Record<string, string>
+                  )[key] ?? key}
+                  ：{metric.avg}
+                </ThemedText>
+              ))}
+            <ThemedText>
+              {selected.actionObservedSeconds > 0
+                ? `实际覆盖 ${Math.round(selected.actionObservedSeconds / 60)} 分钟 · 走动 ${Math.round((selected.actionSeconds.walking ?? 0) / 60)} 分钟`
+                : '这段时间还没有足够的活动记录，暂时无法判断活动量'}
+            </ThemedText>
+          </View>
+        ) : null}
+        {rangeError ? <ThemedText>{rangeError}</ThemedText> : null}
         {error ? (
           <Pressable
             onPress={() => void reload()}
