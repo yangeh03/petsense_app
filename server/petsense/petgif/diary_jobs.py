@@ -139,6 +139,8 @@ def job_dict(job):
         'input': {key: fields.get(key) for key in ('durationMin', 'steps', 'places', 'notes')},
         'message': job.error_message,
     }
+    if job.idempotency_key.startswith('daily:'):
+        payload.update(date=fields['date'], mode=fields['mode'])
     return payload
 
 
@@ -200,11 +202,23 @@ def run_diary_job(job_id, poll_timeout=None, poll_interval=None):
         return
     _update_job(job_id, status='running', error_message=None)
     fields = json.loads(job.input_json)
+    mode = fields.get('mode')
+    if mode == 'template':
+        from petsense.petgif.daily_diary import render_template
+        try:
+            poster = render_template(job_id, fields)
+            _set_terminal(job_id, 'completed', result={'posterUrl': poster})
+        except (OSError, ValueError):
+            _set_terminal(job_id, 'failed', '海报暂时无法生成，请重试')
+        return
     paths = json.loads(job.photo_paths_json or '[]')
     diary_id = job.upstream_diary_id
     upstream_attempted = False
     try:
         if not diary_id:
+            if mode == 'ai' and os.getenv('PETSENSE_PETGIF_PRIVATE_DIARIES') != '1':
+                _set_terminal(job_id, 'failed', 'AI 海报暂不可用')
+                return
             uploads = []
             for index, path in enumerate(paths):
                 extension = Path(path).suffix.lower()
@@ -223,7 +237,11 @@ def run_diary_job(job_id, poll_timeout=None, poll_interval=None):
                 response = requests.post(
                     config.PETGIF_BASE + f'/pets/{job.petgif_id}/diaries',
                     headers=proxy.petgif_headers(), files=uploads,
-                    data={**fields, 'petId': job.petgif_id}, timeout=45,
+                    data=({
+                        'date': fields['date'], 'durationMin': fields['durationMin'],
+                        'steps': fields['steps'], 'notes': '步数是 PetSense 对已观测走动时段的估算',
+                        'petId': job.petgif_id,
+                    } if mode == 'ai' else {**fields, 'petId': job.petgif_id}), timeout=45,
                 )
             finally:
                 for _, (_, stream, _) in uploads:
@@ -263,6 +281,17 @@ def run_diary_job(job_id, poll_timeout=None, poll_interval=None):
             if status == 'complete':
                 image = (diary.get('assets') or {}).get('image') or {}
                 poster_url = proxy.petgif_public(image.get('publicUrl'))
+                if mode == 'ai':
+                    from petsense.petgif.daily_diary import store_ai_poster
+                    with requests.get(
+                        config.PETGIF_BASE + f'/pets/{job.petgif_id}/diaries/{diary_id}/image',
+                        headers=proxy.petgif_headers(), timeout=30, stream=True, allow_redirects=False,
+                    ) as media:
+                        media.raise_for_status()
+                        content = media.raw.read(10 * 1024 * 1024 + 1)
+                        if len(content) > 10 * 1024 * 1024:
+                            raise ValueError('海报文件大小超限')
+                    poster_url = store_ai_poster(job_id, content)
                 if not poster_url:
                     _set_terminal(job_id, 'unknown', '日记已生成，但海报暂不可用；可稍后查询')
                     return
@@ -297,13 +326,19 @@ def recover_diary_jobs():
         )).scalars().all()
         for old in old_jobs:
             remove_photos(json.loads(old.photo_paths_json or '[]'))
+            if old.idempotency_key.startswith('daily:'):
+                from petsense.petgif.daily_diary import poster_path
+                poster_path(old.id).unlink(missing_ok=True)
             session.delete(old)
         jobs = session.execute(select(PetgifDiaryJob).where(
             PetgifDiaryJob.status.in_(('queued', 'running', 'unknown')),
         )).scalars().all()
         recover = []
         for job in jobs:
-            if job.upstream_diary_id:
+            if job.idempotency_key.startswith('daily:') and json.loads(job.input_json).get('mode') == 'template':
+                job.status = 'queued'
+                recover.append(job.id)
+            elif job.upstream_diary_id:
                 recover.append(job.id)
             else:
                 remove_photos(json.loads(job.photo_paths_json or '[]'))
@@ -321,6 +356,7 @@ def diary_job_history(user_id, pet_id):
         expired = session.execute(select(PetgifDiaryJob).where(
             PetgifDiaryJob.user_id == user_id,
             PetgifDiaryJob.pet_id == pet_id,
+            ~PetgifDiaryJob.idempotency_key.startswith('daily:'),
             PetgifDiaryJob.created_at < cutoff,
             PetgifDiaryJob.status.in_(('completed', 'failed', 'unknown')),
         )).scalars().all()
@@ -329,5 +365,6 @@ def diary_job_history(user_id, pet_id):
             session.delete(job)
         jobs = session.execute(select(PetgifDiaryJob).where(
             PetgifDiaryJob.user_id == user_id, PetgifDiaryJob.pet_id == pet_id,
+            ~PetgifDiaryJob.idempotency_key.startswith('daily:'),
         ).order_by(PetgifDiaryJob.created_at.desc()).limit(HISTORY_LIMIT)).scalars().all()
         return [job_dict(job) for job in jobs]

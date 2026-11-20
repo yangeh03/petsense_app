@@ -59,6 +59,13 @@
           "locationWhenInUsePermission": "允许 PetSense 在你打开附近功能时使用位置查找附近宠友。"
         }
       ],
+      [
+        "expo-media-library",
+        {
+          "savePhotosPermission": "允许 PetSense 将运动日记保存到相册。",
+          "granularPermissions": []
+        }
+      ],
       "expo-video"
     ],
     "experiments": {

@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { ExerciseDiaryEntry } from '@/components/dashboard/exercise-diary-entry';
 import { ActivityCard } from '@/components/dashboard/activity-card';
 import { NotificationBell } from '@/components/alerts/notification-bell';
 import { PetHero } from '@/components/dashboard/pet-hero';
@@ -218,6 +219,7 @@ export default function DashboardScreen() {
               hasCoverage={hasCoverage}
               onPress={() => router.push('/records')}
             />
+            {user && <ExerciseDiaryEntry key={`${user.id}:${pet.id}`} petId={pet.id} />}
           </>
         ) : (
           !busy && (

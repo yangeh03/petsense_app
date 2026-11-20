@@ -68,3 +68,9 @@ Read the exact versioned docs at https://docs.expo.dev/versions/v58.0.0/ before 
 
 - 第一阶段开发说明与当前验证边界见 `docs/agent-phase-one.md`；产品、路线和最小契约分别见 `docs/agent-product-integration-design.md`、`docs/agent-implementation-work-packages.md`、`docs/agent-p00-contract.md`。
 - 新 Agent 服务端域在 `server/petsense/agent/`，App 使用独立业务服务，不混入遥测解析。模型凭据仅由服务端环境或外部文件读取，不纳入 Git。
+
+## 运动日记
+
+- 「今日」的「今日记录」下方可一键生成。PetSense 服务端按上海时间冻结当天已识别的走动秒数，当前按试点步频 150 步/分钟估算。步频未经实机校准，海报显示「估算步数」，无动作观测时省略数值。按宠物、日期和样式复用任务，用户可在详情页手动重新生成。
+- 模板使用档案照片并在服务端渲染。海报通过鉴权接口读取并保存在运行目录的 `diary-posters/`，沿用日记任务 90 天保留期。社区发布统一走动态发布页并独立保存草稿。原生保存相册使用 Expo MediaLibrary，发布需包含该模块的新原生构建。
+- 私有 PetGIF 海报流默认关闭。仅在确认上游照片和海报均为私有且测试通过后，才为已有归属验证的个人形象启用 `PETSENSE_PETGIF_PRIVATE_DIARIES=1`。
