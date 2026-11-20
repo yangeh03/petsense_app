@@ -32,6 +32,14 @@ export default function RootLayout() {
             name="records"
             options={{ headerShown: true, title: '记录', headerBackButtonDisplayMode: 'minimal' }}
           />
+          <Stack.Screen
+            name="exercise-diary"
+            options={{
+              headerShown: true,
+              title: '运动日记',
+              headerBackButtonDisplayMode: 'minimal',
+            }}
+          />
           <Stack.Screen name="monitor" />
           <Stack.Screen name="pet" />
           <Stack.Screen name="collect" options={{ gestureEnabled: false }} />

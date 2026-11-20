@@ -3,7 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Directory, File, Paths } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import { SymbolView } from 'expo-symbols';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -23,6 +23,8 @@ import { useAuth } from '@/hooks/use-auth';
 import { usePetChanges } from '@/hooks/use-pet-changes';
 import { useTheme } from '@/hooks/use-theme';
 import { createPost, fetchPets } from '@/services/api';
+import { downloadDiaryPoster } from '@/services/exercise-diary';
+import { getDiaryJob } from '@/services/petgif';
 import { normalizeForUpload } from '@/services/normalize-image';
 import type { SocialPet } from '@/types/social';
 
@@ -36,6 +38,11 @@ export default function CreateScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user } = useAuth();
+  const params = useLocalSearchParams<{ diaryJobId?: string }>();
+  const diaryJobId =
+    typeof params.diaryJobId === 'string' && /^[a-f0-9-]{36}$/.test(params.diaryJobId)
+      ? params.diaryJobId
+      : undefined;
 
   return (
     <KeyboardAvoidingView
@@ -73,13 +80,13 @@ export default function CreateScreen() {
           </View>
         </ScrollView>
       ) : (
-        <PostForm key={user.id} />
+        <PostForm key={`${user.id}:${diaryJobId ?? 'community'}`} diaryJobId={diaryJobId} />
       )}
     </KeyboardAvoidingView>
   );
 }
 
-function PostForm() {
+function PostForm({ diaryJobId }: { diaryJobId?: string }) {
   const theme = useTheme();
   const router = useRouter();
   const [images, setImages] = useState<{ uri: string; name: string; type: string }[]>([]);
@@ -93,16 +100,48 @@ function PostForm() {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { user } = useAuth();
-  const draftKey = `petsense.community.draft.${user?.id ?? 'guest'}`;
+  const draftKey = `petsense.community.draft.${user?.id ?? 'guest'}${diaryJobId ? `.diary.${diaryJobId}` : ''}`;
   const draftDirectory =
     Platform.OS === 'web'
       ? null
-      : new Directory(Paths.document, 'community-drafts', String(user?.id ?? 'guest'));
+      : new Directory(
+          Paths.document,
+          diaryJobId ? 'diary-post-drafts' : 'community-drafts',
+          String(user?.id ?? 'guest'),
+          ...(diaryJobId ? [diaryJobId] : []),
+        );
 
   useEffect(() => {
     let active = true;
+    let webPoster: string | undefined;
+    const initialize = async () => {
+      if (!diaryJobId) return;
+      const job = await getDiaryJob(diaryJobId);
+      if (job.status !== 'completed' || job.posterUrl !== `/exercise-diaries/poster/${diaryJobId}`)
+        throw new Error('日记海报不可用');
+      const directory = new Directory(
+        Paths.document,
+        'diary-post-drafts',
+        String(user?.id ?? 'guest'),
+        diaryJobId,
+      );
+      if (Platform.OS !== 'web') directory.create({ idempotent: true, intermediates: true });
+      const uri = await downloadDiaryPoster(
+        diaryJobId,
+        Platform.OS === 'web' ? undefined : new File(directory, 'diary.png'),
+      );
+      if (Platform.OS === 'web') {
+        if (!active) URL.revokeObjectURL(uri);
+        else webPoster = uri;
+      }
+      if (!active) return;
+      setPetId(job.petId);
+      setImages([{ uri, name: 'diary.png', type: 'image/png' }]);
+    };
     void AsyncStorage.getItem(draftKey)
-      .then((value) => {
+      .then(async (value) => {
+        if (!active) return;
+        if (!value || (diaryJobId && Platform.OS === 'web')) await initialize();
         if (!active || !value) return;
         const saved = JSON.parse(value) as {
           caption?: string;
@@ -130,8 +169,9 @@ function PostForm() {
       });
     return () => {
       active = false;
+      if (webPoster) URL.revokeObjectURL(webPoster);
     };
-  }, [draftKey]);
+  }, [diaryJobId, draftKey, user?.id]);
 
   useEffect(() => {
     if (!draftReady) return;

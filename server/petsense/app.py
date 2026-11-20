@@ -14,7 +14,7 @@ from petsense.actions import service as actions_service
 from petsense.auth import routes as auth_routes
 from petsense.devices import routes as devices_routes
 from petsense.experiments import recorder as experiments_recorder
-from petsense.petgif import proxy as petgif_proxy
+from petsense.petgif import daily_diary, proxy as petgif_proxy
 from petsense.pets import routes as pets_routes
 from petsense.social import routes as social_routes
 from petsense.telemetry import audio as telemetry_audio
@@ -58,6 +58,7 @@ def create_app(start_background=True):
     app.register_blueprint(devices_routes.bp)
     app.register_blueprint(social_routes.bp)
     app.register_blueprint(petgif_proxy.bp)
+    app.register_blueprint(daily_diary.bp)
     app.register_blueprint(trends_routes.bp)
     app.register_blueprint(web_routes.bp)
     app.register_blueprint(uwb_routes.bp)
