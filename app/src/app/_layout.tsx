@@ -43,6 +43,22 @@ export default function RootLayout() {
           <Stack.Screen name="monitor" />
           <Stack.Screen name="pet" />
           <Stack.Screen name="collect" options={{ gestureEnabled: false }} />
+          <Stack.Screen
+            name="uwb-setup"
+            options={{
+              headerShown: true,
+              title: '室内地图设置',
+              headerBackButtonDisplayMode: 'minimal',
+            }}
+          />
+          <Stack.Screen
+            name="dog-map"
+            options={{
+              headerShown: true,
+              title: '遛狗地图',
+              headerBackButtonDisplayMode: 'minimal',
+            }}
+          />
         </Stack>
       </AuthProvider>
     </ThemeProvider>
