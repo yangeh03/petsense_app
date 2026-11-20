@@ -1,16 +1,33 @@
 # GPS in the Location tab
 
-The Location tab shows **室内 UWB 定位** and **GPS 定位** together. They use
-independent coordinates and do not switch or fuse automatically. UWB setup,
-boundary collection and point-cloud alignment remain available below the maps.
+The Location tab has an explicit **室内 / 室外** segmented control. The choice is
+the user's and persists locally (default indoor on first install); the page
+never switches modes automatically and the two coordinate sources are never
+mixed. Only the active mode renders a map.
 
-GPS uses the selected collar's authenticated telemetry. The most recent live
-frame or REST observation snapshot supplies the GPS object; the existing
+**室外（outdoor）** shows the selected collar's GPS. The most recent live frame
+or REST observation snapshot supplies the GPS object; the existing
 `telemetry-service.ts` owns parsing. No phone-location permission is requested.
-New no-fix frames clear the map, and server `remainingMs` expires positions even
-when no further frames arrive. Replay, unbound collars and other devices cannot
-supply a current GPS position. The page shows search/start/error/expired states
-without substituting sample coordinates.
+A fix is shown only while the server `remainingMs` is unexpired — stale fixes
+hide the marker instead of pretending a position. Raw latitude/longitude and
+GNSS UTC are collapsed behind a 坐标详情 toggle. 回到项圈位置 (recenter) and
+tile retry are preserved. Replay, unbound collars and other devices cannot
+supply a current GPS position. The 室外 view also hosts the 遛狗地图 row
+(see `docs/DOG_MAP.md`); it is usable without a bound collar or fix.
+
+**室内（indoor）** shows the calibrated UWB map via the authenticated snapshot
+path (`usePositionMap`). There are no live trails — the map draws only the
+current (or last known) position; when freshness is lost the marker turns
+muted and the status chip labels it 最后位置 with the server-provided expiry
+time. Missing states are explicit: 未绑定 (bind entry), 未标定 / waiting with
+an actionable setup entry, and a retry row when snapshots fail to update.
+
+UWB setup (touch anchors → boundary walk → align/preview/confirm publish) has
+moved out of the tab into the dedicated stack route `/uwb-setup` (室内地图
+设置). The workflow, device ownership and server-backed session recovery are
+unchanged — capture state survives leaving and re-entering. After a publish,
+the location tab refreshes its map on focus. Details:
+`docs/uwb-guided-setup.md`, `docs/uwb-walk-alignment.md`.
 
 The GPS map uses **Leaflet 1.9.4** (BSD-2-Clause) and OpenStreetMap WGS84 tiles.
 It follows updates until the user pans; **回到项圈位置** restores following.

@@ -277,7 +277,7 @@ export function UwbSetup({
                 )}
               {session.phase === 'published' && (
                 <ThemedText type="small">
-                  地图已启用。上方位置图会随新鲜 UWB 数据实时更新；灰点只表示最后位置。
+                  地图已启用。返回位置页即可看到室内位置实时更新；灰点只表示最后位置。
                 </ThemedText>
               )}
             </View>
