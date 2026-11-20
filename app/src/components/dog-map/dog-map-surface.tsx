@@ -1,8 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { Linking, StyleSheet } from 'react-native';
 import { WebView } from 'react-native-webview';
 
-import type { DogMapSurfaceProps } from './dog-map-surface.types';
+import type { DogMapFocus, DogMapSurfaceProps } from './dog-map-surface.types';
 
 // The base URL and User-Agent identify this embedded map to the tile provider.
 const BASE_URL = 'https://github.com/yangeh03/petsense_app/';
@@ -10,12 +10,22 @@ export function DogMapSurface({
   html,
   resetRequest,
   focus,
+  visible,
   onMessage,
   onError,
 }: DogMapSurfaceProps) {
   const ref = useRef<WebView<unknown>>(null);
   const injectedFocus = useRef(-1);
   const injectedReset = useRef(0);
+  const pendingFocus = useRef<DogMapFocus | null>(null);
+  const injectFocus = useCallback(() => {
+    const pending = pendingFocus.current;
+    if (pending) {
+      ref.current?.injectJavaScript(
+        `window.petSenseDogFocus&&window.petSenseDogFocus(${pending.index});true;`,
+      );
+    }
+  }, []);
   useEffect(() => {
     if (resetRequest && resetRequest !== injectedReset.current) {
       injectedReset.current = resetRequest;
@@ -25,11 +35,13 @@ export function DogMapSurface({
   useEffect(() => {
     if (focus && focus.request !== injectedFocus.current) {
       injectedFocus.current = focus.request;
-      ref.current?.injectJavaScript(
-        `window.petSenseDogFocus&&window.petSenseDogFocus(${focus.index});true;`,
-      );
+      pendingFocus.current = focus;
+      injectFocus();
     }
-  }, [focus]);
+  }, [focus, injectFocus]);
+  useEffect(() => {
+    if (visible) injectFocus();
+  }, [visible, injectFocus]);
   return (
     <WebView<unknown>
       ref={ref}

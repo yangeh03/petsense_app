@@ -82,6 +82,7 @@ export function DogMapMap({
           html={html}
           resetRequest={resetRequest}
           focus={focus}
+          visible={!hidden}
           onMessage={onMessage}
           onError={() => setTileState('error')}
         />

@@ -26,6 +26,7 @@ export default function UwbSetupScreen() {
       scrollEnabled={!dragging}
       style={{ backgroundColor: theme.background }}
       contentContainerStyle={styles.scroll}
+      contentInsetAdjustmentBehavior="automatic"
     >
       <View style={[styles.container, { paddingBottom: insets.bottom + Spacing.five }]}>
         {!deviceId && (

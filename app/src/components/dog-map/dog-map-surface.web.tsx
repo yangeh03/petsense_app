@@ -1,17 +1,25 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 
-import type { DogMapSurfaceProps } from './dog-map-surface.types';
+import type { DogMapFocus, DogMapSurfaceProps } from './dog-map-surface.types';
 
 export function DogMapSurface({
   html,
   resetRequest,
   focus,
+  visible,
   onMessage,
   onError,
 }: DogMapSurfaceProps) {
   const ref = useRef<HTMLIFrameElement>(null);
   const injectedFocus = useRef(-1);
   const injectedReset = useRef(0);
+  const pendingFocus = useRef<DogMapFocus | null>(null);
+  const injectFocus = useCallback(() => {
+    const pending = pendingFocus.current;
+    if (pending) {
+      ref.current?.contentWindow?.postMessage({ type: 'dog-focus', index: pending.index }, '*');
+    }
+  }, []);
   useEffect(() => {
     const handler = (event: MessageEvent) => {
       if (event.source !== ref.current?.contentWindow || typeof event.data !== 'string') return;
@@ -29,9 +37,13 @@ export function DogMapSurface({
   useEffect(() => {
     if (focus && focus.request !== injectedFocus.current) {
       injectedFocus.current = focus.request;
-      ref.current?.contentWindow?.postMessage({ type: 'dog-focus', index: focus.index }, '*');
+      pendingFocus.current = focus;
+      injectFocus();
     }
-  }, [focus]);
+  }, [focus, injectFocus]);
+  useEffect(() => {
+    if (visible) injectFocus();
+  }, [visible, injectFocus]);
   return (
     <iframe
       ref={ref}
