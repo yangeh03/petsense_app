@@ -216,14 +216,14 @@ def run_diary_job(job_id, poll_timeout=None, poll_interval=None):
     upstream_attempted = False
     try:
         if not diary_id:
-            if mode == 'ai' and os.getenv('PETSENSE_PETGIF_PRIVATE_DIARIES') != '1':
-                _set_terminal(job_id, 'failed', 'AI 海报暂不可用')
-                return
             uploads = []
             for index, path in enumerate(paths):
                 extension = Path(path).suffix.lower()
                 content_type = next((mime for mime, ext in ALLOWED_IMAGE_TYPES.items() if ext == extension), 'image/jpeg')
                 uploads.append(('photos', (f'photo_{index}{extension}', open(path, 'rb'), content_type)))
+            if not uploads and mode == 'ai':
+                _set_terminal(job_id, 'failed', '请从宠物档案照片重新生成 AI 海报')
+                return
             if not uploads:
                 pet_data = proxy.app_petgif_pet(job.petgif_id)
                 cover_url = proxy.petgif_public(pet_data.get('characterCardUrl'))
@@ -239,9 +239,16 @@ def run_diary_job(job_id, poll_timeout=None, poll_interval=None):
                     headers=proxy.petgif_headers(), files=uploads,
                     data=({
                         'date': fields['date'], 'durationMin': fields['durationMin'],
-                        'steps': fields['steps'], 'notes': '步数是 PetSense 对已观测走动时段的估算',
+                        'steps': fields['steps'],
+                        'notes': (
+                            '仅用本次上传照片里的宠物与场景作为绘制素材。'
+                            '忽略档案里的默认角色、名字和外观。'
+                            '贴纸和正文不要写宠物名字，也不要补写没有提供的地点。'
+                            '将步数标为估算值。'
+                        ),
                         'petId': job.petgif_id,
                     } if mode == 'ai' else {**fields, 'petId': job.petgif_id}), timeout=45,
+                    allow_redirects=False,
                 )
             finally:
                 for _, (_, stream, _) in uploads:
@@ -250,7 +257,7 @@ def run_diary_job(job_id, poll_timeout=None, poll_interval=None):
             if response.status_code >= 500 or response.status_code == 408:
                 _set_terminal(job_id, 'unknown', '上游响应不确定，暂不自动重试')
                 return
-            if not response.ok:
+            if not 200 <= response.status_code < 300:
                 _set_terminal(job_id, 'failed', 'PetGIF 暂时无法创建日记，请调整后重试')
                 return
             try:
@@ -259,8 +266,13 @@ def run_diary_job(job_id, poll_timeout=None, poll_interval=None):
                 _set_terminal(job_id, 'unknown', '上游任务状态不确定，暂不自动重试')
                 return
             diary_id = (created.get('diary') or {}).get('id') or created.get('id')
+            if mode == 'ai' and diary_id:
+                try:
+                    diary_id = str(uuid.UUID(str(diary_id)))
+                except ValueError:
+                    diary_id = None
             if not diary_id:
-                _set_terminal(job_id, 'unknown', '未收到上游日记编号，暂不自动重试')
+                _set_terminal(job_id, 'unknown', '未收到有效的上游日记编号，暂不自动重试')
                 return
             _update_job(job_id, upstream_diary_id=str(diary_id), status='running')
 
@@ -269,8 +281,11 @@ def run_diary_job(job_id, poll_timeout=None, poll_interval=None):
             try:
                 response = requests.get(
                     config.PETGIF_BASE + f'/pets/{job.petgif_id}/diaries/{diary_id}',
-                    headers=proxy.petgif_headers(), timeout=20,
+                    headers=proxy.petgif_headers(), timeout=20, allow_redirects=mode != 'ai',
                 )
+                if mode == 'ai' and response.status_code != 200:
+                    time.sleep(poll_interval)
+                    continue
                 response.raise_for_status()
                 raw = response.json()
             except (requests.RequestException, ValueError):
@@ -287,7 +302,8 @@ def run_diary_job(job_id, poll_timeout=None, poll_interval=None):
                         config.PETGIF_BASE + f'/pets/{job.petgif_id}/diaries/{diary_id}/image',
                         headers=proxy.petgif_headers(), timeout=30, stream=True, allow_redirects=False,
                     ) as media:
-                        media.raise_for_status()
+                        if media.status_code != 200:
+                            raise ValueError('海报读取失败')
                         content = media.raw.read(10 * 1024 * 1024 + 1)
                         if len(content) > 10 * 1024 * 1024:
                             raise ValueError('海报文件大小超限')
@@ -338,7 +354,10 @@ def recover_diary_jobs():
             if job.idempotency_key.startswith('daily:') and json.loads(job.input_json).get('mode') == 'template':
                 job.status = 'queued'
                 recover.append(job.id)
-            elif job.upstream_diary_id:
+            elif job.upstream_diary_id or (
+                job.idempotency_key.startswith('daily:') and job.status == 'queued' and
+                json.loads(job.photo_paths_json or '[]')
+            ):
                 recover.append(job.id)
             else:
                 remove_photos(json.loads(job.photo_paths_json or '[]'))
