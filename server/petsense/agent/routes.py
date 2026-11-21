@@ -147,7 +147,11 @@ def turns(pet_id):
             reply = model.complete(messages, executor=execute, on_delta=progress)
         status = 'complete'
     except Exception as exc:
-        current_app.logger.warning('Agent turn %s failed: %s (HTTP %s)', turn_id, type(exc).__name__, getattr(getattr(exc, 'response', None), 'status_code', None))
+        info = getattr(exc, 'failure_info', {})
+        current_app.logger.warning(
+            'Agent turn %s failed: %s phase=%s round=%s status=%s code=%s finish=%s',
+            turn_id, type(exc).__name__, info.get('phase'), info.get('round'),
+            info.get('status'), info.get('code'), info.get('finish'))
         reply, status = '暂时没能接上照料助手，你的话已经保留。稍后可以重新发送。', 'failed'
     with session_scope() as s:
         turn = s.get(AgentTurn, turn_id)

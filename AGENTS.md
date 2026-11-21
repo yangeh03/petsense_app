@@ -73,6 +73,7 @@ Read the exact versioned docs at https://docs.expo.dev/versions/v58.0.0/ before 
 
 - 第一阶段开发说明与当前验证边界见 `docs/agent-phase-one.md`；产品、路线和最小契约分别见 `docs/agent-product-integration-design.md`、`docs/agent-implementation-work-packages.md`、`docs/agent-p00-contract.md`。
 - 新 Agent 服务端域在 `server/petsense/agent/`，App 使用独立业务服务，不混入遥测解析。模型凭据仅由服务端环境或外部文件读取，不纳入 Git。
+- Agent 的自由文本意图、工具选择、观测指标和时段由模型在结构化工具契约内判断。禁止通过用户原话的关键词、正则、日期特例或固定问句分支改判意图、触发工具或选择答案模板。服务端强制执行显式用户选择、鉴权、参数和时区校验、工具预算、幂等、事实计算与来源绑定。新增场景用未参与提示设计的改写问句验证真实工具调用。
 
 ## 运动日记
 

@@ -1,7 +1,9 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
+import { useHeaderHeight } from 'expo-router/react-navigation';
 import {
   ActivityIndicator,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -13,7 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SoundTimeline } from '@/components/observations/sound-timeline';
 import { TrendPanel } from '@/components/observations/trend-panel';
 import { ThemedText } from '@/components/themed-text';
-import { BottomTabInset, Fonts, MaxContentWidth, Shadows, Spacing } from '@/constants/theme';
+import { BottomTabInset, MaxContentWidth, Shadows, Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useObservations } from '@/hooks/use-observations';
 import { useTheme } from '@/hooks/use-theme';
@@ -48,6 +50,7 @@ export default function RecordsScreen() {
     };
   }, [params.petId, params.start, params.end]);
   const insets = useSafeAreaInsets();
+  const headerHeight = useHeaderHeight();
   const router = useRouter();
   const { user } = useAuth();
   const [period, setPeriod] = useState<ObservationPeriod>('day');
@@ -99,18 +102,14 @@ export default function RecordsScreen() {
         style={[
           styles.container,
           {
-            paddingTop: insets.top + Spacing.four,
+            // On iOS the glass header floats over the content instead of reserving
+            // space, so pad by its measured height; Android lays content below the
+            // header on its own, where extra padding would double the gap.
+            paddingTop: (Platform.OS === 'ios' ? headerHeight : 0) + Spacing.four,
             paddingBottom: insets.bottom + BottomTabInset + 28,
           },
         ]}
       >
-        <View style={styles.heading}>
-          <ThemedText style={[styles.title, { fontFamily: Fonts.rounded }]}>记录</ThemedText>
-          <ThemedText type="small" themeColor="textSecondary">
-            只汇总项圈实际观测到的数据
-          </ThemedText>
-        </View>
-
         {selected ? (
           <View style={[styles.card, { backgroundColor: theme.backgroundElement, gap: 8 }]}>
             <View style={{ flexDirection: 'row', gap: 20 }}>
@@ -160,9 +159,12 @@ export default function RecordsScreen() {
                 </ThemedText>
               ))}
             <ThemedText>
+              {`总观测覆盖 ${Math.round(selected.observedSeconds / 60)} 分钟 · 有动作判定 ${Math.round(selected.actionObservedSeconds / 60)} 分钟`}
+            </ThemedText>
+            <ThemedText>
               {selected.actionObservedSeconds > 0
-                ? `实际覆盖 ${Math.round(selected.actionObservedSeconds / 60)} 分钟 · 走动 ${Math.round((selected.actionSeconds.walking ?? 0) / 60)} 分钟`
-                : '这段时间还没有足够的活动记录，暂时无法判断活动量'}
+                ? `走动 ${Math.round((selected.actionSeconds.walking ?? 0) / 60)} 分钟`
+                : '有动作判定的部分还不足，暂时无法判断活动量'}
             </ThemedText>
           </View>
         ) : null}
@@ -283,8 +285,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.four,
     gap: Spacing.three,
   },
-  heading: { gap: Spacing.one },
-  title: { fontSize: 28, lineHeight: 36, fontWeight: '700' },
   card: { borderRadius: 22, padding: Spacing.four, gap: Spacing.three, boxShadow: Shadows.card },
   sectionTitle: { fontSize: 18, lineHeight: 24, fontWeight: '700' },
   rowBetween: {
