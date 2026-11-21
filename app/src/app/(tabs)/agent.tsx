@@ -176,8 +176,13 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
   );
   const send = async () => {
     if (!pet || !draft.trim() || busy) return;
+    // A key the server already confirmed failed can never complete; retry with a fresh one.
+    const failedKeys = new Set(
+      turns.filter((item) => item.status === 'failed').map((item) => item.requestId),
+    );
     if (
       !pending.current ||
+      failedKeys.has(pending.current.key) ||
       pending.current.text !== draft.trim() ||
       pending.current.target !== target ||
       pending.current.pet !== pet.id ||
@@ -470,6 +475,9 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
                       if (turn.status === 'failed') {
                         setDraft(turn.text);
                         setTarget(turn.target);
+                        setTopic(turn.topicId ?? undefined);
+                        setReplyTo(turn.replyTo ?? undefined);
+                        if (pending.current?.key === turn.requestId) pending.current = null;
                       } else {
                         setTopic(turn.topicId ?? turn.id);
                         setReplyTo(turn.id);

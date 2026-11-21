@@ -1,7 +1,7 @@
 """Bounded, owner-scoped historical facts for the companion."""
 import json
 from datetime import timedelta
-from sqlalchemy import select, func
+from sqlalchemy import case, func, select
 from petsense.db import iso_z, utc_now
 from petsense.db.models import TelemetryMinute, TelemetryEvent, TelemetryLatest
 from petsense.agent.learning import progress
@@ -39,9 +39,21 @@ def query(session, pet, start, end):
     sound_count = session.execute(select(func.count()).select_from(TelemetryEvent).where(
         TelemetryEvent.owner_id == pet.user_id, TelemetryEvent.device_id == pet.device_id,
         TelemetryEvent.started_at < end, TelemetryEvent.last_seen_at >= start)).scalar_one()
+    # 全量集合聚合：总数之外的分类统计不受 200 条明细截断影响，
+    # “1171 条里实验性占多少”这类追问由后端算好，不让模型去数子集。
+    breakdown = session.execute(
+        select(TelemetryEvent.label, func.count(),
+               func.sum(case((TelemetryEvent.experimental != 0, 1), else_=0))).where(
+        TelemetryEvent.owner_id == pet.user_id, TelemetryEvent.device_id == pet.device_id,
+        TelemetryEvent.started_at < end, TelemetryEvent.last_seen_at >= start)
+        .group_by(TelemetryEvent.label).order_by(func.count().desc())).all()
     learning_dimensions = progress(session, pet)
     source_versions = sorted({version for row in rows for version in json.loads(row.source_versions)})
-    return {'soundEventCount': sound_count, 'soundEventsTruncated': sound_count > len(episodes), 'latest': latest, 'sourceVersions': source_versions, 'learningDimensions': learning_dimensions, 'resolution': 'minute', 'metrics': _public_metrics(metrics),
+    return {'soundEventCount': sound_count, 'soundEventsTruncated': sound_count > len(episodes),
+            'soundEventsReturned': len(episodes),
+            'soundBreakdown': [{'label': label, 'count': count, 'experimental': int(experimental or 0)}
+                               for label, count, experimental in breakdown],
+            'latest': latest, 'sourceVersions': source_versions, 'learningDimensions': learning_dimensions, 'resolution': 'minute', 'metrics': _public_metrics(metrics),
             'soundEvents': [{'label': e.label, 'startedAt': iso_z(e.started_at),
                              'lastSeenAt': iso_z(e.last_seen_at), 'experimental': bool(e.experimental)} for e in episodes],
             'region': {'state': 'unavailable'}, 'startAt': iso_z(start), 'endAt': iso_z(end),
