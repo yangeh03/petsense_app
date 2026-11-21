@@ -66,6 +66,7 @@ class DailyDiaryTests(unittest.TestCase):
             with Image.open(stream) as source:
                 self.assertGreater(source.getpixel((0, 0))[0], 240)
             self.assertEqual(data['steps'], 195)
+            self.assertIn('忽略档案里的默认角色', data['notes'])
             return MagicMock(status_code=202, **{'json.return_value': {'diary': {'id': self.upstream_diary}}})
 
         png = io.BytesIO()
@@ -95,7 +96,7 @@ class DailyDiaryTests(unittest.TestCase):
             self.assertEqual(self.client.get(poster, headers=self.other).status_code, 404)
             with self.client.get(poster, headers=self.owner) as response:
                 self.assertEqual(response.status_code, 200)
-                self.assertEqual(Image.open(io.BytesIO(response.data)).size, (600, 800))
+                self.assertEqual(Image.open(io.BytesIO(response.data)).size, (600, 844))
             regenerated = self.client.post(self.path, json={'replaceJobId': job.id}, headers=self.owner)
             duplicate = self.client.post(self.path, json={'replaceJobId': job.id}, headers=self.owner)
             self.assertNotEqual(job.id, regenerated.json['jobId'])

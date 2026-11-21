@@ -239,7 +239,13 @@ def run_diary_job(job_id, poll_timeout=None, poll_interval=None):
                     headers=proxy.petgif_headers(), files=uploads,
                     data=({
                         'date': fields['date'], 'durationMin': fields['durationMin'],
-                        'steps': fields['steps'], 'notes': '步数是 PetSense 对已观测走动时段的估算',
+                        'steps': fields['steps'],
+                        'notes': (
+                            '仅用本次上传照片里的宠物与场景作为绘制素材。'
+                            '忽略档案里的默认角色、名字和外观。'
+                            '贴纸和正文不要写宠物名字，也不要补写没有提供的地点。'
+                            '将步数标为估算值。'
+                        ),
                         'petId': job.petgif_id,
                     } if mode == 'ai' else {**fields, 'petId': job.petgif_id}), timeout=45,
                     allow_redirects=False,

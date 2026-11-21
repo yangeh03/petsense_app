@@ -218,7 +218,10 @@ def store_ai_poster(job_id, content):
         if original.width * original.height > 16_000_000:
             raise ValueError('海报分辨率超限')
         image = original.convert('RGB')
-    ImageDraw.Draw(image).rectangle((0, image.height - 96, image.width, image.height), fill='#FCF6EF')
-    ImageDraw.Draw(image).text((24, image.height - 78), '步数为已观测时段的估算值',
-                             fill='#332821', font=ImageFont.truetype(str(FONT), 38))
-    return store_poster(job_id, image)
+    footer_height = max(44, round(image.width / 16))
+    poster = Image.new('RGB', (image.width, image.height + footer_height), '#FCF6EF')
+    poster.paste(image, (0, 0))
+    ImageDraw.Draw(poster).text((footer_height // 4, image.height + footer_height // 5),
+                               '步数为已观测时段的估算值', fill='#332821',
+                               font=ImageFont.truetype(str(FONT), footer_height // 2))
+    return store_poster(job_id, poster)
