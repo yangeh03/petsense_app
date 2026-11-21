@@ -78,7 +78,7 @@ export function ExerciseDiaryEntry({ petId, hasPhoto }: { petId: number; hasPhot
       </Pressable>
       {!latest && hasPhoto && (
         <ThemedText type="small" themeColor="textSecondary">
-          使用档案照片和今日运动数据，由 PetGIF 生成。
+          照片和运动数据将发送给 PetGIF 生成海报，素材链接可公开访问。
         </ThemedText>
       )}
       {hasHistory && !latest && (

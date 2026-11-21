@@ -25,12 +25,13 @@ PILOT_STEPS_PER_MINUTE = 150
 
 
 def _shared_pet_id():
-    from petsense.petgif.proxy import PETGIF_KEY
+    from petsense.petgif.proxy import PETGIF_AVATAR_TEMPLATES, PETGIF_KEY
 
-    if os.getenv('PETSENSE_PETGIF_PRIVATE_DIARIES') != '1' or not PETGIF_KEY:
+    if not PETGIF_KEY:
         return None
     try:
-        return str(UUID(os.getenv('PETSENSE_PETGIF_DIARY_PET_ID', '')))
+        default_id = PETGIF_AVATAR_TEMPLATES['marni']['petgif_id']
+        return str(UUID(os.getenv('PETSENSE_PETGIF_DIARY_PET_ID', default_id)))
     except ValueError:
         return None
 

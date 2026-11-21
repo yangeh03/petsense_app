@@ -216,9 +216,6 @@ def run_diary_job(job_id, poll_timeout=None, poll_interval=None):
     upstream_attempted = False
     try:
         if not diary_id:
-            if mode == 'ai' and os.getenv('PETSENSE_PETGIF_PRIVATE_DIARIES') != '1':
-                _set_terminal(job_id, 'failed', 'AI 海报暂不可用')
-                return
             uploads = []
             for index, path in enumerate(paths):
                 extension = Path(path).suffix.lower()

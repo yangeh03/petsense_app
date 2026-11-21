@@ -31,7 +31,6 @@ class DailyDiaryTests(unittest.TestCase):
         self.upstream_pet = 'c601c1c3-92cc-410e-99ec-2d278f5e05af'
         self.upstream_diary = '1d638956-74e2-4650-af05-680cbbacd993'
         self.enterContext(patch.dict('os.environ', {
-            'PETSENSE_PETGIF_PRIVATE_DIARIES': '1',
             'PETSENSE_PETGIF_DIARY_PET_ID': self.upstream_pet,
         }))
         Image.new('RGB', (20, 20), 'red').save(Path(self.root) / 'profile.png')

@@ -77,5 +77,5 @@ Read the exact versioned docs at https://docs.expo.dev/versions/v58.0.0/ before 
 ## 运动日记
 
 - 「今日」的「今日记录」下方一键提交 AI 海报。服务端用宠物档案照片和上海时间当天的已识别走动时长，按试点步频 150 步/分钟估算。步频未经实机校准，海报标明为估算。新任务需要档案照及至少一分钟有效走动。同日复用任务，详情可手动重新生成。已生成的模板海报仍可查看。
-- PetSense 在后台使用 `PETSENSE_PETGIF_DIARY_PET_ID` 指定的上游日记专用 UUID，用户无需绑定个人 PetGIF 形象。该 UUID、PetGIF AK 和 `PETSENSE_PETGIF_PRIVATE_DIARIES=1` 都必须在服务端配置。启用前按 [运动日记接入说明](docs/EXERCISE_DIARY.md) 验证私有访问。
+- 后台默认用 PetGIF 的 Marni 演示 UUID 挂载日记任务，可用 `PETSENSE_PETGIF_DIARY_PET_ID` 替换。生成素材来自宠物档案，用户无需绑定个人 PetGIF 形象。PetGIF 托管素材可通过链接公开访问，App 在提交前提示。配置见 [运动日记接入说明](docs/EXERCISE_DIARY.md)。
 - 海报保存在运行目录的 `diary-posters/`，通过鉴权接口读取，沿用 90 天任务保留期。社区发布统一走动态发布页并独立保存草稿。原生保存相册使用 Expo MediaLibrary，需要包含该模块的原生构建。
