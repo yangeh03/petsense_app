@@ -219,7 +219,13 @@ export default function DashboardScreen() {
               hasCoverage={hasCoverage}
               onPress={() => router.push('/records')}
             />
-            {user && <ExerciseDiaryEntry key={`${user.id}:${pet.id}`} petId={pet.id} />}
+            {user && (
+              <ExerciseDiaryEntry
+                key={`${user.id}:${pet.id}`}
+                petId={pet.id}
+                hasPhoto={!!pet.avatarImageUrl}
+              />
+            )}
           </>
         ) : (
           !busy && (

@@ -15,7 +15,6 @@ import {
   downloadDiaryPoster,
   listExerciseDiaries,
   type DiaryCollection,
-  type DiaryMode,
 } from '@/services/exercise-diary';
 
 export default function ExerciseDiaryScreen() {
@@ -93,11 +92,11 @@ function DiaryContent({ petId, jobId }: { petId: number; jobId?: string }) {
     };
   }, [readyId, refresh]);
 
-  async function generate(mode: DiaryMode, replaceJobId?: string) {
+  async function generate(replaceJobId: string) {
     setBusy(true);
     setMessage('');
     try {
-      const job = await createExerciseDiary(petId, mode, replaceJobId);
+      const job = await createExerciseDiary(petId, replaceJobId);
       setSelectedId(job.jobId);
       setRefresh((value) => value + 1);
     } catch (error) {
@@ -184,17 +183,15 @@ function DiaryContent({ petId, jobId }: { petId: number; jobId?: string }) {
               </View>
             </>
           )}
-          {today && (selected.status === 'completed' || selected.status === 'failed') && (
-            <Action onPress={() => void generate(selected.mode, selected.jobId)} disabled={busy}>
-              {selected.status === 'failed' ? '重试生成' : '重新生成'}
-            </Action>
-          )}
+          {data?.aiAvailable &&
+            today &&
+            selected.mode === 'ai' &&
+            (selected.status === 'completed' || selected.status === 'failed') && (
+              <Action onPress={() => void generate(selected.jobId)} disabled={busy}>
+                {selected.status === 'failed' ? '重试生成' : '重新生成'}
+              </Action>
+            )}
         </>
-      )}
-      {data?.aiAvailable && selected?.mode !== 'ai' && (
-        <Action disabled={busy} onPress={() => void generate('ai')}>
-          生成 AI 海报
-        </Action>
       )}
       {message ? (
         <>

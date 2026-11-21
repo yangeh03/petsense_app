@@ -13,10 +13,10 @@ export function listExerciseDiaries(petId: number, signal?: AbortSignal) {
   return request<DiaryCollection>(`/exercise-diaries/${petId}`, { signal });
 }
 
-export function createExerciseDiary(petId: number, mode: DiaryMode, replaceJobId?: string) {
+export function createExerciseDiary(petId: number, replaceJobId?: string) {
   return request<ExerciseDiary>(`/exercise-diaries/${petId}`, {
     method: 'POST',
-    body: { mode, replaceJobId },
+    body: { mode: 'ai', replaceJobId },
   });
 }
 

@@ -3,17 +3,20 @@ import io
 import json
 import math
 import os
-from pathlib import Path
+from contextlib import closing
 from datetime import timedelta
+from pathlib import Path
+from uuid import UUID
 
 from flask import Blueprint, request, send_file
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from sqlalchemy import select
+from werkzeug.datastructures import FileStorage
 
 from petsense import config
 from petsense.auth.routes import require_app_user
 from petsense.db import session_scope, utc_now
-from petsense.db.models import Pet, PetgifDiaryJob, PetgifIdentity, TelemetryMinute
+from petsense.db.models import Pet, PetgifDiaryJob, TelemetryMinute
 from petsense.telemetry.observations import SHANGHAI
 
 bp = Blueprint('daily_diary', __name__, url_prefix='/api/app/exercise-diaries')
@@ -21,15 +24,34 @@ FONT = Path(__file__).with_name('fonts') / 'DiarySans.ttf'
 PILOT_STEPS_PER_MINUTE = 150
 
 
-def _ai_available(session, pet):
-    from petsense.petgif.proxy import PETGIF_AVATAR_TEMPLATES, PETGIF_KEY
+def _shared_pet_id():
+    from petsense.petgif.proxy import PETGIF_KEY
 
-    if os.getenv('PETSENSE_PETGIF_PRIVATE_DIARIES') != '1' or not PETGIF_KEY or not pet.petgif_id:
-        return False
-    if any(item['petgif_id'] == pet.petgif_id for item in PETGIF_AVATAR_TEMPLATES.values()):
-        return False
-    identity = session.get(PetgifIdentity, pet.petgif_id)
-    return identity is not None and identity.user_id == pet.user_id
+    if os.getenv('PETSENSE_PETGIF_PRIVATE_DIARIES') != '1' or not PETGIF_KEY:
+        return None
+    try:
+        return str(UUID(os.getenv('PETSENSE_PETGIF_DIARY_PET_ID', '')))
+    except ValueError:
+        return None
+
+
+def _profile_photo(filename):
+    if not filename:
+        raise ValueError('请先在宠物档案添加照片')
+    path = Path(config.UPLOADS_DIR) / Path(filename).name
+    try:
+        with Image.open(path) as source:
+            if source.width * source.height > 16_000_000:
+                raise ValueError('宠物档案照片分辨率过高，请更新照片')
+            image = ImageOps.exif_transpose(source).convert('RGB')
+            image.thumbnail((1600, 1600))
+            image.info.clear()
+            photo = io.BytesIO()
+            image.save(photo, format='JPEG', quality=90)
+            photo.seek(0)
+    except (OSError, Image.DecompressionBombError) as exc:
+        raise ValueError('宠物档案照片无法读取，请更新照片') from exc
+    return FileStorage(photo, filename='pet.jpg', content_type='image/jpeg')
 
 
 def _snapshot(session, pet, start, now):
@@ -67,39 +89,52 @@ def daily_diaries(pet_id):
         pet = session.get(Pet, pet_id)
         if pet is None or pet.user_id != user['id']:
             return {'message': '宠物档案不存在'}, 404
-        ai_available = _ai_available(session, pet)
-        jobs = session.scalars(select(PetgifDiaryJob).where(
+        ownership = (
             PetgifDiaryJob.user_id == user['id'], PetgifDiaryJob.pet_id == pet_id,
-            PetgifDiaryJob.idempotency_key.startswith('daily:'),
-            PetgifDiaryJob.created_at >= now - timedelta(days=diary_jobs.JOB_TTL_DAYS),
-        ).order_by(PetgifDiaryJob.created_at.desc()).limit(30)).all()
+        )
+        upstream_id = _shared_pet_id()
         if request.method == 'GET':
-            return {'date': date, 'aiAvailable': ai_available, 'jobs': [diary_jobs.job_dict(j) for j in jobs]}
+            jobs = session.scalars(select(PetgifDiaryJob).where(
+                *ownership, PetgifDiaryJob.idempotency_key.startswith('daily:'),
+                PetgifDiaryJob.created_at >= now - timedelta(days=diary_jobs.JOB_TTL_DAYS),
+            ).order_by(PetgifDiaryJob.created_at.desc()).limit(30)).all()
+            return {'date': date, 'aiAvailable': bool(upstream_id),
+                    'jobs': [diary_jobs.job_dict(job) for job in jobs]}
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
             return {'message': '请求格式无效'}, 400
-        mode = body.get('mode', 'template')
-        if mode not in ('template', 'ai'):
-            return {'message': '未知海报样式'}, 400
-        if mode == 'ai' and not ai_available:
-            return {'message': 'AI 海报暂不可用'}, 409
-        prefix = f'daily:{date}:{mode}:'
-        latest = next((job for job in jobs if job.idempotency_key.startswith(prefix)), None)
+        if body.get('mode', 'ai') != 'ai':
+            return {'message': '请更新 App 后生成 AI 海报'}, 409
+        prefix = f'daily:{date}:ai:'
+        latest = session.scalar(select(PetgifDiaryJob).where(
+            *ownership, PetgifDiaryJob.idempotency_key.startswith(prefix),
+        ).order_by(PetgifDiaryJob.created_at.desc()).limit(1))
         replace_id = body.get('replaceJobId')
         if latest and (replace_id != latest.id or latest.status not in ('completed', 'failed')):
             return diary_jobs.job_dict(latest), 202
         if replace_id is not None and latest is None:
-            return {'message': '只能更新今天同一风格的日记'}, 409
+            return {'message': '只能更新今天的 AI 海报'}, 409
+        if not upstream_id:
+            return {'message': 'AI 海报暂未开放'}, 409
+        if not pet.avatar_image:
+            return {'message': '请先在宠物档案添加照片'}, 422
         fields = _snapshot(session, pet, start, now)
-        if mode == 'ai' and (fields['steps'] is None or fields['walkingSeconds'] < 60):
-            return {'message': '今天的走动数据不足以生成 AI 海报，可以制作照片模板'}, 409
-        fields.update({
-            'mode': mode,
-            'durationMin': round((fields['walkingSeconds'] or 0) / 60),
-        })
-        upstream_id = pet.petgif_id if mode == 'ai' else ''
+        if fields['steps'] is None or fields['walkingSeconds'] < 60:
+            return {'message': '今天的有效走动记录不足 1 分钟'}, 409
+        fields.update({'mode': 'ai', 'durationMin': round(fields['walkingSeconds'] / 60)})
+        avatar = fields.pop('avatar')
+        fields.pop('name')
         key = prefix + (latest.id if latest else 'first')
-    job, reused = diary_jobs.create_job(user['id'], pet_id, upstream_id, key, fields, [])
+    try:
+        with closing(_profile_photo(avatar)) as photo:
+            paths = diary_jobs.store_photos([photo])
+    except ValueError as exc:
+        return {'message': str(exc)}, 422
+    try:
+        job, reused = diary_jobs.create_job(user['id'], pet_id, upstream_id, key, fields, paths)
+    except Exception:
+        diary_jobs.remove_photos(paths)
+        raise
     if not reused:
         diary_jobs.enqueue_diary_job(job.id)
     return diary_jobs.job_dict(job), 202
