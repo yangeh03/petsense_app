@@ -320,6 +320,10 @@ class MemoryJobsTests(unittest.TestCase):
             runs_rows = s.execute(select(AgentRun).where(AgentRun.form == 'summary')).scalars().all()
             self.assertEqual(len(runs_rows), 1)
             self.assertEqual(runs_rows[0].status, 'degraded')  # 模型小结缺失
+            # §3.11 双向溯源：条目 source_refs 引 run id，轨迹结论回填 memoryId
+            self.assertIn({'type': 'run', 'id': runs_rows[0].id},
+                          json.loads(row.source_refs))
+            self.assertEqual(json.loads(runs_rows[0].conclusion)['memoryId'], row.id)
         outcome2 = memory_jobs.process_pet(pet.id, now=now_local + timedelta(minutes=31))
         self.assertEqual(outcome2['daily'], [])  # 幂等：已存在即跳过
         with db.session_scope() as s:
@@ -351,6 +355,9 @@ class MemoryJobsTests(unittest.TestCase):
         with db.session_scope() as s:
             row = s.execute(select(PetMemory).where(PetMemory.kind == 'weekly')).scalars().first()
             self.assertEqual(json.loads(row.facts)['dailyCount'], 6)
+            run_row = s.execute(select(AgentRun).where(
+                AgentRun.form == 'summary').order_by(AgentRun.id.desc())).scalars().first()
+            self.assertEqual(json.loads(row.source_refs)[-1], {'type': 'run', 'id': run_row.id})
         outcome = memory_jobs.process_pet(pet.id, now=now_local)
         self.assertIsNone(outcome['weekly'])  # 周汇总已存在，计划阶段即跳过
         with db.session_scope() as s:
@@ -374,6 +381,8 @@ class MemoryJobsTests(unittest.TestCase):
             self.assertEqual(len(trace_rows), 1)
             conclusion = json.loads(trace_rows[0].conclusion)
             self.assertEqual(conclusion['decision'], 'promoted')
+            self.assertEqual(conclusion['memoryId'], card.id)  # 条目落库后回填结论
+            self.assertIn({'type': 'run', 'id': trace_rows[0].id}, json.loads(card.source_refs))
             self.assertIn('门槛满足', conclusion['reason'])
             snap_line = memory.insight_line(s, pet.id)
             self.assertIn('门口踱步', snap_line)
@@ -418,6 +427,137 @@ class MemoryJobsTests(unittest.TestCase):
         self.assertIn('Max', content)
         self.assertIn('公园', content)
         self.assertIn('数据库为唯一真相', content)
+
+
+class LeakControlTests(unittest.TestCase):
+    """忘掉/纠正后的泄露控制：认识卡强制重建且不回喂旧文、候选全失效退役、快照与导出即时反映。"""
+
+    def setUp(self):
+        fresh_db(self)
+        self.uid = seed_user_with_pet()
+        pet = _pet()
+        self.pet_id = pet.id
+        self._model_prompts = []
+
+        def _record(system_prompt, user_prompt, max_tokens=500):
+            self._model_prompts.append(user_prompt)
+            return '稳定认识：近期规律可见。'
+
+        self._patcher = patch.object(memory_jobs, '_model_text', side_effect=_record)
+        self._patcher.start()
+        self.addCleanup(self._patcher.stop)
+
+    def _seed_two_habits(self):
+        with db.session_scope() as s:
+            memory.save_entry(s, self.pet_id, kind='habit_candidate', summary='傍晚常在门口踱步等主人回家')
+            memory.save_entry(s, self.pet_id, kind='habit_candidate', summary='听到钥匙声会跑到玄关')
+
+    def _habits(self):
+        with db.session_scope() as s:
+            return [(r.id, r.summary) for r in
+                    memory.active_of_kinds(s, self.pet_id, ('habit_candidate',))]
+
+    def _forget(self, memory_id):
+        with db.session_scope() as s:
+            row, error = memory.forget(s, self.pet_id, memory_id)
+            self.assertIsNone(error)
+
+    def _card(self):
+        with db.session_scope() as s:
+            card = memory.active_insight(s, self.pet_id)
+            return card
+
+    def test_forget_cited_candidate_rebuilds_without_old_text(self):
+        now = utc_now()
+        self._seed_two_habits()
+        outcome = memory_jobs.process_pet(self.pet_id, now=now)
+        self.assertTrue(outcome['distill']['distilled'])
+        old_card = self._card()
+        (forgotten_id, forgotten_summary), (kept_id, _) = self._habits()
+        self._forget(forgotten_id)
+        with db.session_scope() as s:
+            card = memory.active_insight(s, self.pet_id)
+            self.assertTrue(memory.stale_citations(s, card))
+            self.assertEqual(memory.insight_line(s, self.pet_id),
+                             '认识卡待更新（引用的部分记忆已被遗忘或纠正）')
+            report = memory.render_report(s, s.get(Pet, self.pet_id))
+        self.assertIn('（待更新：认识卡引用的部分记忆已被遗忘或纠正）', report)
+        self._model_prompts.clear()
+        outcome = memory_jobs.process_pet(self.pet_id, now=now + timedelta(minutes=10))
+        self.assertTrue(outcome['distill']['distilled'])
+        self.assertEqual(len(self._model_prompts), 1)
+        self.assertNotIn(forgotten_summary, self._model_prompts[0])  # 被遗忘候选与旧卡文字都不回喂
+        self.assertIn('已被遗忘或纠正', self._model_prompts[0])
+        new_card = self._card()
+        self.assertIsNotNone(new_card)
+        self.assertNotEqual(new_card.id, old_card.id)
+        with db.session_scope() as s:
+            card = memory.active_insight(s, self.pet_id)
+            cited = {ref['id'] for ref in json.loads(card.source_refs) if ref.get('type') == 'memory'}
+            self.assertNotIn(forgotten_id, cited)
+            self.assertIn(kept_id, cited)
+            self.assertEqual(memory.insight_line(s, self.pet_id), '稳定认识：近期规律可见。')
+
+    def test_forget_all_cited_candidates_retires_card(self):
+        now = utc_now()
+        self._seed_two_habits()
+        memory_jobs.process_pet(self.pet_id, now=now)
+        old_card = self._card()
+        for memory_id, _ in self._habits():
+            self._forget(memory_id)
+        self._model_prompts.clear()
+        outcome = memory_jobs.process_pet(self.pet_id, now=now + timedelta(minutes=10))
+        self.assertEqual(outcome['distill']['reason'], 'stale_card_retired')
+        self.assertEqual(self._model_prompts, [])  # 确定性退役，不需要模型
+        self.assertIsNone(self._card())
+        with db.session_scope() as s:
+            self.assertEqual(s.get(PetMemory, old_card.id).status, 'retired')
+            self.assertEqual(memory.insight_line(s, self.pet_id), '尚无稳定认识')
+            runs_rows = s.execute(select(AgentRun).where(AgentRun.form == 'distill')).scalars().all()
+            self.assertEqual(json.loads(runs_rows[-1].conclusion)['decision'], 'retired_stale')
+
+    def test_correction_supersede_marks_card_stale_and_rebuilds(self):
+        now = utc_now()
+        with db.session_scope() as s:
+            for i in range(3):
+                memory.save_entry(s, self.pet_id, kind='episode', summary=f'第{i}次去公园玩飞盘')
+        memory_jobs.process_pet(self.pet_id, now=now)
+        old_card = self._card()
+        self.assertIsNotNone(old_card)
+        with db.session_scope() as s:
+            oldest = min(memory.active_of_kinds(s, self.pet_id, ('episode',)), key=lambda r: r.id)
+            superseded_summary = oldest.summary
+            new, error = memory.save_entry(s, self.pet_id, kind='episode',
+                                           summary='其实是上周日去的公园', supersedes_id=oldest.id)
+            self.assertIsNone(error)
+            corrected_id = new.id
+        self._model_prompts.clear()
+        # 纠正发生在蒸馏后 1 小时内：仍强制重建（不受 24h 节奏限制）
+        outcome = memory_jobs.process_pet(self.pet_id, now=now + timedelta(hours=1))
+        self.assertTrue(outcome['distill']['distilled'])
+        self.assertNotIn(superseded_summary, self._model_prompts[0])
+        new_card = self._card()
+        self.assertNotEqual(new_card.id, old_card.id)
+        with db.session_scope() as s:
+            refs = [ref for ref in json.loads(memory.active_insight(s, self.pet_id).source_refs)
+                    if ref.get('type') == 'memory']
+            self.assertIn(corrected_id, {ref['id'] for ref in refs})  # 新卡引用纠正后的有效版本
+
+    def test_forget_tool_refreshes_report_immediately(self):
+        pet = _pet()
+        context = {'pet_id': self.pet_id, 'user_id': self.uid, 'turn_id': 1}
+        with db.session_scope() as s:
+            entry, _ = memory.save_entry(s, self.pet_id, kind='episode', summary='上周三半夜狗叫了好久')
+        with db.session_scope() as s:
+            path = memory.write_report(s, pet)  # fresh_db 已把 RUNTIME_ROOT 指向临时目录
+        self.assertIn('上周三半夜狗叫了好久', path.read_text(encoding='utf-8'))
+        gate = registry.execute_tool('forget_memory', {'memoryId': entry.id},
+                                     registry.DIALOGUE, 'allowed', context)
+        self.assertTrue(gate['allowed'], gate)
+        self.assertTrue(gate['result']['forgotten'])
+        content = path.read_text(encoding='utf-8')
+        self.assertNotIn('- [episode] 上周三半夜狗叫了好久', content)  # 不再出现在有效经历里
+        self.assertIn('[episode/retired] 上周三半夜狗叫了好久', content)  # 历史版本保留可审计
 
 
 class DialogueIntegrationTests(unittest.TestCase):

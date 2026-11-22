@@ -220,11 +220,33 @@ def active_insight(session, pet_id):
         PetMemory.status == 'active').order_by(PetMemory.id.desc()).limit(1)).scalars().first()
 
 
+def stale_citations(session, card):
+    """认识卡引用的候选是否已失效（被遗忘或被纠正替换）。
+
+    引用失效即视为卡被污染：快照与报告暂停展示该卡，蒸馏被强制提前，
+    重建时不回喂旧卡文字——保证「忘掉」后旧内容不再经认识卡泄露。
+    """
+    try:
+        refs = json.loads(card.source_refs or '[]')
+    except ValueError:
+        return False
+    ids = [ref.get('id') for ref in refs
+           if isinstance(ref, dict) and ref.get('type') == 'memory'
+           and isinstance(ref.get('id'), int)]
+    if not ids:
+        return False
+    active = set(session.execute(select(PetMemory.id).where(
+        PetMemory.id.in_(ids), PetMemory.status == 'active')).scalars().all())
+    return any(i not in active for i in ids)
+
+
 def insight_line(session, pet_id):
-    """快照 memory 节的一行（spec §3.9）：有界认识卡或如实说明。"""
+    """快照 memory 节的一行（spec §3.9）：有界认识卡、引用失效时暂停展示，或如实说明。"""
     card = active_insight(session, pet_id)
     if card is None or not (card.summary or '').strip():
         return '尚无稳定认识'
+    if stale_citations(session, card):
+        return '认识卡待更新（引用的部分记忆已被遗忘或纠正）'
     return card.summary.strip()[:INSIGHT_CHAR_LIMIT]
 
 
@@ -283,16 +305,23 @@ def active_of_kinds(session, pet_id, kinds):
 
 
 def distill_candidates(session, pet_id, now):
-    """蒸馏候选池与门槛（确定性代码，spec §3.7）。eligible=False 时不触发蒸馏。"""
+    """蒸馏候选池与门槛（确定性代码，spec §3.7）。eligible=False 时不触发蒸馏；
+    现卡引用失效（遗忘/纠正）时不受 24h 节奏限制，强制提前重建以防泄露。"""
     habits = active_of_kinds(session, pet_id, ('habit_candidate',))
     episodes = [row for row in active_of_kinds(session, pet_id, EXPERIENCE_KINDS)
                 if row.generated_at >= now - timedelta(days=30)][:15]
     current = active_insight(session, pet_id)
+    stale = current is not None and stale_citations(session, current)
     eligible = len(habits) >= 2 or len(episodes) >= 3
-    due = eligible and (current is None or (
-        current.generated_at <= now - timedelta(hours=24)
-        and _has_newer_memory(session, pet_id, current.generated_at)))
-    return {'habits': habits, 'episodes': episodes, 'current': current, 'eligible': eligible, 'due': due}
+    if current is None:
+        due = eligible
+    elif stale:
+        due = True  # 有候选即重建（distill 判定）；候选全空也要进入退役路径
+    else:
+        due = eligible and (current.generated_at <= now - timedelta(hours=24)
+                            and _has_newer_memory(session, pet_id, current.generated_at))
+    return {'habits': habits, 'episodes': episodes, 'current': current,
+            'eligible': eligible, 'due': due, 'stale': stale}
 
 
 def _has_newer_memory(session, pet_id, since):
@@ -308,7 +337,11 @@ def render_report(session, pet):
     lines = [f'# {pet.name} 的长期记忆报告', '',
              f'生成时间：{iso_z(utc_now())}。数据库为唯一真相，本报告为只读视图。', '']
     card = active_insight(session, pet.id)
-    lines += ['## 认识卡', (card.summary if card and card.summary else '（尚无稳定认识）'), '']
+    if card and card.summary and stale_citations(session, card):
+        card_line = '（待更新：认识卡引用的部分记忆已被遗忘或纠正）'
+    else:
+        card_line = card.summary if card and card.summary else '（尚无稳定认识）'
+    lines += ['## 认识卡', card_line, '']
     lines.append('## 经历（按月）')
     experiences = active_of_kinds(session, pet.id, EXPERIENCE_KINDS)
     if experiences:

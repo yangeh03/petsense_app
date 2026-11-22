@@ -6,6 +6,7 @@
 新增工具须先改 P00 契约再注册（roadmap §4.2）。
 """
 import json
+import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
@@ -333,6 +334,10 @@ def _execute_forget_memory(args, context):
         row, error = pet_memory.forget(s, pet.id, memory_id)
         if error:
             return {'forgotten': False, 'error': error}
+        try:
+            pet_memory.write_report(s, pet)  # 导出即时一致；写失败由 worker 下个 tick 补写
+        except OSError:
+            logging.getLogger(__name__).warning('memory report rewrite failed for pet %s', pet.id)
         return {'forgotten': True, 'memoryId': row.id, 'status': row.status,
                 'note': '条目保留可审计；后续不得再引用这条记忆回答主人'}
 

@@ -5,8 +5,9 @@
 事实与门槛由代码组织，模型只写 summary 文字（D4）；无凭据/失败降级
 facts-only（汇总，status=degraded）或保留旧卡重试（蒸馏）。单进程假设沿用。
 
-作用域注意：runs.save 与 memory 存储各自开 session_scope（线程级共享会话），
-生成器在自身作用域内完成写入、作用域外落轨迹，避免嵌套 begin。
+作用域注意：runs.save 与 memory 存储各自开 session_scope（线程级共享会话）。
+写入顺序按 spec §3.11：先落轨迹取得 run id，条目 source_refs 引用 run id，
+条目落库后回填轨迹结论的 memoryId（双向可溯源）；条目写入前在自身作用域内复核幂等。
 """
 import json
 import logging
@@ -71,36 +72,42 @@ def _missing_daily_days(session, pet, now):
 
 
 def generate_daily(pet, day_text, now):
-    """生成一条日汇总（facts 代码组织、summary 模型组织、失败降级 facts-only）。幂等。"""
+    """生成一条日汇总（facts 代码组织、summary 模型组织、失败降级 facts-only）。幂等。
+
+    顺序按 spec §3.11：先轨迹后条目；条目写入前复核 active 不存在（幂等）。
+    """
     start, end = memory.shanghai_day_bounds(day_text)
     with session_scope() as session:
         if memory.active_daily(session, pet.id, start) is not None:
             return {'day': day_text, 'created': False, 'reason': 'exists'}
         facts = memory.daily_facts(session, pet, start, end)
         day_memories = memory.memories_in_range(session, pet.id, start, end)
-        refs = [{'type': 'observations', 'day': day_text}] + \
-               [{'type': 'memory', 'id': row.id} for row in day_memories]
-        memory_lines = [f'- [{row.kind}] {row.summary}' for row in day_memories]
-        user_prompt = (f'宠物：{pet.name}\n日期：{day_text}\n'
-                       f'当日观测事实（JSON）：{json.dumps(facts, ensure_ascii=False)}\n'
-                       f'当日主人讲述/记忆条目：{chr(10).join(memory_lines) or "（无）"}')
-        summary = _model_text(DAILY_SUMMARY_PROMPT, user_prompt)
-        degraded = ['summary_model_unavailable'] if summary is None else []
+    refs = [{'type': 'observations', 'day': day_text}] + \
+           [{'type': 'memory', 'id': row.id} for row in day_memories]
+    memory_lines = [f'- [{row.kind}] {row.summary}' for row in day_memories]
+    user_prompt = (f'宠物：{pet.name}\n日期：{day_text}\n'
+                   f'当日观测事实（JSON）：{json.dumps(facts, ensure_ascii=False)}\n'
+                   f'当日主人讲述/记忆条目：{chr(10).join(memory_lines) or "（无）"}')
+    summary = _model_text(DAILY_SUMMARY_PROMPT, user_prompt)
+    degraded = ['summary_model_unavailable'] if summary is None else []
+    trace = {'form': 'summary', 'trigger': {'kind': 'daily', 'day': day_text},
+             'conclusion': {'day': day_text, 'minuteCount': facts['minuteCount'],
+                            'modelSummary': summary is not None},
+             'messages': [{'role': 'user', 'prompt': user_prompt[:500]},
+                          {'role': 'assistant', 'text': (summary or '')[:500]}],
+             'tool_summary': [], 'budget': {}, 'degraded': degraded}
+    run_id = runs.save(pet.id, None, trace, 'degraded' if degraded else 'complete')
+    with session_scope() as session:
+        if memory.active_daily(session, pet.id, start) is not None:
+            return {'day': day_text, 'created': False, 'reason': 'exists'}
         entry, error = memory.save_entry(
             session, pet.id, kind='daily', summary=summary or f'{day_text} 观测汇总（结构化事实）',
             subject='pet', start_at=start, end_at=end, facts={'day': day_text, **facts},
-            source_type='worker', source_refs=refs, generated_at=now)
-        if error:
-            return {'day': day_text, 'created': False, 'error': error}
-        entry_id = entry.id
-        trace = {'form': 'summary', 'trigger': {'kind': 'daily', 'day': day_text},
-                 'conclusion': {'day': day_text, 'memoryId': entry_id,
-                                'minuteCount': facts['minuteCount'],
-                                'modelSummary': summary is not None},
-                 'messages': [{'role': 'user', 'prompt': user_prompt[:500]},
-                              {'role': 'assistant', 'text': (summary or '')[:500]}],
-                 'tool_summary': [], 'budget': {}, 'degraded': degraded}
-    runs.save(pet.id, None, trace, 'degraded' if degraded else 'complete')
+            source_type='worker', source_refs=refs + [{'type': 'run', 'id': run_id}],
+            generated_at=now)
+    if error:
+        return {'day': day_text, 'created': False, 'error': error}
+    runs.update_conclusion(run_id, {'memoryId': entry.id})
     return {'day': day_text, 'created': True, 'modelSummary': summary is not None}
 
 
@@ -138,73 +145,106 @@ def _week_plan(session, pet, now):
 
 
 def generate_weekly(pet, plan, now):
-    """生成上周周汇总：聚合该周 daily 计数 + 周窗口总量（observations 同口径）。"""
+    """生成上周周汇总：聚合该周 daily 计数 + 周窗口总量（observations 同口径）。顺序同 §3.11。"""
     with session_scope() as session:
+        existing = session.execute(select(PetMemory).where(
+            PetMemory.pet_id == pet.id, PetMemory.kind == 'weekly', PetMemory.status == 'active',
+            PetMemory.start_at == plan['start'])).scalars().first()
+        if existing is not None:
+            return {'week': plan['weekStart'], 'created': False, 'reason': 'exists'}
         facts = memory.daily_facts(session, pet, plan['start'], plan['end'])
-        user_prompt = (f"宠物：{pet.name}\n周：{plan['weekStart']} 至 {plan['weekEnd']}\n"
-                       f'全周观测事实（JSON）：{json.dumps(facts, ensure_ascii=False)}\n'
-                       f"本周日报条数：{plan['dailyCount']}")
-        summary = _model_text(DAILY_SUMMARY_PROMPT, user_prompt)
-        degraded = ['summary_model_unavailable'] if summary is None else []
+    user_prompt = (f"宠物：{pet.name}\n周：{plan['weekStart']} 至 {plan['weekEnd']}\n"
+                   f'全周观测事实（JSON）：{json.dumps(facts, ensure_ascii=False)}\n'
+                   f"本周日报条数：{plan['dailyCount']}")
+    summary = _model_text(DAILY_SUMMARY_PROMPT, user_prompt)
+    degraded = ['summary_model_unavailable'] if summary is None else []
+    trace = {'form': 'summary', 'trigger': {'kind': 'weekly', 'week': plan['weekStart']},
+             'conclusion': {'week': plan['weekStart'], 'dailyCount': plan['dailyCount'],
+                            'modelSummary': summary is not None},
+             'messages': [{'role': 'user', 'prompt': user_prompt[:500]},
+                          {'role': 'assistant', 'text': (summary or '')[:500]}],
+             'tool_summary': [], 'budget': {}, 'degraded': degraded}
+    run_id = runs.save(pet.id, None, trace, 'degraded' if degraded else 'complete')
+    with session_scope() as session:
+        existing = session.execute(select(PetMemory).where(
+            PetMemory.pet_id == pet.id, PetMemory.kind == 'weekly', PetMemory.status == 'active',
+            PetMemory.start_at == plan['start'])).scalars().first()
+        if existing is not None:
+            return {'week': plan['weekStart'], 'created': False, 'reason': 'exists'}
         entry, error = memory.save_entry(
             session, pet.id, kind='weekly',
             summary=summary or f"{plan['weekStart']} 周汇总（结构化事实）",
             subject='pet', start_at=plan['start'], end_at=plan['end'],
             facts={'weekStart': plan['weekStart'], 'weekEnd': plan['weekEnd'],
                    'dailyCount': plan['dailyCount'], **facts},
-            source_type='worker', source_refs=[{'type': 'observations', 'week': plan['weekStart']}],
+            source_type='worker',
+            source_refs=[{'type': 'observations', 'week': plan['weekStart']},
+                         {'type': 'run', 'id': run_id}],
             generated_at=now)
-        if error:
-            return {'week': plan['weekStart'], 'created': False, 'error': error}
-        entry_id = entry.id
-        trace = {'form': 'summary', 'trigger': {'kind': 'weekly', 'week': plan['weekStart']},
-                 'conclusion': {'week': plan['weekStart'], 'memoryId': entry_id,
-                                'dailyCount': plan['dailyCount'],
-                                'modelSummary': summary is not None},
-                 'messages': [{'role': 'user', 'prompt': user_prompt[:500]},
-                              {'role': 'assistant', 'text': (summary or '')[:500]}],
-                 'tool_summary': [], 'budget': {}, 'degraded': degraded}
-    runs.save(pet.id, None, trace, 'degraded' if degraded else 'complete')
+    if error:
+        return {'week': plan['weekStart'], 'created': False, 'error': error}
+    runs.update_conclusion(run_id, {'memoryId': entry.id})
     return {'week': plan['weekStart'], 'created': True, 'modelSummary': summary is not None}
 
 
 def distill(pet, pool, now):
-    """认识卡蒸馏：候选池与门槛在规划作用域由代码判定，模型只组织 ≤100 字文字。"""
+    """认识卡蒸馏：候选池与门槛在规划作用域由代码判定，模型只组织 ≤100 字文字。
+
+    现卡引用失效（主人忘掉/纠正了被引用的记忆）时不回喂旧卡文字重建；
+    候选已全部失效时直接退役旧卡（确定性，不依赖模型），防止旧内容继续泄露。
+    """
     if not pool['due']:
         return {'distilled': False,
                 'reason': 'not_eligible' if not pool['eligible'] else 'interval'}
     habits, episodes, current = pool['habits'], pool['episodes'], pool['current']
+    if pool.get('stale') and not habits and not episodes:
+        with session_scope() as session:
+            row = memory.active_insight(session, pet.id)
+            if row is None or (current is not None and row.id != current.id):
+                return {'distilled': False, 'reason': 'stale_plan'}
+            retired_id = row.id
+            row.status = 'retired'  # 条目保留可审计，与 forget 同语义
+        runs.save(pet.id, None, {'form': 'distill', 'trigger': {'kind': 'scheduled', 'petId': pet.id},
+                                 'conclusion': {'decision': 'retired_stale', 'memoryId': retired_id,
+                                                'reason': '认识卡引用的候选已全部失效，退役旧卡待候选重新积累'},
+                                 'messages': [], 'tool_summary': [], 'budget': {}, 'degraded': []},
+                  'complete')
+        return {'distilled': False, 'reason': 'stale_card_retired', 'retiredInsightId': retired_id}
     lines = [f'- [habit_candidate] {row.summary}' for row in habits] + \
             [f'- [{row.kind}] {row.summary}' for row in episodes]
+    if pool.get('stale'):
+        card_note = '（现有认识卡引用的候选已被遗忘或纠正，不要沿用其内容，仅依据下方有效候选重建）'
+    else:
+        card_note = current.summary if current is not None else '（无）'
     user_prompt = (f'宠物：{pet.name}（{pet.species or ""}）\n候选记忆：{chr(10).join(lines)}\n'
-                   f'现有认识卡：{current.summary if current else "（无）"}')
+                   f'现有认识卡：{card_note}')
     text = _model_text(DISTILL_PROMPT, user_prompt, max_tokens=300)
     if text is None:
         return {'distilled': False, 'reason': 'model_unavailable'}  # 保留旧卡，下次 tick 重试
+    trace = {'form': 'distill', 'trigger': {'kind': 'scheduled', 'petId': pet.id},
+             'conclusion': {'decision': 'promoted',
+                            'candidates': {'habitCandidates': len(habits), 'episodes': len(episodes)},
+                            'reason': f'门槛满足（habit_candidate≥2 或 近30天经历≥3）：'
+                                      f'habit_candidate×{len(habits)}、经历×{len(episodes)}；'
+                                      '未入选候选保留原条目，淘汰随下轮蒸馏自然发生'},
+             'messages': [{'role': 'user', 'prompt': user_prompt[:500]},
+                          {'role': 'assistant', 'text': text[:memory.INSIGHT_CHAR_LIMIT]}],
+             'tool_summary': [], 'budget': {}, 'degraded': []}
+    run_id = runs.save(pet.id, None, trace, 'complete')
     with session_scope() as session:
         if current is not None and memory.active_insight(session, pet.id) is None:
             return {'distilled': False, 'reason': 'stale_plan'}
         entry, error = memory.save_entry(
             session, pet.id, kind='insight_card', summary=text[:memory.INSIGHT_CHAR_LIMIT],
             subject='pet', source_type='worker',
-            source_refs=[{'type': 'memory', 'id': row.id} for row in list(habits) + list(episodes)],
+            source_refs=[{'type': 'memory', 'id': row.id} for row in list(habits) + list(episodes)]
+                        + [{'type': 'run', 'id': run_id}],
             supersedes_id=current.id if current is not None else None, generated_at=now)
         if error:
             return {'distilled': False, 'error': error}
         entry_id, superseded_id = entry.id, current.id if current else None
-        kept = entry.summary
-        trace = {'form': 'distill', 'trigger': {'kind': 'scheduled', 'petId': pet.id},
-                 'conclusion': {'decision': 'promoted', 'memoryId': entry_id,
-                                'supersededInsightId': superseded_id,
-                                'candidates': {'habitCandidates': len(habits), 'episodes': len(episodes)},
-                                'kept': kept,
-                                'reason': f'门槛满足（habit_candidate≥2 或 近30天经历≥3）：'
-                                          f'habit_candidate×{len(habits)}、经历×{len(episodes)}；'
-                                          '未入选候选保留原条目，淘汰随下轮蒸馏自然发生'},
-                 'messages': [{'role': 'user', 'prompt': user_prompt[:500]},
-                              {'role': 'assistant', 'text': kept}],
-                 'tool_summary': [], 'budget': {}, 'degraded': []}
-    runs.save(pet.id, None, trace, 'complete')
+    runs.update_conclusion(run_id, {'memoryId': entry_id, 'supersededInsightId': superseded_id,
+                                    'kept': entry.summary})
     return {'distilled': True, 'insightId': entry_id, 'superseded': superseded_id}
 
 
@@ -223,7 +263,7 @@ def process_pet(pet_id, now=None):
         week_plan = _week_plan(session, pet, now)
         pool = memory.distill_candidates(session, pet.id, now)
         has_memory = session.execute(select(PetMemory.id).where(
-            PetMemory.pet_id == pet_id, PetMemory.status == 'active').limit(1)).first() is not None
+            PetMemory.pet_id == pet_id).limit(1)).first() is not None  # 含已失效条目：忘掉后报告也要刷新
     if week_plan is not None:
         outcome['weekly'] = generate_weekly(pet, week_plan, now)
     outcome['distill'] = distill(pet, pool, now)
