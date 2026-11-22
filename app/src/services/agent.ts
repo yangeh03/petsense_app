@@ -36,9 +36,12 @@ export type AgentWindowSource = {
   soundEventCount?: number | null;
 };
 
+/** 网页来源（W06 服务端 sources 并入）：title/checkedAt 由服务端写入，未知 type 由 UI 安全降级。 */
 export type AgentWebSource = { type: 'web'; url: string; title: string; checkedAt: string };
 
 export type AgentSource = AgentWindowSource | AgentWebSource;
+
+export const isWebSource = (source: AgentSource): source is AgentWebSource => source.type === 'web';
 
 export type AgentTurn = {
   id: number;

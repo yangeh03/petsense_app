@@ -71,7 +71,7 @@ class W07Base(unittest.TestCase):
         """打桩模型并捕获 input_items，用于断言模型输入构造。"""
         captured = {}
 
-        def fake(input_items, tools=None, on_delta=None, max_output_tokens=1800):
+        def fake(input_items, tools=None, on_delta=None, max_output_tokens=1800, web_search=False):
             captured['items'] = input_items
             return model_turn(allowed_stance() + reply)
 

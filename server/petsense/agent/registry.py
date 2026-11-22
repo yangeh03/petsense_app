@@ -1,4 +1,4 @@
-"""工具注册表与权限矩阵（W01，agent-w01-spec.md §3.4）。
+"""工具注册表与权限矩阵（W01，agent-w01-spec.md §3.4；W06 read_web_page/EXTERNAL_READ）。
 
 声明与执行分离注册；权限校验先于执行（存在性 → 运行形态 → stance 范围），
 越权调用返回结构化拒绝作为工具结果，模型据此如实表达，拒绝事件由调用方入轨迹。
@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from petsense.agent import baseline as baseline_service
+from petsense.agent import fetch
 from petsense.agent import memory as pet_memory
 from petsense.agent.observations import query as observations_query
 from petsense.agent import proposals as proposal_service
@@ -30,19 +31,21 @@ FACT_READ = 'fact_read'
 MEMORY = 'memory'
 PROFILE = 'profile'      # 确认门组（W03）：明确指令直写 / 候选确认卡，两路径在执行器内（agent-w03-spec.md §3.4）
 SETTINGS = 'settings'    # 直写组（W03）：助手设定，明确指令即改即回显
+EXTERNAL_READ = 'external_read'  # W06：公网网页深读（联网知识组）
 TOOL_TIMEOUT_S = 15.0
 
 _TOOLS = {}
 
 
 class ToolSpec:
-    def __init__(self, name, description, parameters, group, forms, execute):
+    def __init__(self, name, description, parameters, group, forms, execute, timeout_s=TOOL_TIMEOUT_S):
         self.name = name
         self.description = description
         self.parameters = parameters
         self.group = group
         self.forms = tuple(forms)
         self.execute = execute
+        self.timeout_s = timeout_s
 
     def schema(self):
         return {'type': 'function', 'name': self.name,
@@ -53,11 +56,14 @@ def register(spec):
     _TOOLS[spec.name] = spec
 
 
-def schemas_for(form, stance_scope):
-    """渲染该运行形态与范围下可用的工具 schema。out_of_scope 下业务与网络工具全部不可用（V11 §12.1）。"""
+def schemas_for(form, stance_scope, search_enabled=True):
+    """渲染该运行形态与范围下可用的工具 schema。out_of_scope 下业务与网络工具全部不可用（V11 §12.1）。
+    search_enabled=False（PETSENSE_SEARCH_DISABLED 灰度开关）时 EXTERNAL_READ 组不进 schemas，
+    能力描述与真实可用性保持一致（W06 spec §4.5）。"""
     if stance_scope == 'out_of_scope':
         return []
-    return [spec.schema() for spec in _TOOLS.values() if form in spec.forms]
+    return [spec.schema() for spec in _TOOLS.values()
+            if form in spec.forms and (search_enabled or spec.group != EXTERNAL_READ)]
 
 
 def _parse_time(value):
@@ -451,6 +457,34 @@ register(ToolSpec(
     group=SETTINGS, forms=(DIALOGUE,), execute=_execute_prepare_role_settings))
 
 
+def _execute_read_web_page(args, context):
+    url = args.get('url')
+    if not isinstance(url, str) or not url.strip():
+        return {'error': '请提供要读取的网页地址（http/https 绝对地址）。'}
+    try:
+        page = fetch.fetch_page(url.strip())
+    except fetch.FetchError as exc:
+        # 失败语义（W06 spec §4.4）：明确原因回给模型，运行继续；不得当作「来源不存在」
+        return {'error': f'网页读取失败：{exc}。请换一个来源或基于已有摘要如实回答，'
+                         '不得当作来源不存在，也不得声称已读取本页内容。'}
+    return {'url': page['url'], 'title': page['title'], 'text': page['text'],
+            'truncated': page['truncated'],
+            'note': '正文已提取，超过限制会被截断；truncated=true 时内容不完整，引用时如实说明'}
+
+
+register(ToolSpec(
+    name='read_web_page',
+    description='深读一个公网网页的正文：用于 web_search 来源摘要不足、需要细节或原文口径时，'
+                '或主人明确给出链接时；浅层信息优先用搜索摘要，不要为常识问题逐页阅读。'
+                '仅支持 http/https 公网页面（80/443 端口），内网地址与代理一律拒绝，页面最大 2MB、'
+                '正文截断 4000 字符。失败会返回明确原因（不存在/超时/非网页/超限等），不得当作来源不存在。',
+    parameters={'type': 'object', 'properties': {
+        'url': {'type': 'string', 'description': '要读取的网页地址（http/https 绝对地址）'}},
+        'required': ['url'], 'additionalProperties': False},
+    group=EXTERNAL_READ, forms=(DIALOGUE,), execute=_execute_read_web_page, timeout_s=20.0))
+
+
+
 def execute_tool(name, arguments, form, stance_scope, context):
     """权限矩阵先于执行：存在性 → 形态 → 范围；通过后带超时执行。
 
@@ -479,10 +513,10 @@ def execute_tool(name, arguments, form, stance_scope, context):
                 'result': {'error': '工具参数不是合法 JSON 对象，请修正后重试。'}}
     try:
         with ThreadPoolExecutor(max_workers=1) as pool:
-            result = pool.submit(spec.execute, arguments, context).result(timeout=TOOL_TIMEOUT_S)
+            result = pool.submit(spec.execute, arguments, context).result(timeout=spec.timeout_s)
     except FutureTimeout:
         return {'allowed': True, 'reason': 'timeout', 'duration_ms': int((time.monotonic() - started) * 1000),
-                'result': {'error': f'工具执行超时（>{TOOL_TIMEOUT_S:.0f}s）。请如实向主人说明未能查到，不得当作没有记录。'}}
+                'result': {'error': f'工具执行超时（>{spec.timeout_s:.0f}s）。请如实向主人说明未能查到，不得当作没有记录。'}}
     except Exception as exc:
         return {'allowed': True, 'reason': 'error', 'duration_ms': int((time.monotonic() - started) * 1000),
                 'result': {'error': f'工具执行失败（{type(exc).__name__}）。请如实向主人说明查询失败，不得当作没有记录。'}}

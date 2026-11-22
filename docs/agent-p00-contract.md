@@ -29,7 +29,7 @@
 
 Agent 以「运行（Run）」为最小调度单元：触发（消息/检查点/定时/硬件事件）→ 组装工作记忆 → 推理与工具循环 → 结构化交付 → 轨迹落库。**没有前置分类路由**：话题范围、意图、发言人格是运行内推理的产物，以结构化元数据（scope / intent / speaker / allowed_tools / reason_code）随交付输出。每次运行完整落库为 `AgentRun` 轨迹（消息序列、工具调用与结果摘要、判断结论与理由、预算消耗），可回放、可审计；轨迹不含凭据与无关用户数据，不对 App 开放。
 
-系统能力以**内部 Function Calling 工具注册表**暴露：声明（名称/描述/schema/权限级别/适用运行形态）与确定性执行分离注册；新增能力 = 注册工具 + 更新系统提示与权限矩阵，不新增代码分支。**权限矩阵先于执行校验**（运行形态 × 工具组 × 确认状态），越权调用返回结构化拒绝并入轨迹；`out_of_scope` 结论下业务与网络工具全部不可用。工具不向模型抛裸异常，失败返回结构化原因。动作类工具（设备控制、日记生成、社区草稿）与写提案类工具带确认门，只有「明确指令」或「已确认提案」两种生效路径。
+系统能力以**内部 Function Calling 工具注册表**暴露：声明（名称/描述/schema/权限级别/适用运行形态）与确定性执行分离注册；新增能力 = 注册工具 + 更新系统提示与权限矩阵，不新增代码分支。**权限矩阵先于执行校验**（运行形态 × 工具组 × 确认状态），越权调用返回结构化拒绝并入轨迹；`out_of_scope` 结论下业务与网络工具全部不可用。**已确认例外（W06，2026-11-22 负责人确认）**：供应商内建 `web_search`（MiniMax Responses API 服务端工具）在模型推理过程中执行，无法像 function 工具那样「先于执行」拦截；缓解措施 = 按轮挂载（stance 为 `out_of_scope` 后从后续轮次摘除）+ 运行结束审计标记（`search_on_out_of_scope`）+ 行为评测锁定 + 确定性限次（每运行累计 2 次后不再挂载），细节见 [W06 spec §2.1](./agent-w06-spec.md)。工具不向模型抛裸异常，失败返回结构化原因。动作类工具（设备控制、日记生成、社区草稿）与写提案类工具带确认门，只有「明确指令」或「已确认提案」两种生效路径。
 
 每次对话运行注入**常驻快照**（有界）：宠物档案摘要、设备状态、当前动作与体征、当前位置、今日摘要、学习进度、活跃目标、助手设定，各来源带时间戳与有效性；过期或失效状态如实呈现，不当作当前事实。快照之外的细节由只读工具按需获取。工具按宠物、维度与时间窗口返回事实、覆盖情况、时间范围、版本及可定位来源；不在来源不足时编造结论。来源区分设备观测、主人确认的信息、历史结果和外部网页；引用记录提供可跳转的对象及时间窗口，网页来源提供地址和核对时间。
 
@@ -65,7 +65,7 @@ Agent 以「运行（Run）」为最小调度单元：触发（消息/检查点/
 | --- | --- | --- |
 | 模型 | MiniMax；API key 后续提供 | 阶段1已验证国内端点、M3.1-Flash 文本、流式及工具往返；生产配置和额度管理仍按实施部署核对 |
 | 图片 | MiniMax Responses API 多模态输入 | [W07](./agent-w07-spec.md) 验证 JPEG 的 `input_image` data URL、与 Function Calling 共用及历史重放。owner 图片保存在回合的 `images`，助手 `blocks` 保持其回复语义 |
-| 搜索 | 用户指定使用 MiniMax 自带搜索 | **W00 实测（2026-11-22）可用**（证据见 [W00 spec §4.4](./agent-w00-spec.md)）：`web_search` 服务端工具挂在 **OpenAI Responses API（`/v1/responses`）与 Anthropic Messages API** 上，生产域 `api.minimaxi.com` 与文档域 `api.minimax.cn` 均真实搜索并返回 `url_citation` 来源（title/url/content）；国际域 `api.minimax.io` 与国内 key 不通用（401）。**Chat Completions 端点（现有适配层在用）不支持**——`web_search` 参数被忽略、tools 仅收 function 类型。W06 需新增 Responses API 适配；官方标注 Beta、搜索请求耗时显著增加、计费未注明（W06 定稿前核对账户扣费）。URL 直接阅读不可依赖（Chat Completions 实测多次幻觉/拒读），`read_web_page` 自建 fetcher |
+| 搜索 | 用户指定使用 MiniMax 自带搜索 | **W00 实测（2026-11-22）确定端点前提**：内建 `web_search` 仅挂在 **Responses API（`/v1/responses`）与 Anthropic Messages API**（Chat Completions 不支持，`web_search` 参数被忽略）；**W06 已接入（2026-11-23 集成合入）**：主对话按轮挂载内建 `web_search`（Responses API，与 function 工具混排），final `url_citation` 提供来源（title/url/content）；每运行累计 2 次后不再挂载（degraded `search_budget_detached`），挂搜索请求读超时 110s（实测延迟方差大 8.2–21.8s）。`usage` 无搜索计费字段，D6 计费待控制台核对（限次兜底）。URL 直接阅读不可依赖，`read_web_page` 为自建 fetcher（trafilatura + pin-IP SSRF 防护）。生产灰度两阶段开关 `PETSENSE_SEARCH_DISABLED`（W06 spec §6.3） |
 | 原生推送 | 用户指定 Expo；暂按 iOS 和 Android 规划，使用 Expo Notifications 和 Expo Push Service 作为实施方案 | [Expo SDK 58 文档](https://docs.expo.dev/versions/v58.0.0/sdk/notifications/)支持两平台及 Expo push token；需准备各平台推送凭据和原生构建，Android 远程推送不能依赖 Expo Go。账户、凭据及真实推送尚未验证，W13 分平台真机验收 |
 | 位置语义 | 定位同学后续提供文本标签 | 接口、时间有效性和版本尚未交付；区域能力单独验收，不阻塞动作/声音 |
 
