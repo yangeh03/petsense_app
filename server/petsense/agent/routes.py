@@ -4,12 +4,14 @@ W03：助手设定注入、确认提案决策与设定端点）。
 POST turns 组装初始包（含 W02 常驻快照与 W03 助手设定）并触发 loop.run_dialogue；
 判断（范围/意图/角色）全部由模型在循环内完成（agent-w01-spec.md §3.7）。
 GET 保留为 WS 断线的降级轮询路径。
+W07：POST images 上传聊天图片（内容寻址、按用户隔离），turns 请求可携带 images 引用。
 """
 import json
+import os
 import time
 from datetime import datetime, timedelta
 
-from flask import Blueprint, request, current_app
+from flask import Blueprint, request, current_app, send_file
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from petsense.auth.routes import require_app_user
@@ -18,12 +20,14 @@ from petsense.db.models import Pet
 from petsense.db.models.agent import AgentTurn
 from petsense.agent.observations import query
 from petsense.agent import baseline as baseline_service
-from petsense.agent import loop, runs, snapshot
+from petsense.agent import attachments, loop, runs, snapshot
 from petsense.agent import proposals as proposal_service
 from petsense.agent import settings as settings_service
 from petsense.agent import ws  # noqa: F401  import 即注册 /api/app/agent/ws 路由
 
 bp = Blueprint('agent', __name__, url_prefix='/api/app/agent')
+
+MAX_IMAGES_PER_TURN = 3  # D2
 
 
 def public(turn):
@@ -32,6 +36,7 @@ def public(turn):
             'speaker': turn.speaker, 'readAt': iso_z(turn.read_at) if turn.read_at else None,
             'target': turn.target, 'reply': turn.reply, 'status': turn.status,
             'blocks': json.loads(turn.blocks) if turn.blocks else None,
+            'images': json.loads(turn.images) if turn.images else [],
             'createdAt': iso_z(turn.created_at)}
 
 
@@ -50,6 +55,37 @@ def baseline(pet_id):
             return baseline_service.read_baseline(s, pet, date_str=date or None)
         except ValueError as exc:
             return {'message': str(exc)}, 400
+
+
+@bp.route('/pets/<int:pet_id>/images', methods=['POST'])
+def upload_image(pet_id):
+    user, error = require_app_user()
+    if error:
+        return error
+    with session_scope() as s:
+        pet = s.get(Pet, pet_id)
+        if not pet or pet.user_id != user['id']:
+            return {'message': '宠物不存在'}, 404
+    uploaded = request.files.get('image')
+    if uploaded is None:
+        return {'message': '请提供 image 文件'}, 400
+    try:
+        return attachments.save_agent_image(uploaded, user['id']), 201
+    except attachments.ImageRejected as exc:
+        return {'message': str(exc), 'code': exc.code}, 400
+
+
+@bp.route('/images/<image_id>')
+def serve_image(image_id):
+    user, error = require_app_user()
+    if error:
+        return error
+    path = attachments.image_path(user['id'], image_id)  # 归属即路径：仅本人目录
+    if not path or not os.path.isfile(path):
+        return {'message': '图片不存在'}, 404
+    response = send_file(path, mimetype='image/jpeg')  # 内容寻址，永不变化
+    response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+    return response
 
 
 @bp.route('/pets/<int:pet_id>/observations')
@@ -95,8 +131,22 @@ def turns(pet_id):
         if not isinstance(data, dict):
             return {'message': '请输入消息'}, 400
         text, key, target = data.get('text'), data.get('requestId'), data.get('target', 'auto')
-        if not isinstance(text, str) or not text.strip() or len(text) > 4000 or not isinstance(key, str) or not 1 <= len(key) <= 80 or target not in ('auto', 'pet', 'assistant'):
+        raw_images = data.get('images') if data.get('images') is not None else []
+        if not isinstance(raw_images, list) or len(raw_images) > MAX_IMAGES_PER_TURN \
+                or len(set(raw_images)) != len(raw_images) \
+                or any(not isinstance(i, str) or not attachments.IMAGE_ID_RE.match(i) for i in raw_images):
+            return {'message': '图片引用无效'}, 400
+        # 有图可纯图发送（W07 D2/实现默认）：text 允许为空，但仍须是字符串且 ≤4000
+        if not isinstance(text, str) or len(text) > 4000 or (not text.strip() and not raw_images) \
+                or not isinstance(key, str) or not 1 <= len(key) <= 80 or target not in ('auto', 'pet', 'assistant'):
             return {'message': '消息、指向或请求标识无效'}, 400
+        images_meta = []
+        for image_id in raw_images:
+            meta = attachments.read_meta(user['id'], image_id)
+            if meta is None:
+                return {'message': '图片不存在，请重新上传'}, 404
+            images_meta.append(meta)
+        images_json = json.dumps(images_meta, ensure_ascii=False) if images_meta else None
         topic_id, reply_to = data.get('topicId'), data.get('replyTo')
         for reference in (topic_id, reply_to):
             if reference is not None:
@@ -107,11 +157,13 @@ def turns(pet_id):
                     return {'message': '消息引用不存在'}, 404
         existing = s.execute(select(AgentTurn).where(AgentTurn.pet_id == pet_id, AgentTurn.request_id == key)).scalar_one_or_none()
         if existing:
-            if (existing.text, existing.target, existing.topic_id, existing.reply_to) != (text.strip(), target, topic_id, reply_to):
+            if (existing.text, existing.target, existing.topic_id, existing.reply_to, existing.images) \
+                    != (text.strip(), target, topic_id, reply_to, images_json):
                 return {'message': '请求标识已用于另一条消息'}, 409
             return {'turn': public(existing)}
         turn = AgentTurn(pet_id=pet_id, request_id=key, text=text.strip(), target=target,
-                         reply='', sources='[]', topic_id=topic_id, reply_to=reply_to, status='pending', created_at=utc_now())
+                         reply='', sources='[]', topic_id=topic_id, reply_to=reply_to, images=images_json,
+                         status='pending', created_at=utc_now())
         try:
             with s.begin_nested():
                 s.add(turn)
@@ -124,12 +176,14 @@ def turns(pet_id):
         if topic_id is not None:
             history_query = history_query.where((AgentTurn.topic_id == topic_id) | (AgentTurn.id == topic_id))
         history_rows = s.execute(history_query.order_by(AgentTurn.id.desc()).limit(12)).scalars().all()
-        history = [{'text': row.text, 'reply': row.reply} for row in reversed(history_rows)]
+        history = [{'text': row.text, 'reply': row.reply,
+                    'images': json.loads(row.images) if row.images else []}
+                   for row in reversed(history_rows)]
         now = utc_now()
         snap = snapshot.assemble(s, pet, now)
         companion = settings_service.load(s, user['id'])
     context = {'pet_id': pet_id, 'user_id': user['id'], 'text': text.strip(),
-               'target': target, 'history': history, 'snapshot': snap, 'now_iso': iso_z(now),
+               'target': target, 'history': history, 'images': images_meta, 'snapshot': snap, 'now_iso': iso_z(now),
                'turn_id': turn_id, 'settings': companion}
     speaker = ['assistant']
     last_write = [0.0]

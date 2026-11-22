@@ -18,6 +18,17 @@ export type PendingRequest = {
   key: string;
   topic?: number;
   replyTo?: number;
+  images?: string[];
+};
+
+/** W07 输入区图片附件：本地预览 + 逐张上传状态；done 后持服务端 imageId 供发送引用 */
+export type AgentAttachment = {
+  key: string;
+  localUri: string | null;
+  width: number;
+  height: number;
+  imageId: string | null;
+  status: 'uploading' | 'done' | 'failed';
 };
 
 export type AgentChatState = {
@@ -29,6 +40,7 @@ export type AgentChatState = {
   replyTo: number | undefined;
   draft: string;
   target: AgentTarget;
+  attachments: AgentAttachment[];
   busy: boolean;
   error: string;
   connection: AgentConnection;
@@ -44,6 +56,10 @@ export type AgentChatState = {
   setTarget: (target: AgentTarget) => void;
   setTopic: (topic: number | undefined) => void;
   setReplyTo: (replyTo: number | undefined) => void;
+  addAttachments: (items: AgentAttachment[]) => void;
+  updateAttachment: (key: string, patch: Partial<AgentAttachment>) => void;
+  removeAttachment: (key: string) => void;
+  clearAttachments: () => void;
   setBusy: (busy: boolean) => void;
   setError: (error: string) => void;
   setConnection: (connection: AgentConnection) => void;
@@ -71,6 +87,7 @@ export const useAgentChatStore = create<AgentChatState>((set) => ({
   replyTo: undefined,
   draft: '',
   target: 'auto',
+  attachments: [],
   busy: false,
   error: '',
   connection: 'closed',
@@ -106,6 +123,7 @@ export const useAgentChatStore = create<AgentChatState>((set) => ({
           replyTo: null,
           sources: [],
           blocks: null,
+          images: [],
         };
         return { turns: [...state.turns, placeholder] };
       }
@@ -119,6 +137,17 @@ export const useAgentChatStore = create<AgentChatState>((set) => ({
   setTarget: (target) => set({ target }),
   setTopic: (topic) => set({ topic, replyTo: undefined }),
   setReplyTo: (replyTo) => set({ replyTo }),
+  addAttachments: (items) =>
+    set((state) => ({ attachments: [...state.attachments, ...items].slice(0, 3) })),
+  updateAttachment: (key, patch) =>
+    set((state) => ({
+      attachments: state.attachments.map((item) =>
+        item.key === key ? { ...item, ...patch } : item,
+      ),
+    })),
+  removeAttachment: (key) =>
+    set((state) => ({ attachments: state.attachments.filter((item) => item.key !== key) })),
+  clearAttachments: () => set({ attachments: [] }),
   setBusy: (busy) => set({ busy }),
   setError: (error) => set({ error }),
   setConnection: (connection) => set({ connection }),
@@ -134,6 +163,7 @@ export const useAgentChatStore = create<AgentChatState>((set) => ({
       replyTo: undefined,
       draft: '',
       target: 'auto',
+      attachments: [],
       busy: false,
       error: '',
       scrollY: 0,

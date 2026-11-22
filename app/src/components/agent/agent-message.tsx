@@ -1,20 +1,28 @@
 /**
- * 伙伴会话单条交换（W01 自建渲染层）：主人气泡 + 1–2 段人格回复。
+ * 伙伴会话单条交换（W01 自建渲染层；W07 图片消息）：主人气泡（可含图片网格）+ 1–2 段人格回复。
  * 优先消费服务端 blocks（按发言人拆好的内容块），旧数据无 blocks 时回退
- * 到单发言人 + 标记剥离，保证历史回合展示不劣化。
+ * 到单发言人 + 标记剥离，保证历史回合展示不劣化。图片点击进灯箱。
  * W03：blocks 另含确认提案卡（type=proposal）；点击角色头像进入成员详情
  * （宠物 → 档案页，照料助手 → 助手设定页）；助手显示名从设定读取。
  */
 
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import { Image } from 'expo-image';
 import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
+import ImageView from 'react-native-image-viewing';
 import { ProposalCard } from '@/components/agent/proposal-card';
 import { ThemedText } from '@/components/themed-text';
 import { Shadows } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import { fetchAgentObservation, type AgentObservation, type AgentTurn } from '@/services/agent';
+import {
+  agentImageSource,
+  fetchAgentObservation,
+  type AgentImageMeta,
+  type AgentObservation,
+  type AgentTurn,
+} from '@/services/agent';
 import { assistantDisplayName, useCompanionSettingsStore } from '@/stores/companion-settings';
 
 type Props = {
@@ -250,11 +258,69 @@ function SourceCard({ source, petId }: { source: AgentSource; petId: number | nu
   );
 }
 
+/** 主人气泡图片：1 张按宽高比自适应，2–3 张两列方格（W07 §4.3） */
+function OwnerImages({
+  images,
+  onOpen,
+}: {
+  images: AgentImageMeta[];
+  onOpen: (index: number) => void;
+}) {
+  if (images.length === 1) {
+    const meta = images[0];
+    const ratio = meta.width && meta.height ? meta.width / meta.height : 1.25;
+    const width = 232;
+    const height = Math.max(96, Math.min(320, Math.round(width / ratio)));
+    return (
+      <Pressable
+        accessibilityRole="imagebutton"
+        accessibilityLabel="查看图片"
+        onPress={() => onOpen(0)}
+        style={[styles.ownerImage, { width, height }]}
+      >
+        <Image
+          source={agentImageSource(meta.id)}
+          style={StyleSheet.absoluteFill}
+          contentFit="cover"
+          transition={120}
+        />
+      </Pressable>
+    );
+  }
+  return (
+    <View style={styles.ownerGrid}>
+      {images.map((meta, index) => (
+        <Pressable
+          key={meta.id}
+          accessibilityRole="imagebutton"
+          accessibilityLabel={`查看第 ${index + 1} 张图片`}
+          onPress={() => onOpen(index)}
+          style={styles.ownerGridCell}
+        >
+          <Image
+            source={agentImageSource(meta.id)}
+            style={StyleSheet.absoluteFill}
+            contentFit="cover"
+            transition={120}
+          />
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
 export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry }: Props) {
   const theme = useTheme();
   const router = useRouter();
   const settings = useCompanionSettingsStore((state) => state.settings);
   const assistantName = assistantDisplayName(settings);
+  const [viewerIndex, setViewerIndex] = useState(0);
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const images = turn.images ?? [];
+  const openViewer = useCallback((index: number) => {
+    setViewerIndex(index);
+    setViewerOpen(true);
+  }, []);
   const blocks = turn.blocks?.length
     ? turn.blocks
     : [
@@ -274,8 +340,18 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry }:
   return (
     <View style={styles.exchange}>
       <View style={[styles.ownerBubble, { backgroundColor: theme.tintBackground }]}>
-        <ThemedText>{turn.text}</ThemedText>
+        {images.length ? <OwnerImages images={images} onOpen={openViewer} /> : null}
+        {turn.text ? <ThemedText>{turn.text}</ThemedText> : null}
       </View>
+      {images.length ? (
+        <ImageView
+          images={images.map((meta) => agentImageSource(meta.id))}
+          imageIndex={viewerIndex}
+          visible={viewerOpen}
+          onRequestClose={() => setViewerOpen(false)}
+          onImageIndexChange={setViewerIndex}
+        />
+      ) : null}
       <View style={styles.replyColumn}>
         {textSegments.map((segment, index) => (
           <View key={index} style={styles.replyRow}>
@@ -357,6 +433,15 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 20,
     borderBottomRightRadius: 6,
+    gap: 8,
+  },
+  ownerImage: { borderRadius: 12, overflow: 'hidden' },
+  ownerGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 4 },
+  ownerGridCell: {
+    width: 104,
+    height: 104,
+    borderRadius: 10,
+    overflow: 'hidden',
   },
   replyColumn: { gap: 10 },
   replyRow: { flexDirection: 'row', gap: 9, alignItems: 'flex-start' },

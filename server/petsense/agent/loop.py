@@ -1,16 +1,18 @@
-"""统一运行循环执行器（W01，agent-w01-spec.md §3.2/§3.3；W02 接入氛围快照；W03 写入能力与助手设定）。
+"""统一运行循环执行器（W01，agent-w01-spec.md §3.2/§3.3；W02 接入氛围快照；W03 助手设定；W07 图片输入）。
 
 一次运行 = 组装工作记忆 → 推理/工具循环 → 结构化交付 → 轨迹数据。
 无前置分类：范围/意图/角色是循环内推理的产物（首行 stance，D2 确认），
 判断归模型、事实与执行归代码、边界归权限矩阵。
 常驻快照由 routes 组装后经 context['snapshot'] 传入（agent-w02-spec.md §3.3）；
 助手设定经 context['settings'] 传入并以配置身份注入系统提示人格段（agent-w03-spec.md §3.6）。
+W07：owner 消息可带图片引用，本轮与最近 1 条带图历史内联为 input_image（D1），
+更早历史降级为文字占位；图片摘要入轨迹，base64 不落任何存储。
 """
 import json
 import re
 import time
 
-from petsense.agent import model, registry
+from petsense.agent import attachments, model, registry
 from petsense.agent import settings as agent_settings
 
 MAX_TOOL_ROUNDS = 8
@@ -87,6 +89,10 @@ SYSTEM_PROMPT = (
     '并与当天对比，范围与当日数值必须来自工具结果；认识中的维度不得说「比平时」「比平时多/少」，'
     '只能给当天事实或两段已观测事实的对比，并说明这不是个人基线比较；'
     '覆盖不足的时段不能当作活动减少或增加。\n'
+    '图片：主人消息可能附带照片，按当前交流背景理解。单张照片只是某个时刻的画面，不是持续观测——'
+    '涉及「现在/此刻」的问题必须以实时快照或 read_current_status 结果为准，不把照片内容当作宠物当前状态；'
+    '照片里的信息不自动成为本宠的档案事实；要改档案时遵守档案写入及确认协议；'
+    '图片不扩大话题范围，编程等无关请求即使带图仍应拒绝；识别不清或图片与问题无关时如实说明，不编造图中细节。\n'
     '表达：对主人用自然语言，不展示原始字段名、设备编码或实现细节，除非主人明确在排查设备。'
     '历史数据必须调用工具查询，未提供区域语义时说明不能判断。'
     '正文可用受限 markdown（标题/列表/粗体/段落），不要输出代码块和表格。')
@@ -179,11 +185,42 @@ def split_blocks(reply, default_speaker):
     return blocks[:MAX_BLOCKS], len(blocks) > MAX_BLOCKS
 
 
+def _owner_content(text, images, inline, user_id, notes):
+    """owner 消息 content：无图保持字符串；窗口内块数组（input_text + input_image），窗口外文字占位（W07 D1）。
+
+    内联时文件缺失的图降级为「（N 张图片已失效）」文字占位并记 notes，运行不中断（spec §3.3）。
+    """
+    if not images:
+        return text
+    if not inline:
+        suffix = f'（附 {len(images)} 张图片，已省略）'
+        return (text + suffix) if text else suffix
+    blocks = []
+    if text:
+        blocks.append({'type': 'input_text', 'text': text})
+    loaded = 0
+    for image in images:
+        data_url = attachments.load_data_url(user_id, image.get('id'))
+        if data_url:
+            blocks.append({'type': 'input_image', 'image_url': data_url})
+            loaded += 1
+        else:
+            notes.append({'image_missing': image.get('id')})
+    if len(images) - loaded:
+        blocks.append({'type': 'input_text', 'text': f'（{len(images) - loaded} 张图片已失效）'})
+    return blocks if blocks else text
+
+
+def _image_summary(images, scope, inline):
+    return [{'id': image.get('id'), 'bytes': image.get('bytes'), 'width': image.get('width'),
+             'height': image.get('height'), 'scope': scope, 'inline': inline} for image in images]
+
+
 def run_dialogue(context, on_progress=None):
     """执行一次对话运行。
 
     context: {'pet_id', 'user_id', 'text', 'target',
-              'history': [{'text','reply'}...按时间正序], 'now_iso',
+              'history': [{'text','reply','images'?}...按时间正序], 'now_iso', 'images': [...]?,
               'snapshot': {'sections': {...}, 'meta': {...}}（W02，routes 组装）,
               'turn_id': int|None, 'settings': {...}|None（W03，助手设定注入）}
     on_progress(speaker, cumulative_visible_text)：节流落库与 WS 推送由调用方实现。
@@ -196,16 +233,31 @@ def run_dialogue(context, on_progress=None):
     stance = None
     sources, tool_summary, messages_trace, proposals = [], [], [], []
     snap = context.get('snapshot')
+    user_id = context.get('user_id')
+    image_notes = []
+    history = context['history'][-HISTORY_TURNS:]
+    inline_history_index = None  # W07 D1：最近 1 条带图历史内联，更早降级占位
+    for index, old in enumerate(history):
+        if old.get('images'):
+            inline_history_index = index
     system_content = SYSTEM_PROMPT + '\n实时快照：' + build_context(snap) \
         + f"\n本轮指向：{context['target']}。"
     if context.get('settings'):
         system_content += '\n' + agent_settings.prompt_line(context['settings'])
     input_items = [{'role': 'system', 'content': system_content}]
-    for old in context['history'][-HISTORY_TURNS:]:
-        input_items.append({'role': 'user', 'content': old['text']})
+    for index, old in enumerate(history):
+        input_items.append({'role': 'user', 'content': _owner_content(
+            old['text'], old.get('images') or [], index == inline_history_index, user_id, image_notes)})
         if old['reply']:
             input_items.append({'role': 'assistant', 'content': old['reply']})
-    input_items.append({'role': 'user', 'content': context['text']})
+    input_items.append({'role': 'user', 'content': _owner_content(
+        context['text'], context.get('images') or [], True, user_id, image_notes)})
+    images_trace = _image_summary(context.get('images') or [], 'current', True)
+    for index, old in enumerate(history):
+        if old.get('images'):
+            images_trace.extend(_image_summary(old['images'], 'history', index == inline_history_index))
+    if images_trace or image_notes:
+        messages_trace.append({'images': images_trace, 'image_notes': image_notes})
 
     rounds = 0
     degraded = []

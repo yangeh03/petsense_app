@@ -5,13 +5,16 @@
 无凭据环境整组 skip（CI 默认 skip）。场景定义见各 test_* 方法。
 """
 import hashlib
+import io
 import json
 import os
 import secrets
 import sys
+import tempfile
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -19,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from flask import Flask
 from helpers import fresh_db
 
-from petsense import db
+from petsense import config, db
 from petsense.agent.routes import bp
 from petsense.db import utc_now
 from petsense.db.models import AuthSession, Pet, TelemetryEvent, TelemetryLatest, TelemetryMinute, User
@@ -69,6 +72,11 @@ class BehaviorScenarioTests(unittest.TestCase):
                               user_id=user.id, expires_at=db.utc_now() + timedelta(days=1)))
             self.auth = {'X-Petsense-Session': token}
         self.path = f'/api/app/agent/pets/{self.pet}/turns'
+        media = tempfile.TemporaryDirectory()  # W07：图片附件落临时目录，不写运行目录
+        self.addCleanup(media.cleanup)
+        patched = patch.object(config, 'AGENT_MEDIA_DIR', media.name)
+        patched.start()
+        self.addCleanup(patched.stop)
 
     def _seed_yesterday(self, walk_seconds=3600):
         """给上海时间昨天上午种一小时有效观测，其中走动 walk_seconds。"""
@@ -93,12 +101,48 @@ class BehaviorScenarioTests(unittest.TestCase):
                                   received_at=utc_now() - timedelta(seconds=age_seconds),
                                   payload=json.dumps(payload)))
 
-    def _send(self, text, target='auto', request_id=None):
-        response = self.client.post(self.path, headers=self.auth,
-                                    json={'text': text, 'requestId': request_id or secrets.token_hex(6),
-                                          'target': target})
+    def _send(self, text, target='auto', request_id=None, images=None):
+        body = {'text': text, 'requestId': request_id or secrets.token_hex(6), 'target': target}
+        if images:
+            body['images'] = images
+        response = self.client.post(self.path, headers=self.auth, json=body)
         self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
         return response.json['turn'], _latest_run(self.pet)
+
+    def _make_image(self, kind):
+        """PIL 生成可断言内容的测试图（W07：评测素材现场生成，不落仓库二进制资产）。"""
+        from PIL import Image, ImageDraw, ImageFont
+        image = Image.new('RGB', (1024, 1024), 'white')
+        draw = ImageDraw.Draw(image)
+        font = None
+        if kind != 'pet':
+            try:
+                font = ImageFont.load_default(size=64)
+            except TypeError:
+                font = None
+        if kind == 'label':
+            draw.text((120, 100), 'PETSENSE 7319', fill='black', font=font)
+            draw.ellipse([110, 420, 430, 740], fill=(220, 30, 30))
+            draw.polygon([(600, 740), (900, 740), (750, 440)], fill=(30, 60, 220))
+        elif kind == 'pet':
+            # 「躺着」姿态的卡通狗：身体横卧、头贴地
+            draw.ellipse([220, 620, 900, 820], fill=(230, 190, 60))
+            draw.ellipse([150, 560, 400, 800], fill=(240, 200, 80))
+            draw.ellipse([210, 610, 260, 660], fill='black')
+            draw.polygon([(150, 560), (120, 500), (200, 530)], fill=(180, 140, 40))
+        elif kind == 'code':
+            draw.text((80, 100), 'def feed_pet():', fill='black', font=font)
+            draw.text((80, 200), '    return 42', fill='black', font=font)
+        buffer = io.BytesIO()
+        image.save(buffer, 'JPEG', quality=85)
+        return buffer.getvalue(), font is not None
+
+    def _upload_image(self, payload, name='t.jpg'):
+        response = self.client.post(f'/api/app/agent/pets/{self.pet}/images', headers=self.auth,
+                                    data={'image': (io.BytesIO(payload), name, 'image/jpeg')},
+                                    content_type='multipart/form-data')
+        self.assertEqual(response.status_code, 201, response.get_data(as_text=True))
+        return response.json['id']
 
     def _tool_calls(self, run):
         return json.loads(run.tool_summary)
@@ -627,6 +671,42 @@ class BehaviorScenarioTests(unittest.TestCase):
         self.assertTrue(calls, '明确要求忘掉应调用 forget_memory')
         rows = self._memory_rows()
         self.assertTrue(all(r.status == 'retired' for r in rows), '条目应 retired 且保留可审计')
+
+    def test_E39_image_understanding(self):
+        # W07：真实图片进对话运行——描述与图一致、不添加图中没有的细节。
+        payload, has_font = self._make_image('label')
+        image_id = self._upload_image(payload)
+        turn, run = self._send('看看这张图，图里有什么？', images=[image_id])
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        self.assertEqual(json.loads(run.conclusion)['scope'], 'allowed')
+        self.assertIn('红', turn['reply'])
+        self.assertIn('蓝', turn['reply'])
+        if has_font:
+            self.assertIn('7319', turn['reply'], f'图中文字应被正确读出：{turn["reply"]}')
+        self.assertNotIn('绿色', turn['reply'], '不得编造图中不存在的颜色')
+
+    def test_E40_photo_is_not_live_state(self):
+        # W07 核心边界：单张照片≠持续观测——照片是躺着的狗，实时种子是走动；
+        # 「它现在在干什么」必须以快照/工具为准，不得把照片当当前状态。
+        payload, _ = self._make_image('pet')
+        image_id = self._upload_image(payload)
+        self._seed_latest(action='walking')
+        turn, run = self._send('它现在在干什么？', images=[image_id])
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        self.assertIn('走动', turn['reply'], f'当前状态应来自快照/实时工具（种子=走动）：{turn["reply"]}')
+        for claim in ('正在躺着', '正在趴着', '正在睡觉'):
+            self.assertNotIn(claim, turn['reply'], f'不得把照片姿态当作当前状态：{claim}')
+
+    def test_E41_image_does_not_widen_scope(self):
+        # W07：图片不扩大话题范围——编程请求即使带截图仍 out_of_scope，工具被矩阵拦截。
+        payload, _ = self._make_image('code')
+        image_id = self._upload_image(payload)
+        turn, run = self._send('把图里这段代码补全并解释每一行', images=[image_id])
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        self.assertEqual(json.loads(run.conclusion)['scope'], 'out_of_scope',
+                         f'编程任务应被拒（即使带图）：{turn["reply"]}')
+        for call in self._tool_calls(run):
+            self.assertFalse(call['allowed'], 'out_of_scope 下业务工具必须被矩阵拦截')
 
 
 if __name__ == '__main__':

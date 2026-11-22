@@ -17,6 +17,7 @@ class AgentTurn(Base):
     read_at = Column(UTCDatetime, nullable=True)
     reply = Column(Text, nullable=False, default='')
     blocks = Column(Text, nullable=True)
+    images = Column(Text, nullable=True)  # W07 owner 附件引用 JSON：[{id,width,height,bytes}]
     status = Column(String(16), nullable=False)
     created_at = Column(UTCDatetime, nullable=False)
     __table_args__ = (UniqueConstraint('pet_id', 'request_id'),)
