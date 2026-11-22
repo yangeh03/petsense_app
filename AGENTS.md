@@ -38,6 +38,7 @@
 - 本文件是跨协作者共享的项目入口；开始工作先检查 Git 状态和适用文档，涉及远端时核对远端，不覆盖他人的未提交工作。
 - 每次完成涉及架构、关键路径、接口与数据流、运行或测试命令、部署、设备限制或重要工作约定的变更时，检查并在同一变更中按需更新本文件及相关专题文档；无相关变化时无需为更新而更新。PR 描述或交付说明写明已更新的文档，或说明无需更新的原因。
 - 本文件保留稳定规则、关键限制和专题文档入口；详细设计和操作步骤放对应文档。与代码、CI 或实际验证冲突时，以当前实现及验证证据为准，修正文档并注明未验证之处。动态状态注明核对日期和依据，过时内容及时删除或修订，不把推测和模拟结果写成硬件验收结论。
+- Agent 工作包先写 spec。明确关联设计、已有实现、技术与数据语义、端到端验收和兼容策略。需要负责人决定的事项先澄清并记录，spec 定稿后进入实现。公共语义变化同步更新相关 spec 与契约。
 - 共享记忆须纳入 Git 并推送，未提交内容不会随仓库共享；不得写入密码、令牌或私人数据。不要把聊天记录当作其他协作者自动拥有的项目记忆。
 
 ## 定位项目状态（2026-11-12 按仓库代码和文档核对）
@@ -71,8 +72,9 @@ Read the exact versioned docs at https://docs.expo.dev/versions/v58.0.0/ before 
 
 ## Agent 开发入口
 
-- 第一阶段开发说明与当前验证边界见 `docs/agent-phase-one.md`；产品、路线和最小契约分别见 `docs/agent-product-integration-design.md`、`docs/agent-implementation-work-packages.md`、`docs/agent-p00-contract.md`。
-- 新 Agent 服务端域在 `server/petsense/agent/`，App 使用独立业务服务，不混入遥测解析。模型凭据仅由服务端环境或外部文件读取，不纳入 Git。
+- [Agent 产品设计](docs/agent-product-integration-design.md)、[技术选型](docs/agent-technical-decisions.md)、[P00 契约](docs/agent-p00-contract.md)、[实施路线](docs/agent-implementation-roadmap.md)及[工作包](docs/agent-implementation-work-packages.md)共同指导后续 spec。现有功能和验证范围见[第一阶段实施记录](docs/agent-phase-one.md)。
+- Agent 在同一运行循环中根据上下文选择回答、澄清与工具。禁止新增以关键词、正则、原话形式或独立意图预判来分派能力、解释日期或挑选答案模板的逻辑。P05 替换现有前置分流。代码执行已登记工具的鉴权、结构校验、观测计算、来源绑定、确认和幂等。
+- Agent 服务端域在 `server/petsense/agent/`，App 使用独立业务服务。模型凭据仅由服务端环境或外部文件读取，禁止纳入 Git。
 
 ## 运动日记
 
