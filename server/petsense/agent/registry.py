@@ -112,9 +112,9 @@ def execute_tool(name, arguments, form, stance_scope, context):
                 'result': {'error': '当前请求不在服务范围内，业务与联网工具不可用。'}}
     if stance_scope is None:
         return {'allowed': False, 'reason': 'stance_missing', 'duration_ms': 0,
-                'result': {'error': '请先在回复正文首行输出单行 JSON 范围声明 '
+                'result': {'error': '缺少范围声明：请先在回复正文首行输出单行 JSON '
                                     '({"scope":"allowed|out_of_scope","intent":"...","speaker":"pet|assistant"})，'
-                                    '然后再调用工具。'}, }
+                                    '然后重新发起同样的工具调用（声明行在前即可，不要放弃查询）。'}}
     if not isinstance(arguments, dict):
         return {'allowed': False, 'reason': 'bad_arguments', 'duration_ms': 0,
                 'result': {'error': '工具参数不是合法 JSON 对象，请修正后重试。'}}
