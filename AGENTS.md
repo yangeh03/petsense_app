@@ -75,6 +75,7 @@ Read the exact versioned docs at https://docs.expo.dev/versions/v58.0.0/ before 
 - 新 Agent 服务端域在 `server/petsense/agent/`，App 使用独立业务服务，不混入遥测解析。模型凭据仅由服务端环境或外部文件读取，不纳入 Git。
 - 工作包开发流程（2026-11-22 确立，W 系列一律按此执行）：① 先写 spec 文档（`docs/agent-w<NN>-spec.md`），关键决策点与负责人讨论确认后定稿；② 按定稿 spec 实现代码；③ 验收统一用 iOS 模拟器接生产环境，登录测试账号 `petsense`（密码 `123456`，负责人确认随仓库记录）。spec 定稿前不动代码，验收结论回写 spec。
 - W00 已完成（2026-11-22）：spec 与现状处置基线见 `docs/agent-w00-spec.md`。关键外部结论：MiniMax 内建 `web_search` **可用**，但只在 **Responses API（`/v1/responses`）与 Anthropic Messages API** 上（生产域 `api.minimaxi.com` 实测通过、Beta）；**Chat Completions 端点不支持**（`web_search` 参数被忽略）。URL 直接阅读不可依赖，`read_web_page` 自建 fetcher。实测脚本 `server/tools/minimax_search_smoke.py` 可复跑。
+- W01 已完成（2026-11-22，spec 与验收记录见 `docs/agent-w01-spec.md`）：`model.decide()` 与 intent 固定文案分支已删除，全部对话跑统一运行循环（`agent/loop.py`）；主对话已迁 **MiniMax Responses API**（全量回显会话，工具结果必须放 `function_call_output.output` 字段；`previous_response_id` 400 不可用）；工具注册表 + 权限矩阵在 `agent/registry.py`（新增工具先改 P00 契约再注册，矩阵先于执行校验，`out_of_scope`/无 stance 声明时业务工具被拒并入轨迹）；运行轨迹落 `agent_runs` 表，回放用 `python3 server/tools/agent_replay.py <run_id>`；App 读取走 WS 直连 `/api/app/agent/ws?token=`（断线降级轮询，HAProxy TCP 透传无需代理配置）。客户端已迁移 zustand + `services/agent-channel.ts` + `hooks/use-agent-chat.ts`（AsyncStorage 快照恢复）；expo-ai-elements spike 判 no-go（npm 包为空壳且深度依赖与仓库工具链冲突），渲染层按回退方案自建，流式 markdown 待后续迭代。行为评测：`cd server && MINIMAX_API_KEY(_FILE)=… python3 -m unittest discover -s tests -p test_agent_behavior.py`（无凭据自动 skip）。已知边界：模型空响应（reasoning 耗尽输出预算）循环内放宽 token 上限重试；stance 拒绝后模型须重发工具调用（提示词已强化，轨迹可查）。
 
 ## 运动日记
 
