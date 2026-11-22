@@ -15,6 +15,7 @@ from petsense.db import session_scope, utc_now, iso_z
 from petsense.db.models import Pet
 from petsense.db.models.agent import AgentTurn
 from petsense.agent.observations import query
+from petsense.agent import baseline as baseline_service
 from petsense.agent import loop, runs, snapshot
 from petsense.agent import ws  # noqa: F401  import 即注册 /api/app/agent/ws 路由
 
@@ -28,6 +29,23 @@ def public(turn):
             'target': turn.target, 'reply': turn.reply, 'status': turn.status,
             'blocks': json.loads(turn.blocks) if turn.blocks else None,
             'createdAt': iso_z(turn.created_at)}
+
+
+@bp.route('/pets/<int:pet_id>/baseline')
+def baseline(pet_id):
+    """W05「能否比较/比较结果」业务接口：学习卡、维度详情与今日状态共用此结果。"""
+    user, error = require_app_user()
+    if error:
+        return error
+    date = request.args.get('date')
+    with session_scope() as s:
+        pet = s.get(Pet, pet_id)
+        if not pet or pet.user_id != user['id']:
+            return {'message': '宠物不存在'}, 404
+        try:
+            return baseline_service.read_baseline(s, pet, date_str=date or None)
+        except ValueError as exc:
+            return {'message': str(exc)}, 400
 
 
 @bp.route('/pets/<int:pet_id>/observations')

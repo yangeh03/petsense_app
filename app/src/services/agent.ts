@@ -55,6 +55,8 @@ export type AgentObservation = {
     version: string;
     validDays: number;
     observedSeconds: number;
+    state: string;
+    active: boolean;
   }[];
   learning: { validDays: number; requiredDays: number; state: string };
 };

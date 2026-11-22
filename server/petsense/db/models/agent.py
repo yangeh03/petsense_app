@@ -52,3 +52,24 @@ class AgentLearningDay(Base):
     seconds = Column(Float, nullable=False, default=0)
     last_seen_at = Column(UTCDatetime, nullable=False)
     slots = Column(Text, nullable=False, default='[]')
+
+
+class PetBaseline(Base):
+    """W05 个人基线物化行（agent-w05-spec.md §3.2）：一行一个 (宠物, 维度, 模型版本)。
+
+    证据仍在 agent_learning_days 与分钟明细，本行是可复算的确定性快照；
+    重算原地更新并 revision+1，比较结果引用 version+revision+窗口即可溯源。
+    """
+    __tablename__ = 'pet_baselines'
+    pet_id = Column(Integer, ForeignKey('pets.id'), primary_key=True)
+    feature = Column(String(16), primary_key=True)
+    version = Column(String(80), primary_key=True)
+    state = Column(String(16), nullable=False, default='learning')
+    valid_days = Column(Integer, nullable=False, default=0)
+    window_last_day = Column(String(10), nullable=False, default='')
+    sample_days = Column(Text, nullable=False, default='[]')
+    day_values = Column(Text, nullable=False, default='{}')
+    day_stats = Column(Text, nullable=False, default='{}')
+    slot_stats = Column(Text, nullable=False, default='[]')
+    revision = Column(Integer, nullable=False, default=0)
+    computed_at = Column(UTCDatetime, nullable=False)

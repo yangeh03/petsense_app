@@ -4,7 +4,7 @@ from datetime import timedelta
 from sqlalchemy import select, func
 from petsense.db import iso_z, utc_now
 from petsense.db.models import TelemetryMinute, TelemetryEvent, TelemetryLatest
-from petsense.agent.learning import progress
+from petsense.agent.baseline import dimension_states
 from petsense.telemetry.observations import _combine, _public_metrics, prediction, METRICS, number
 
 
@@ -39,7 +39,7 @@ def query(session, pet, start, end):
     sound_count = session.execute(select(func.count()).select_from(TelemetryEvent).where(
         TelemetryEvent.owner_id == pet.user_id, TelemetryEvent.device_id == pet.device_id,
         TelemetryEvent.started_at < end, TelemetryEvent.last_seen_at >= start)).scalar_one()
-    learning_dimensions = progress(session, pet)
+    learning_dimensions = dimension_states(session, pet)
     source_versions = sorted({version for row in rows for version in json.loads(row.source_versions)})
     return {'soundEventCount': sound_count, 'soundEventsTruncated': sound_count > len(episodes), 'latest': latest, 'sourceVersions': source_versions, 'learningDimensions': learning_dimensions, 'resolution': 'minute', 'metrics': _public_metrics(metrics),
             'soundEvents': [{'label': e.label, 'startedAt': iso_z(e.started_at),
@@ -49,7 +49,10 @@ def query(session, pet, start, end):
             'actionObservedSeconds': sum(actions.values()),
             'soundObservedSeconds': sum(min(60, r.sound_observed_seconds) for r in rows),
             'actionSeconds': actions, 'minuteCount': len(rows),
-            'learning': {'validDays': next((d['validDays'] for d in learning_dimensions if d['dimension'] == 'actions'), 0),
-                         'requiredDays': 7, 'dimension': 'actions', 'state': 'learning'},
+            'learning': {'validDays': next((d['validDays'] for d in learning_dimensions
+                                            if d['dimension'] == 'actions' and d['active']), 0),
+                         'requiredDays': 7, 'dimension': 'actions',
+                         'state': next((d['state'] for d in learning_dimensions
+                                        if d['dimension'] == 'actions' and d['active']), 'learning')},
             'source': {'versions': source_versions, 'type': 'observations', 'deviceId': pet.device_id,
                        'startAt': iso_z(start), 'endAt': iso_z(end)}}

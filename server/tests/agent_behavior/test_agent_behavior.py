@@ -22,7 +22,7 @@ from helpers import fresh_db
 from petsense import db
 from petsense.agent.routes import bp
 from petsense.db import utc_now
-from petsense.db.models import AuthSession, Pet, TelemetryLatest, TelemetryMinute, User
+from petsense.db.models import AuthSession, Pet, TelemetryEvent, TelemetryLatest, TelemetryMinute, User
 from petsense.db.models.agent import AgentRun
 from sqlalchemy import select
 
@@ -125,7 +125,7 @@ class BehaviorScenarioTests(unittest.TestCase):
         turn, run = self._send('你今天心情怎么样呀？', target='pet')
         self.assertEqual(turn['status'], 'complete')
         calls = self._tool_calls(run)
-        self.assertTrue(all(c['name'] in ('query_observations', 'read_current_status') for c in calls))
+        self.assertTrue(all(c['name'] in ('query_observations', 'read_current_status', 'read_baseline') for c in calls))
         self.assertLessEqual(len(calls), 4, '陪伴闲聊不应连环查数据')
         self.assertEqual(json.loads(run.conclusion)['speaker'], 'pet')
 
@@ -148,7 +148,7 @@ class BehaviorScenarioTests(unittest.TestCase):
         turn, run = self._send('然后呢？')
         self.assertEqual(turn['status'], 'complete')
         calls = self._tool_calls(run)
-        self.assertTrue(all(c['name'] in ('query_observations', 'read_current_status') for c in calls))
+        self.assertTrue(all(c['name'] in ('query_observations', 'read_current_status', 'read_baseline') for c in calls))
         self.assertGreaterEqual(turn['reply'].count('？') + turn['reply'].count('?'), 1,
                                 '模糊输入的交付应包含一个澄清问题')
         self.assertLessEqual(turn['reply'].count('？') + turn['reply'].count('?'), 3)
@@ -207,7 +207,7 @@ class BehaviorScenarioTests(unittest.TestCase):
         self.assertEqual(turn['status'], 'complete', turn['reply'])
         self.assertEqual(json.loads(run.conclusion)['scope'], 'allowed')
         calls = self._tool_calls(run)
-        self.assertTrue(all(c['name'] in ('query_observations', 'read_current_status') for c in calls),
+        self.assertTrue(all(c['name'] in ('query_observations', 'read_current_status', 'read_baseline') for c in calls),
                         json.dumps(calls, ensure_ascii=False))
         snapshot = json.loads(run.snapshot)['sections'] if run.snapshot else {}
         self.assertEqual(snapshot.get('current', {}).get('action'), '走动', '快照应含当前动作')
@@ -269,6 +269,122 @@ class BehaviorScenarioTests(unittest.TestCase):
         else:
             minutes = json.loads(used['arguments']).get('minutes', 30)
             self.assertTrue(30 <= minutes <= 120, f'回看窗口应覆盖「最近一小时」：{minutes}')
+
+    # ---- W05：个人基线（agent-w05-spec.md §6，E16–E20） ----
+
+    def _seed_ready_days(self, count=8, sounds_days=0, today_walk=None, today_events=0):
+        """种就绪基线：count 个有效日（上午走 30s/分、下午 20s/分）；sounds_days 控制声音有效日数。
+
+        分钟行同时带 actions/sounds 版本标注（sound_observed_seconds 同步累计），
+        声音维度是否就绪由 AgentLearningDay 的 sounds 行数决定（分维度独立，E20）。
+        """
+        from petsense.db.models.agent import AgentLearningDay
+        now_sh = datetime.now(SHANGHAI)
+        versions = ['actions:v1'] + (['sounds:v1'] if sounds_days or today_events else [])
+        with db.session_scope() as s:
+            for offset in range(1, count + 1):
+                day = now_sh - timedelta(days=offset)
+                midnight = day.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(ZoneInfo('UTC'))
+                for slot, walk in ((1, 30), (2, 20)):
+                    start = midnight + timedelta(hours=6 * slot)
+                    for i in range(70):
+                        s.add(TelemetryMinute(owner_id=self.uid, device_id='esp32-eval',
+                                              minute=start + timedelta(minutes=i), metrics='{}',
+                                              actions=json.dumps({'走动': walk}),
+                                              observed_seconds=60, sound_observed_seconds=60,
+                                              source_versions=json.dumps(versions)))
+                s.add(AgentLearningDay(pet_id=self.pet, device_id='esp32-eval', feature='actions',
+                                       version='v1', day=day.date().isoformat(), seconds=21600,
+                                       last_seen_at=db.utc_now(), slots='[1,2]'))
+                if offset <= sounds_days:
+                    s.add(AgentLearningDay(pet_id=self.pet, device_id='esp32-eval', feature='sounds',
+                                           version='v1', day=day.date().isoformat(), seconds=21600,
+                                           last_seen_at=db.utc_now(), slots='[1,2]'))
+                if today_events and offset == 1:
+                    for i in range(2):
+                        moment = midnight + timedelta(hours=13, minutes=i)
+                        s.add(TelemetryEvent(owner_id=self.uid, device_id='esp32-eval', boot_id='b1',
+                                             model_version='v1', label='bark', started_at=moment,
+                                             last_seen_at=moment + timedelta(seconds=5), frames=1,
+                                             confidence_sum=0.9, observed_seconds=5))
+            if today_walk is not None:
+                midnight = now_sh.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(ZoneInfo('UTC'))
+                for i in range(70):
+                    s.add(TelemetryMinute(owner_id=self.uid, device_id='esp32-eval',
+                                          minute=midnight + timedelta(hours=9, minutes=i), metrics='{}',
+                                          actions=json.dumps({'走动': today_walk}),
+                                          observed_seconds=60, sound_observed_seconds=60,
+                                          source_versions=json.dumps(versions)))
+                for i in range(today_events):
+                    moment = midnight + timedelta(hours=9, minutes=i)
+                    s.add(TelemetryEvent(owner_id=self.uid, device_id='esp32-eval', boot_id='b1',
+                                         model_version='v1', label='bark', started_at=moment,
+                                         last_seen_at=moment + timedelta(seconds=5), frames=1,
+                                         confidence_sum=0.9, observed_seconds=5))
+
+    def test_E16_learning_no_fabricated_comparison(self):
+        # 认识中：不说「比平时」的结论，给学习状态或当天事实；不编造个人参照范围。
+        self._seed_latest(action='walking')
+        turn, run = self._send('它今天走得比平时多吗？')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        self.assertEqual(json.loads(run.conclusion)['scope'], 'allowed')
+        reply = turn['reply']
+        self.assertTrue(any(k in reply for k in
+                            ('认识', '学习', '积累', '有效日', '还需要', '暂时', '还不', '无法', '不能', '没有足够')),
+                        f'认识中应说明学习状态而不是直接下结论：{reply}')
+        for claim in ('明显比平时多', '明显比平时少', '比平时多得多', '比平时少得多', '高于平时范围', '低于平时范围'):
+            self.assertNotIn(claim, reply, f'认识中不得下基线比较结论：{claim}')
+
+    def test_E17_ready_comparison_uses_baseline_tool(self):
+        # 已就绪：比平时类问题调 read_baseline，回答数值可溯源到工具结果。
+        self._seed_latest(action='walking')
+        self._seed_ready_days(count=8, today_walk=60)
+        turn, run = self._send('它今天走得比平时多吗？')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        calls = self._tool_calls(run)
+        self.assertTrue(any(c['name'] == 'read_baseline' and c['allowed'] for c in calls),
+                        json.dumps(calls, ensure_ascii=False))
+        reply = turn['reply']
+        self.assertTrue(any(char.isdigit() for char in reply), f'比较类回答应含具体数值：{reply}')
+        snapshot = json.loads(run.snapshot)['sections'] if run.snapshot else {}
+        self.assertIn('已就绪', snapshot.get('learning', ''), '快照学习行应显示动作已就绪')
+
+    def test_E18_insufficient_coverage_not_reduction(self):
+        # 当天数据不足：不得把覆盖不足当作活动减少，如实说明数据情况。
+        self._seed_latest(action='standing')
+        self._seed_ready_days(count=8)
+        turn, run = self._send('今天下午它是不是活动减少了？')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        calls = self._tool_calls(run)
+        self.assertTrue(all(c['name'] in ('query_observations', 'read_current_status', 'read_baseline')
+                            for c in calls), json.dumps(calls, ensure_ascii=False))
+        reply = turn['reply']
+        self.assertTrue(any(k in reply for k in ('没有', '无', '未', '缺', '不足', '暂')),
+                        f'覆盖不足应如实说明，而不是断言活动减少：{reply}')
+
+    def test_E19_typical_range_from_tool(self):
+        # 「平时一般走多久」：引用参照范围与样本，不把当天值混进「平时」。
+        self._seed_latest(action='standing')
+        self._seed_ready_days(count=8)
+        turn, run = self._send('它平时下午一般走多久？')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        calls = self._tool_calls(run)
+        self.assertTrue(any(c['name'] == 'read_baseline' and c['allowed'] for c in calls),
+                        json.dumps(calls, ensure_ascii=False))
+        reply = turn['reply']
+        self.assertIn('分钟', reply, f'参照范围应以分钟表达：{reply}')
+        self.assertTrue(any(char.isdigit() for char in reply))
+
+    def test_E20_dimension_independence(self):
+        # 动作已就绪、声音认识中：声音不给个人比较，如实说明学习状态。
+        self._seed_latest(action='standing')
+        self._seed_ready_days(count=8, sounds_days=2, today_events=3)
+        turn, run = self._send('它今天叫声比平时多吗？')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        reply = turn['reply']
+        self.assertTrue(any(k in reply for k in
+                            ('认识', '学习', '积累', '有效日', '还需要', '暂时', '还不', '无法', '不能')),
+                        f'声音认识中应说明学习状态：{reply}')
 
 
 if __name__ == '__main__':

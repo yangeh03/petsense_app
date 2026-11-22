@@ -244,7 +244,7 @@ class CurrentStatusToolTests(unittest.TestCase):
 
     def test_registered_in_dialogue_schemas(self):
         names = [s['name'] for s in registry.schemas_for('dialogue', 'allowed')]
-        self.assertEqual(names, ['query_observations', 'read_current_status'])
+        self.assertEqual(names, ['query_observations', 'read_baseline', 'read_current_status'])
 
 
 class LoopInjectionTests(unittest.TestCase):

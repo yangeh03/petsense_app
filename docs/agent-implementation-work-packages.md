@@ -354,4 +354,4 @@ flowchart TD
 - **保留并演进**：`agent_turns` 持久化与去重、观测统一查询（已注册为工具）、版本化学习累计（→W05 证据）、App 伙伴会话（已迁 zustand + WS 直连）。
 - **未开始**：W03 起的新能力包。
 
-W00 已完成（2026-11-22，spec 见 [agent-w00-spec.md](./agent-w00-spec.md)：现状处置基线逐条核实、MiniMax 搜索实测——内建 `web_search` 可用但须走 Responses/Anthropic API（Chat Completions 不支持），W06 按此适配；契约/选型/映射此前已随 V11 重构入库）。W01 已完成（统一循环/注册表矩阵/轨迹/WS 直连/前端栈迁移，行为评测 E1–E10 全过，见 [agent-w01-spec.md](./agent-w01-spec.md)）。W02 已完成：复验三项问题修复闭环后行为评测 15/15（详见 [W02 spec §9.1–§9.3](./agent-w02-spec.md)），待真项圈在线时段实机核对。后续工作包为 W03，开发前先定稿 spec。
+W00 已完成（2026-11-22，spec 见 [agent-w00-spec.md](./agent-w00-spec.md)：现状处置基线逐条核实、MiniMax 搜索实测——内建 `web_search` 可用但须走 Responses/Anthropic API（Chat Completions 不支持），W06 按此适配；契约/选型/映射此前已随 V11 重构入库）。W01 已完成（统一循环/注册表矩阵/轨迹/WS 直连/前端栈迁移，行为评测 E1–E10 全过，见 [agent-w01-spec.md](./agent-w01-spec.md)）。W02 已完成：复验三项问题修复闭环后行为评测 15/15（详见 [W02 spec §9.1–§9.3](./agent-w02-spec.md)），待真项圈在线时段实机核对。W05 已实现（2026-11-22，spec 定稿 D1–D4 均按推荐项，实施记录与待验收项见 [W05 spec §9](./agent-w05-spec.md)：基线计算/`read_baseline` 工具/baseline 端点/学习卡真实状态/回填核验工具；本地测试全绿，行为评测 E16–E20 与模拟器验收待部署后补）。后续工作包为 W03，开发前先定稿 spec。
