@@ -142,7 +142,9 @@ class RegistryMatrixTests(unittest.TestCase):
     def test_schemas_for_scope(self):
         self.assertEqual(registry.schemas_for('dialogue', 'out_of_scope'), [])
         names = [s['name'] for s in registry.schemas_for('dialogue', 'allowed')]
-        self.assertEqual(names, ['query_observations', 'read_current_status'])
+        # W03 新增档案读/写提案与设定直写三工具（agent-w03-spec.md §3.4）
+        self.assertEqual(names, ['query_observations', 'read_current_status', 'read_pet_profile',
+                                 'prepare_profile_update', 'prepare_role_settings'])
         self.assertEqual(registry.schemas_for('review', 'allowed'), [])
 
 

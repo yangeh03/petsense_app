@@ -13,6 +13,8 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from petsense.agent.observations import query as observations_query
+from petsense.agent import proposals as proposal_service
+from petsense.agent import settings as settings_service
 from petsense.common import shanghai_now
 from petsense.db import iso_z, session_scope, utc_now
 from petsense.db.models import Pet, TelemetryEvent, TelemetryLatest, TelemetryMinute
@@ -22,6 +24,8 @@ from sqlalchemy import func, select
 
 DIALOGUE = 'dialogue'
 FACT_READ = 'fact_read'
+PROFILE = 'profile'      # 确认门组（W03）：明确指令直写 / 候选确认卡，两路径在执行器内（agent-w03-spec.md §3.4）
+SETTINGS = 'settings'    # 直写组（W03）：助手设定，明确指令即改即回显
 TOOL_TIMEOUT_S = 15.0
 
 _TOOLS = {}
@@ -211,6 +215,97 @@ register(ToolSpec(
                     'description': '回看窗口（分钟），默认30'}},
         'additionalProperties': False},
     group=FACT_READ, forms=(DIALOGUE,), execute=_execute_current_status))
+
+
+def _execute_read_pet_profile(args, context):
+    with session_scope() as s:
+        pet = s.get(Pet, context['pet_id'])
+        if pet is None or pet.user_id != context['user_id']:
+            raise ValueError('宠物归属已变化')
+        return proposal_service.profile_payload(s, pet)
+
+
+register(ToolSpec(
+    name='read_pet_profile',
+    description='读取本宠的完整档案：名字、物种、品种、生日（带精度：精确日期或按年/月估算）与推导年龄、'
+                '最新体重与最近体重记录。档案未填写的字段返回 null，如实说明「档案里还没有」，不得猜测。',
+    parameters={'type': 'object', 'properties': {}, 'additionalProperties': False},
+    group=FACT_READ, forms=(DIALOGUE,), execute=_execute_read_pet_profile))
+
+
+def _execute_prepare_profile_update(args, context):
+    fields, explicit = args.get('fields'), bool(args.get('explicit'))
+    if not isinstance(fields, dict):
+        return {'error': 'fields 需为对象，包含要保存的档案字段'}
+    try:
+        with session_scope() as s:
+            pet = s.get(Pet, context['pet_id'])
+            if pet is None or pet.user_id != context['user_id']:
+                raise ValueError('宠物归属已变化')
+            row, updated = proposal_service.create(
+                s, pet, context.get('turn_id'), fields, explicit)
+    except proposal_service.ProposalError as exc:
+        return {'error': exc.message, 'validationErrors': exc.errors,
+                'guidance': '候选未通过校验，未保存。请向主人如实说明原因；主人补充后可重新发起。'}
+    if explicit:
+        return {'written': True, 'proposal': proposal_service.public(row),
+                'updatedFields': updated,
+                'guidance': '已写入档案。请如实回显保存结果，与 updatedFields 一致。'}
+    return {'written': False, 'proposal': proposal_service.public(row),
+            'guidance': '已生成待确认候选（确认卡会出现在回复中）。未经主人确认不得声称已保存；'
+                        '主人要修改候选时，按新内容重新调用本工具生成新版本。'}
+
+
+register(ToolSpec(
+    name='prepare_profile_update',
+    description='保存本宠档案事实（生日、体重、名字、品种）。两条生效路径：主人明确指令'
+                '（「记住/更新为…」且主体、内容、时间清楚）传 explicit=true 直接写入并回显；'
+                '信息不完全确定（如只说「它三岁了」）传 explicit=false 生成待确认候选卡，'
+                '由主人在卡片上确认。生日给具体日期用 birthDate（YYYY-MM-DD 或 YYYY-MM 或 YYYY），'
+                '只有年龄/大致年份用 birthYear；体重换算为公斤传 weightKg（如「九斤」传 4.5），'
+                '并在 weightRawText 保留原始表述。其他主体（朋友家的宠物）、假设（「假如」）、'
+                '否定表述不得调用本工具。',
+    parameters={'type': 'object', 'properties': {
+        'fields': {'type': 'object', 'properties': {
+            'name': {'type': 'string', 'description': '宠物名字（1—20 字）'},
+            'breed': {'type': 'string', 'description': '品种（≤40 字）'},
+            'birthDate': {'type': 'string', 'description': '生日：2023-09-10 / 2023-09 / 2023'},
+            'birthDatePrecision': {'type': 'string', 'enum': ['day', 'month', 'year'],
+                                   'description': '生日精度；缺省按日期格式推导，只允许降档'},
+            'birthYear': {'type': 'integer', 'description': '年龄/大致年份估算（如三岁→约 2023），与 birthDate 二选一'},
+            'weightKg': {'type': 'number', 'description': '体重（公斤，0.1–100）'},
+            'weightMeasuredOn': {'type': 'string', 'description': '体重发生日期 YYYY-MM-DD，缺省今天'},
+            'weightRawText': {'type': 'string', 'description': '主人的原始表述（如「九斤」），≤40 字'}},
+            'additionalProperties': False},
+        'explicit': {'type': 'boolean', 'description': '主人是否明确指令保存'},
+        'note': {'type': 'string', 'description': '提案理由（入运行轨迹）'}},
+        'required': ['fields', 'explicit'], 'additionalProperties': False},
+    group=PROFILE, forms=(DIALOGUE,), execute=_execute_prepare_profile_update))
+
+
+def _execute_prepare_role_settings(args, context):
+    try:
+        patch = settings_service.validate_patch(args)
+    except ValueError as exc:
+        return {'error': str(exc), 'guidance': '设定未通过校验，未修改。请如实说明原因。'}
+    with session_scope() as s:
+        row = settings_service.persist(s, context['user_id'], patch)
+        return {'updated': True, 'settings': settings_service.public(row),
+                'guidance': '设定已生效并从下一轮对话开始按新设定表达；请向主人回显修改结果。'}
+
+
+register(ToolSpec(
+    name='prepare_role_settings',
+    description='修改照料助手设定（名字、对主人的称呼、回答详略、主动程度）。仅在主人明确表达'
+                '修改意图时调用并直接生效；商量或疑问（「你能叫小禾吗？」）先向主人确认再调用。'
+                '主动程度 0=安静、1=标准、2=多提醒。清空称呼传空字符串。',
+    parameters={'type': 'object', 'properties': {
+        'assistantName': {'type': 'string', 'description': '助手名字（1—20 字）'},
+        'ownerTitle': {'type': 'string', 'description': '对主人的称呼（≤20 字，空串=清除）'},
+        'verbosity': {'type': 'string', 'enum': ['concise', 'detailed'], 'description': '简洁 / 详细'},
+        'proactivity': {'type': 'integer', 'enum': [0, 1, 2], 'description': '主动程度三档'}},
+        'additionalProperties': False},
+    group=SETTINGS, forms=(DIALOGUE,), execute=_execute_prepare_role_settings))
 
 
 def execute_tool(name, arguments, form, stance_scope, context):

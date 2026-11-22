@@ -1,7 +1,9 @@
-"""Authenticated durable companion API（W01：统一运行循环，无前置路由；W02：氛围快照组装）。
+"""Authenticated durable companion API（W01：统一运行循环，无前置路由；W02：氛围快照组装；
+W03：助手设定注入、确认提案决策与设定端点）。
 
-POST turns 组装初始包（含 W02 常驻快照）并触发 loop.run_dialogue；判断（范围/意图/角色）
-全部由模型在循环内完成（agent-w01-spec.md §3.7）。GET 保留为 WS 断线的降级轮询路径。
+POST turns 组装初始包（含 W02 常驻快照与 W03 助手设定）并触发 loop.run_dialogue；
+判断（范围/意图/角色）全部由模型在循环内完成（agent-w01-spec.md §3.7）。
+GET 保留为 WS 断线的降级轮询路径。
 """
 import json
 import time
@@ -16,6 +18,8 @@ from petsense.db.models import Pet
 from petsense.db.models.agent import AgentTurn
 from petsense.agent.observations import query
 from petsense.agent import loop, runs, snapshot
+from petsense.agent import proposals as proposal_service
+from petsense.agent import settings as settings_service
 from petsense.agent import ws  # noqa: F401  import 即注册 /api/app/agent/ws 路由
 
 bp = Blueprint('agent', __name__, url_prefix='/api/app/agent')
@@ -105,8 +109,10 @@ def turns(pet_id):
         history = [{'text': row.text, 'reply': row.reply} for row in reversed(history_rows)]
         now = utc_now()
         snap = snapshot.assemble(s, pet, now)
+        companion = settings_service.load(s, user['id'])
     context = {'pet_id': pet_id, 'user_id': user['id'], 'text': text.strip(),
-               'target': target, 'history': history, 'snapshot': snap, 'now_iso': iso_z(now)}
+               'target': target, 'history': history, 'snapshot': snap, 'now_iso': iso_z(now),
+               'turn_id': turn_id, 'settings': companion}
     speaker = ['assistant']
     last_write = [0.0]
 
@@ -128,6 +134,10 @@ def turns(pet_id):
         reply, blocks = outcome['reply'], outcome['blocks']
         speaker[0] = outcome['speaker']
         sources = outcome['sources']
+        if outcome.get('proposals'):
+            # W03 确认卡：挂最后一张（同回合多次写入调用时后一张已替代前一张 pending）
+            blocks = list(blocks or []) + [{'type': 'proposal',
+                                            'proposal': outcome['proposals'][-1]}]
         run_status = 'degraded' if outcome['degraded'] else 'complete'
         runs.save(pet_id, turn_id, outcome['trace'], run_status)
     except Exception as exc:
@@ -170,3 +180,52 @@ def read_turns(pet_id):
         for row in rows:
             row.read_at = row.read_at or now
         return {'turns': [public(row) for row in rows]}
+
+
+@bp.route('/assistant-settings', methods=['GET', 'PATCH'])
+def assistant_settings():
+    """助手设定页读写（W03，D3 四字段全直写；PATCH 白名单校验）。"""
+    user, error = require_app_user()
+    if error:
+        return error
+    if request.method == 'GET':
+        with session_scope() as s:
+            return {'settings': settings_service.load(s, user['id'])}
+    data = request.get_json(silent=True)
+    try:
+        patch = settings_service.validate_patch(data)
+    except ValueError as exc:
+        return {'message': str(exc)}, 400
+    with session_scope() as s:
+        row = settings_service.persist(s, user['id'], patch)
+        return {'settings': settings_service.public(row)}
+
+
+@bp.post('/pets/<int:pet_id>/proposals/<int:proposal_id>/decision')
+def proposal_decision(pet_id, proposal_id):
+    """确认卡决策（W03 §3.7）：confirm 落库 / reject 仅翻转状态；幂等，异态 409。
+
+    决策为确定性代码（不触发模型运行）；卡片状态即回执，重写 blocks 后按 id 推 turn 帧刷新。
+    """
+    user, error = require_app_user()
+    if error:
+        return error
+    data = request.get_json(silent=True)
+    action = data.get('action') if isinstance(data, dict) else None
+    if action not in ('confirm', 'reject'):
+        return {'message': '决策动作无效'}, 400
+    result = None
+    with session_scope() as s:
+        pet = s.get(Pet, pet_id)
+        if pet is None or pet.user_id != user['id']:
+            return {'message': '宠物不存在'}, 404
+        try:
+            row, turn_id = proposal_service.decide(s, pet, proposal_id, action)
+        except proposal_service.ProposalError as exc:
+            return {'message': exc.message}, exc.status
+        turn = s.get(AgentTurn, turn_id) if turn_id else None
+        result = {'proposal': proposal_service.public(row),
+                  'turn': public(turn) if turn else None}
+    if result['turn']:
+        ws.push_turn(user['id'], pet_id, result['turn'])
+    return result

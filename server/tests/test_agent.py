@@ -204,14 +204,17 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(self.client.post(url, json={'ids': [turn['id']]}).status_code, 404)
 
     def test_unavailable_capabilities_answered_without_tools(self):
-        """未开放能力（写入/联网/持续留意）由模型按注册表如实说明，不走固定文案分支。"""
+        """未开放能力（联网/持续留意）由模型按注册表如实说明，不走固定文案分支；
+        W03 起档案与设定写入工具已注册，不再属于「未开放」。"""
         with patch('petsense.agent.model.respond') as respond:
-            respond.return_value = model_turn(allowed_stance('assistant', 'write')
-                                               + '【照料助手】这条信息留在聊天里了，保存能力还在准备。')
-            response = self.client.post(self.path, json={'text': '记住它今天体重九斤', 'requestId': 'write'})
+            respond.return_value = model_turn(allowed_stance('assistant', 'search')
+                                               + '【照料助手】联网查证还没接入，先不能帮你搜。')
+            response = self.client.post(self.path, json={'text': '帮我上网查一下这个粮的评价', 'requestId': 'write'})
         self.assertEqual(response.json['turn']['status'], 'complete')
         self.assertEqual(response.json['turn']['sources'], [])
         tools_offered = respond.call_args.kwargs.get('tools')
-        # W02 起事实只读组含 query_observations 与 read_current_status；写入/联网/留意仍无工具
-        self.assertTrue(tools_offered and all(t['name'] in ('query_observations', 'read_current_status')
+        # W03 注册表五工具：两事实只读 + 档案读 + 档案写提案 + 设定直写；联网/留意仍无工具
+        self.assertTrue(tools_offered and all(t['name'] in ('query_observations', 'read_current_status',
+                                                            'read_pet_profile', 'prepare_profile_update',
+                                                            'prepare_role_settings')
                                               for t in tools_offered))
