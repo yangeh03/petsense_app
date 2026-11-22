@@ -270,7 +270,7 @@ class BehaviorScenarioTests(unittest.TestCase):
             minutes = json.loads(used['arguments']).get('minutes', 30)
             self.assertTrue(30 <= minutes <= 120, f'回看窗口应覆盖「最近一小时」：{minutes}')
 
-    # ---- W05：个人基线（agent-w05-spec.md §6，E16–E20） ----
+    # ---- W05：个人基线（agent-w05-spec.md §6，E22–E26；E16–E21 为 W03 资料确认场景） ----
 
     def _seed_ready_days(self, count=8, sounds_days=0, today_walk=None, today_events=0):
         """种就绪基线：count 个有效日（上午走 30s/分、下午 20s/分）；sounds_days 控制声音有效日数。
@@ -322,7 +322,7 @@ class BehaviorScenarioTests(unittest.TestCase):
                                          last_seen_at=moment + timedelta(seconds=5), frames=1,
                                          confidence_sum=0.9, observed_seconds=5))
 
-    def test_E16_learning_no_fabricated_comparison(self):
+    def test_E22_learning_no_fabricated_comparison(self):
         # 认识中：不说「比平时」的结论，给学习状态或当天事实；不编造个人参照范围。
         self._seed_latest(action='walking')
         turn, run = self._send('它今天走得比平时多吗？')
@@ -335,7 +335,7 @@ class BehaviorScenarioTests(unittest.TestCase):
         for claim in ('明显比平时多', '明显比平时少', '比平时多得多', '比平时少得多', '高于平时范围', '低于平时范围'):
             self.assertNotIn(claim, reply, f'认识中不得下基线比较结论：{claim}')
 
-    def test_E17_ready_comparison_uses_baseline_tool(self):
+    def test_E23_ready_comparison_uses_baseline_tool(self):
         # 已就绪：比平时类问题调 read_baseline，回答数值可溯源到工具结果。
         self._seed_latest(action='walking')
         self._seed_ready_days(count=8, today_walk=60)
@@ -349,7 +349,7 @@ class BehaviorScenarioTests(unittest.TestCase):
         snapshot = json.loads(run.snapshot)['sections'] if run.snapshot else {}
         self.assertIn('已就绪', snapshot.get('learning', ''), '快照学习行应显示动作已就绪')
 
-    def test_E18_insufficient_coverage_not_reduction(self):
+    def test_E24_insufficient_coverage_not_reduction(self):
         # 当天数据不足：不得把覆盖不足当作活动减少，如实说明数据情况。
         self._seed_latest(action='standing')
         self._seed_ready_days(count=8)
@@ -362,7 +362,7 @@ class BehaviorScenarioTests(unittest.TestCase):
         self.assertTrue(any(k in reply for k in ('没有', '无', '未', '缺', '不足', '暂')),
                         f'覆盖不足应如实说明，而不是断言活动减少：{reply}')
 
-    def test_E19_typical_range_from_tool(self):
+    def test_E25_typical_range_from_tool(self):
         # 「平时一般走多久」：引用参照范围与样本，不把当天值混进「平时」。
         self._seed_latest(action='standing')
         self._seed_ready_days(count=8)
@@ -375,7 +375,7 @@ class BehaviorScenarioTests(unittest.TestCase):
         self.assertIn('分钟', reply, f'参照范围应以分钟表达：{reply}')
         self.assertTrue(any(char.isdigit() for char in reply))
 
-    def test_E20_dimension_independence(self):
+    def test_E26_dimension_independence(self):
         # 动作已就绪、声音认识中：声音不给个人比较，如实说明学习状态。
         self._seed_latest(action='standing')
         self._seed_ready_days(count=8, sounds_days=2, today_events=3)
