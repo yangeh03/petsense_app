@@ -65,7 +65,7 @@ Agent 以「运行（Run）」为最小调度单元：触发（消息/检查点/
 | --- | --- | --- |
 | 模型 | MiniMax；API key 后续提供 | 阶段1已验证国内端点、M3.1-Flash 文本、流式及工具往返；生产配置和额度管理仍按实施部署核对 |
 | 图片 | 使用 MiniMax 多模态输入 | 256×256 JPEG 纯色测试已正确识别；16×16 PNG 测试曾误认，不能据此推定图片理解可靠，App 图片输入与完整验证由 W07 完成 |
-| 搜索 | 用户指定使用 MiniMax 自带搜索 | [官方旧版 ChatCompletion 文档](https://platform.minimaxi.com/document/%E5%AF%B9%E8%AF%9D?key=36954880539f4e2ab8b13067)描述的 `web_search` 限定 MiniMax-Text-01；[Token Plan 页面](https://platform.minimaxi.com/subscribe/token-plan)列有 MCP 搜索并标为编程场景工具。尚不能据此确认目标多模态模型、账户套餐及 App 服务端的生产接入方式、来源链接和阅读能力；W06 spec 启动时必须实测并核对适用条款，不通过则向负责人澄清替代方案 |
+| 搜索 | 用户指定使用 MiniMax 自带搜索 | **W00 实测（2026-11-22）可用**（证据见 [W00 spec §4.4](./agent-w00-spec.md)）：`web_search` 服务端工具挂在 **OpenAI Responses API（`/v1/responses`）与 Anthropic Messages API** 上，生产域 `api.minimaxi.com` 与文档域 `api.minimax.cn` 均真实搜索并返回 `url_citation` 来源（title/url/content）；国际域 `api.minimax.io` 与国内 key 不通用（401）。**Chat Completions 端点（现有适配层在用）不支持**——`web_search` 参数被忽略、tools 仅收 function 类型。W06 需新增 Responses API 适配；官方标注 Beta、搜索请求耗时显著增加、计费未注明（W06 定稿前核对账户扣费）。URL 直接阅读不可依赖（Chat Completions 实测多次幻觉/拒读），`read_web_page` 自建 fetcher |
 | 原生推送 | 用户指定 Expo；暂按 iOS 和 Android 规划，使用 Expo Notifications 和 Expo Push Service 作为实施方案 | [Expo SDK 58 文档](https://docs.expo.dev/versions/v58.0.0/sdk/notifications/)支持两平台及 Expo push token；需准备各平台推送凭据和原生构建，Android 远程推送不能依赖 Expo Go。账户、凭据及真实推送尚未验证，W13 分平台真机验收 |
 | 位置语义 | 定位同学后续提供文本标签 | 接口、时间有效性和版本尚未交付；区域能力单独验收，不阻塞动作/声音 |
 

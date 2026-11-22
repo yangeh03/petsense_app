@@ -38,7 +38,7 @@
 - 本文件是跨协作者共享的项目入口；开始工作先检查 Git 状态和适用文档，涉及远端时核对远端，不覆盖他人的未提交工作。
 - 每次完成涉及架构、关键路径、接口与数据流、运行或测试命令、部署、设备限制或重要工作约定的变更时，检查并在同一变更中按需更新本文件及相关专题文档；无相关变化时无需为更新而更新。PR 描述或交付说明写明已更新的文档，或说明无需更新的原因。
 - 本文件保留稳定规则、关键限制和专题文档入口；详细设计和操作步骤放对应文档。与代码、CI 或实际验证冲突时，以当前实现及验证证据为准，修正文档并注明未验证之处。动态状态注明核对日期和依据，过时内容及时删除或修订，不把推测和模拟结果写成硬件验收结论。
-- 共享记忆须纳入 Git 并推送，未提交内容不会随仓库共享；不得写入密码、令牌或私人数据。不要把聊天记录当作其他协作者自动拥有的项目记忆。
+- 共享记忆须纳入 Git 并推送，未提交内容不会随仓库共享；不得写入密码、令牌或私人数据（唯一例外：模拟器验收测试账号 `petsense` 的密码，2026-11-22 负责人确认入库）。不要把聊天记录当作其他协作者自动拥有的项目记忆。
 
 ## 定位项目状态（2026-11-12 按仓库代码和文档核对）
 
@@ -58,7 +58,7 @@
 - 判定界面状态用 `xcrun simctl io booted screenshot`（直接截设备屏，不受窗口位置/遮挡影响）；定位按钮可用 PIL 按品牌色扫描像素再除以 3 换算逻辑 pt
 - 判定请求是否真正到达服务端：`cloud-ssh tencent 'sudo journalctl -u petsense.service --since "2 min ago"'` 看每条请求的状态码，这是"客户端没发出去"还是"服务端报错"的铁证
 - 生产测试账号关联真实宠物资料，不要修改；凭据通过安全渠道获取，不写入仓库。纯接口测试在 `server/` 下用 `PETSENSE_ROOT=/tmp/xxx PETSENSE_MQTT_DISABLED=1 .venv/bin/python wsgi.py` 起隔离实例（临时 root 会自动 alembic 建库），测完清理
-- 模拟器验收统一使用指定账号 `petsense`，密码由用户提供，不写进源码、文档或提交。可直接在生产 `petsense` 的伙伴会话发送 Agent 验收消息，无需逐条或逐轮批准。需要创建宠物、改动真实资料、绑定设备或验证其他写入时，使用隔离后端的同名账号。
+- 模拟器验收统一使用指定账号 `petsense`，密码 `123456`（2026-11-22 负责人确认写入仓库，是「不得写入密码」约定的唯一例外，仅限此测试账号；模型 API key 等真实凭据仍不入库）。可直接在生产 `petsense` 的伙伴会话发送 Agent 验收消息，无需逐条或逐轮批准。需要创建宠物、改动真实资料、绑定设备或验证其他写入时，使用隔离后端的同名账号。
 - 涉及历史记录、观测问答和学习累计的验收，优先用指定账号从云端读取真实观测。先检查日期范围及有效覆盖，再挑选有数据的时段。新接口尚未部署时，可用授权的云端只读数据副本在隔离实例验收；本地空库用于缺数据、写入和故障场景，空库通过只算相应场景通过。验收记录须注明数据来源、时段和实际经过的接口。
 - Metro 已被占用时使用空闲端口，先检查 `/status`。`--localhost` 可能只监听 IPv6 `::1`，此时 Expo Go 用 `exp://localhost:<端口>`，不要使用 IPv4 `127.0.0.1` 打开 Metro。App 的 API 地址按隔离后端实际监听地址配置。
 - `idb` 若找不到默认的 `idb_companion`，连接时通过 `--companion-path` 指向可用二进制。默认 HID 报 `Mach port invalid` 时，使用 `idb ui tap/set-value --api ax-coresimulator`，从无障碍树取元素坐标。每次导航后重新读树，避开过场中同时出现的两页元素。
@@ -73,6 +73,8 @@ Read the exact versioned docs at https://docs.expo.dev/versions/v58.0.0/ before 
 
 - 产品设计 V11（2026-11-22 起，以 Agent 为设计对象：单一 Agent 统一运行循环、无前置路由、常驻实时快照、工具注册表 + 权限矩阵、记忆分级写入；前端架构与组件选型见其第 18 章：WS 直连 + zustand + expo-ai-elements 渲染层（vendor 模式）+ 自建容器 + keyboard-controller）见 `docs/agent-product-integration-design.md`；实施按 W 系列工作包（W00–W15）见 `docs/agent-implementation-work-packages.md`，路线与分工见 `docs/agent-implementation-roadmap.md`，跨端契约见 `docs/agent-p00-contract.md`。阶段 1 实施记录见 `docs/agent-phase-one.md`（历史记录，其 decide 路由架构已被 V11 替代，由 W01 删除）。
 - 新 Agent 服务端域在 `server/petsense/agent/`，App 使用独立业务服务，不混入遥测解析。模型凭据仅由服务端环境或外部文件读取，不纳入 Git。
+- 工作包开发流程（2026-11-22 确立，W 系列一律按此执行）：① 先写 spec 文档（`docs/agent-w<NN>-spec.md`），关键决策点与负责人讨论确认后定稿；② 按定稿 spec 实现代码；③ 验收统一用 iOS 模拟器接生产环境，登录测试账号 `petsense`（密码 `123456`，负责人确认随仓库记录）。spec 定稿前不动代码，验收结论回写 spec。
+- W00 已完成（2026-11-22）：spec 与现状处置基线见 `docs/agent-w00-spec.md`。关键外部结论：MiniMax 内建 `web_search` **可用**，但只在 **Responses API（`/v1/responses`）与 Anthropic Messages API** 上（生产域 `api.minimaxi.com` 实测通过、Beta）；**Chat Completions 端点不支持**（`web_search` 参数被忽略）。URL 直接阅读不可依赖，`read_web_page` 自建 fetcher。实测脚本 `server/tools/minimax_search_smoke.py` 可复跑。
 
 ## 运动日记
 

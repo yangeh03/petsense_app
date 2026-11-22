@@ -355,4 +355,4 @@ flowchart TD
 - **待替换**：`routes.py` 的三字段共享上下文（→W02 常驻快照）。
 - **未开始**：W02 起的全部新能力包。
 
-W00/W01 尚未启动；本文与 V11 设计稿构成下一轮 spec 的共同基线。
+W00 已完成（2026-11-22，spec 见 [agent-w00-spec.md](./agent-w00-spec.md)：现状处置基线逐条核实、MiniMax 搜索实测——内建 `web_search` 可用但须走 Responses/Anthropic API（Chat Completions 不支持），W06 按此适配；契约/选型/映射此前已随 V11 重构入库）。W01 尚未启动；本文与 V11 设计稿构成下一轮 spec 的共同基线。
