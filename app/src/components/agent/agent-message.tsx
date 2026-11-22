@@ -11,7 +11,7 @@ import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import { Image } from 'expo-image';
 import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
-import ImageView from 'react-native-image-viewing';
+import AgentImageViewer from '@/components/agent/agent-image-viewer';
 import { ProposalCard } from '@/components/agent/proposal-card';
 import { ThemedText } from '@/components/themed-text';
 import { Shadows } from '@/constants/theme';
@@ -344,7 +344,7 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry }:
         {turn.text ? <ThemedText>{turn.text}</ThemedText> : null}
       </View>
       {images.length ? (
-        <ImageView
+        <AgentImageViewer
           images={images.map((meta) => agentImageSource(meta.id))}
           imageIndex={viewerIndex}
           visible={viewerOpen}
