@@ -1,5 +1,30 @@
 import { request } from '@/services/api';
 
+/**
+ * 回合来源（W06 起为可辨析联合）：观测来源（startAt/endAt 可选）与网页来源
+ * （type 'web'，url/title/checkedAt）；未知 type 由 UI 安全降级，不崩溃。
+ */
+export type AgentObservationSource = {
+  type: string;
+  startAt?: string;
+  endAt?: string;
+  deviceId?: string;
+  versions?: string[];
+  observedSeconds?: number | null;
+  soundEventCount?: number | null;
+};
+
+export type AgentWebSource = {
+  type: 'web';
+  url: string;
+  title?: string | null;
+  checkedAt?: string | null;
+};
+
+export type AgentSource = AgentObservationSource | AgentWebSource;
+
+export const isWebSource = (source: AgentSource): source is AgentWebSource => source.type === 'web';
+
 export type AgentTurn = {
   id: number;
   requestId: string;
@@ -12,15 +37,7 @@ export type AgentTurn = {
   createdAt: string;
   topicId: number | null;
   replyTo: number | null;
-  sources: {
-    type: string;
-    startAt: string;
-    endAt: string;
-    deviceId?: string;
-    versions?: string[];
-    observedSeconds?: number | null;
-    soundEventCount?: number | null;
-  }[];
+  sources: AgentSource[];
   blocks: { type: 'text'; speaker: 'pet' | 'assistant'; text: string }[] | null;
 };
 export const fetchAgentTurns = (pet: number, before?: number) =>

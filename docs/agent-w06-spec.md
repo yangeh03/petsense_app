@@ -210,3 +210,21 @@ W01/W02 的 E1–E6、E8–E15 全量保留通过（预算变化 90→120s 不�
 定稿依据：§3.4 已回填实测。负责人已确认 §2 决策，并同意按限次和默认关闭的发布开关推进，实际扣费待控制台核对。
 
 交付验收：§7 全部通过 + §8 模拟器验收记录（含轨迹证据）+ §6.3 发布步骤执行记录；结论回写本节。
+
+### 10.1 实现与本地验证（2026-11-22，worktree `codex/agent-w06-search`）
+
+**已实现**：P00 契约 §3 例外条款与 §7 搜索行已更新；`fetch.py`（pin-IP SSRF 防护 + trafilatura）、`model.py`（web_search 挂载/110s 读超时/web_search_call 与 url_citation 解析/流式进度提示）、`registry.py`（EXTERNAL_READ 组、`timeout_s`）、`loop.py`（挂载策略、RUN_WALL_LIMIT_S=120、限次、系统提示分开关组装、sources 并入、轨迹伪条目与降级标记）、App 来源联合类型 + WebSourceCard + 未知类型降级；`requirements.txt`/`requirements.lock` 增 trafilatura==2.2.0 及传递依赖；复跑脚本 `server/tools/minimax_w06_smoke.py`。
+
+**超出 §4.4 已知边界的加固**（负责人 2026-11-22 指示，替代「解析后校验」首版方案）：解析后连接目标固定为校验过的公网 IP（pin-IP），TLS 仍按原域名校验；重定向逐跳重新解析并校验；显式拒绝代理隧道；环回/私网/保留/链路本地/组播地址一律拒绝。
+
+**测试编号调整**（协调者 2026-11-22 指定）：§7.2 的 E16–E19 按实现编号 **E35–E38**（顺延避开 W03/04/05 行为评测号段，合流时以本节为准）；**E7 改为关闭搜索态的回归**（`PETSENSE_SEARCH_DISABLED=1` 下如实说明不可用），不再删除。
+
+**本地验证通过**：
+- 服务端 `python -m unittest discover -s server/tests`：**274 通过 / 1 skip**（skip 为无凭据的行为评测组）；其中新增 `tests/test_agent_w06.py` 24 项（fetch 本地 fixture：正文提取/404/超时/私网与元数据地址拒绝/重定向到私网逐跳拒绝/重定向链路/非网页/超限拒绝/流式截断/提取失败结构化；合成 final 解析；loop 挂载/摘除/限次/降级/sources 上限；registry 门控与开关）；W01/W02 的工具清单断言按新注册表更新（`read_web_page` 入清单，快照与观测语义不变）。
+- 客户端（`app/`）：`tsc --noEmit`、`expo lint`、`prettier --check`、`npm test`（99 通过）、`npx expo export --platform web` 全部通过。
+
+**待完成（负责人执行）**：
+1. 行为评测 E1–E6/E8–E15 + E35–E38 + E7（关闭态）连真实凭据跑通（无凭据环境整组 skip，本环境未跑）；
+2. §8 iOS 模拟器验收（生产 + `petsense` 账号）与轨迹回放抽查；
+3. §6.3 两阶段发布：main 合入后生产 drop-in `PETSENSE_SEARCH_DISABLED=1` 起步，OTA 覆盖后移除；
+4. D6 计费控制台核对。

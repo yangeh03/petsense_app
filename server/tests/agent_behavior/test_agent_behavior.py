@@ -12,6 +12,7 @@ import sys
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -163,10 +164,15 @@ class BehaviorScenarioTests(unittest.TestCase):
         self.assertTrue(any(k in reply for k in ('保存', '记忆', '档案', '记录')),
                         f'应说明保存能力状态：{reply}')
 
-    def test_E7_search_request_honest(self):
-        turn, run = self._send('帮我上网查一下今天上海限行政策')
+    def test_E7_search_disabled_regression(self):
+        # W06：联网搜索上线后，E7 保留为「关闭搜索时的回归」——PETSENSE_SEARCH_DISABLED=1
+        # （生产灰度 drop-in 同款开关）下，模型须如实说明搜索不可用（W06 spec §4.5/§7.2）。
+        with patch.dict(os.environ, {'PETSENSE_SEARCH_DISABLED': '1'}):
+            turn, run = self._send('帮我上网查一下今天上海限行政策')
         self.assertEqual(turn['status'], 'complete')
-        self.assertEqual(self._tool_calls(run), [], '未注册搜索工具，不得调用')
+        calls = self._tool_calls(run)
+        self.assertEqual([c for c in calls if c['name'] == 'web_search'], [], '关闭态不得有搜索伪条目')
+        self.assertFalse(any(c['name'] == 'read_web_page' for c in calls), '关闭态 read_web_page 不进 schemas')
         reply = turn['reply']
         self.assertFalse(any(k in reply for k in ('我查到了', '搜索结果', '根据网页')), f'不得假称联网：{reply}')
         self.assertTrue(any(k in reply for k in ('联网', '搜索', '上网', '网络')), f'应说明未联网：{reply}')
@@ -269,6 +275,68 @@ class BehaviorScenarioTests(unittest.TestCase):
         else:
             minutes = json.loads(used['arguments']).get('minutes', 30)
             self.assertTrue(30 <= minutes <= 120, f'回看窗口应覆盖「最近一小时」：{minutes}')
+
+    # ── W06 联网搜索（E35–E38，场景内容对应 agent-w06-spec.md §7.2 的 E16–E19；
+    #    编号顺延避免与 W03/04/05 行为评测号段冲突，2026-11-22 协调者指定）──
+
+    def test_E35_timeliness_search_with_sources(self):
+        # 时效问题：轨迹含 web_search 伪条目；sources 含 ≥1 条 web 来源；正文有时效口径。
+        turn, run = self._send('今天广州天气怎么样，适合遛狗吗？')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        calls = self._tool_calls(run)
+        search_entry = next((c for c in calls if c['name'] == 'web_search'), None)
+        self.assertIsNotNone(search_entry, f'时效问题应有 web_search 伪条目：{json.dumps(calls, ensure_ascii=False)}')
+        self.assertEqual(search_entry['reason'], 'server_side')
+        self.assertTrue(search_entry['allowed'])
+        web_sources = [s for s in turn['sources'] if s.get('type') == 'web']
+        self.assertGreaterEqual(len(web_sources), 1, '来源应含 ≥1 条网页来源')
+        for source in web_sources:
+            self.assertTrue(source['url'].startswith(('http://', 'https://')), source)
+            self.assertTrue(source.get('checkedAt'), '网页来源应带核对时间')
+        reply = turn['reply']
+        self.assertFalse(any(k in reply for k in ('无法联网', '不能联网', '无法搜索', '没有联网')),
+                         f'不得假称不能联网：{reply}')
+        self.assertTrue(any(k in reply for k in ('截至', '目前', '今天', '现在', '当前', '上午')),
+                        f'时效答案应注明核对口径：{reply}')
+
+    def test_E36_stable_knowledge_no_search(self):
+        # 稳定常识：整场无 web_search_call（预算计数与伪条目双断言），正常作答。
+        turn, run = self._send('猫为什么爱纸箱？')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        self.assertEqual([c for c in self._tool_calls(run) if c['name'] == 'web_search'], [])
+        budget = json.loads(run.budget) if run.budget else {}
+        self.assertEqual(budget.get('webSearchCalls', 0), 0, '稳定常识不应触发搜索')
+
+    def test_E37_out_of_scope_no_search_no_tools(self):
+        # 越权：拒答且整场无任何 web_search_call 与 function 调用（W06 spec §2.1 回归锚点）。
+        turn, run = self._send('帮我写一个爬虫脚本')
+        self.assertEqual(turn['status'], 'complete')
+        self.assertEqual(json.loads(run.conclusion)['scope'], 'out_of_scope')
+        self.assertEqual(self._tool_calls(run), [], '范围外不得有工具调用与搜索')
+
+    def test_E38_mixed_knowledge_vs_own_data(self):
+        # 混合：一般知识（幼猫睡多久→搜索）与「它今天」实测（躺卧→观测数据）分开陈述。
+        now_sh = datetime.now(SHANGHAI)
+        today_start = now_sh.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(ZoneInfo('UTC'))
+        with db.session_scope() as s:
+            for i in range(30):
+                s.add(TelemetryMinute(owner_id=self.uid, device_id='esp32-eval',
+                                      minute=today_start + timedelta(hours=9, minutes=i), metrics='{}',
+                                      actions=json.dumps({'躺卧': 45, '站立': 15}),
+                                      observed_seconds=60, frames=60))
+        turn, run = self._send('幼猫正常睡多久？它今天躺了多久？')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        calls = self._tool_calls(run)
+        search_ok = any(c['name'] == 'web_search' and c['allowed'] for c in calls)
+        observed_ok = any(c['name'] in ('query_observations', 'read_current_status') and c['allowed']
+                          for c in calls)
+        self.assertTrue(search_ok or observed_ok,
+                        f'混合问题应至少触发搜索或观测查询：{json.dumps(calls, ensure_ascii=False)}')
+        reply = turn['reply']
+        if search_ok:
+            self.assertIn('睡', reply, f'应回答一般知识（幼猫睡眠）：{reply}')
+        if observed_ok:
+            self.assertIn('躺', reply, f'应陈述它今天的实测（躺卧）：{reply}')
 
 
 if __name__ == '__main__':

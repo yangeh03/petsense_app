@@ -355,3 +355,5 @@ flowchart TD
 - **未开始**：W03 起的新能力包。
 
 W00 已完成（2026-11-22，spec 见 [agent-w00-spec.md](./agent-w00-spec.md)：现状处置基线逐条核实、MiniMax 搜索实测——内建 `web_search` 可用但须走 Responses/Anthropic API（Chat Completions 不支持），W06 按此适配；契约/选型/映射此前已随 V11 重构入库）。W01 已完成（统一循环/注册表矩阵/轨迹/WS 直连/前端栈迁移，行为评测 E1–E10 全过，见 [agent-w01-spec.md](./agent-w01-spec.md)）。W02 已完成：复验三项问题修复闭环后行为评测 15/15（详见 [W02 spec §9.1–§9.3](./agent-w02-spec.md)），待真项圈在线时段实机核对。后续工作包为 W03，开发前先定稿 spec。
+
+W06 已完成实现与本地验证（2026-11-22，spec 与验收状态见 [agent-w06-spec.md](./agent-w06-spec.md) §10.1：内建 `web_search` 按轮挂载 + 确定性限次、`read_web_page` pin-IP 防护 fetcher、网页来源卡、`PETSENSE_SEARCH_DISABLED` 两阶段发布开关；服务端单测与客户端检查全过）。待办：真实凭据行为评测（E35–E38，E7 为关闭态回归）、§8 模拟器验收、生产两阶段发布与 D6 计费核对。行为评测号段：W06 用 E35–E38，避开 W03/04/05。

@@ -139,3 +139,5 @@ Agent 消息另设类型和服务层，不把聊天格式塞入既有遥测解�
 阶段 1 首切片（旧 P01–P06）已合入 main 并部署腾讯云。V11 重构的 W00、W01 已完成，分别见 [W00 spec](./agent-w00-spec.md) 和 [W01 spec](./agent-w01-spec.md)。
 
 W02 已完成（2026-11-22）：iOS 发送、收包和轨迹回放经独立补验打通；复验暴露的离线电量转述、被拒查询无依据转述、模糊澄清不稳定三项已修复闭环（`f5b61f9`/`8d44f11`），行为评测最终 15/15；真项圈在线时段实机核对待设备上线。见 [W02 spec](./agent-w02-spec.md) §9.1–§9.3。下一包 W03。
+
+W06 已完成实现与本地验证（2026-11-22，worktree `codex/agent-w06-search`）：联网知识接入——内建 `web_search` 按轮挂载 + 确定性限次（每运行 2 次）、`read_web_page` pin-IP 防护 fetcher（trafilatura）、网页来源卡、`PETSENSE_SEARCH_DISABLED` 两阶段发布开关；服务端单测与客户端检查全过，行为评测（E35–E38，E7 为关闭态回归）与模拟器验收待真实凭据环境执行。见 [W06 spec §10.1](./agent-w06-spec.md)。

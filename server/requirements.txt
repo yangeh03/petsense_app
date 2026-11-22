@@ -11,3 +11,5 @@ SQLAlchemy==2.0.39
 alembic==1.16.5
 Pillow==13.0.0
 matplotlib==3.9.4
+# W06 联网知识：read_web_page 正文提取（trafilatura，传递依赖见 requirements.lock）
+trafilatura==2.2.0

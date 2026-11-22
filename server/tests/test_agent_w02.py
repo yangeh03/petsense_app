@@ -244,7 +244,8 @@ class CurrentStatusToolTests(unittest.TestCase):
 
     def test_registered_in_dialogue_schemas(self):
         names = [s['name'] for s in registry.schemas_for('dialogue', 'allowed')]
-        self.assertEqual(names, ['query_observations', 'read_current_status'])
+        # W06 新增 read_web_page（EXTERNAL_READ 组），快照与观测工具语义不变
+        self.assertEqual(names, ['query_observations', 'read_current_status', 'read_web_page'])
 
 
 class LoopInjectionTests(unittest.TestCase):

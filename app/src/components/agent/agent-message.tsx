@@ -1,17 +1,26 @@
 /**
- * 伙伴会话单条交换（W01 自建渲染层）：主人气泡 + 1–2 段人格回复。
+ * 伙伴会话单条交换（W01 自建渲染层；W06 网页来源卡）：主人气泡 + 1–2 段人格回复。
  * 优先消费服务端 blocks（按发言人拆好的内容块），旧数据无 blocks 时回退
  * 到单发言人 + 标记剥离，保证历史回合展示不劣化。
+ * 来源按类型分派：观测来源展开关键数据，网页来源跳系统浏览器，未知类型一行降级。
  */
 
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Linking, Pressable, StyleSheet, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
 import { ThemedText } from '@/components/themed-text';
 import { Shadows } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import { fetchAgentObservation, type AgentObservation, type AgentTurn } from '@/services/agent';
+import {
+  fetchAgentObservation,
+  isWebSource,
+  type AgentObservation,
+  type AgentObservationSource,
+  type AgentSource,
+  type AgentTurn,
+  type AgentWebSource,
+} from '@/services/agent';
 
 type Props = {
   turn: AgentTurn;
@@ -21,7 +30,11 @@ type Props = {
   onRetry: (turn: AgentTurn) => void;
 };
 
-type AgentSource = AgentTurn['sources'][number];
+/** 观测来源卡所需的最窄类型（startAt/endAt 存在才按观测渲染）。 */
+type ObservationSource = AgentObservationSource & { startAt: string; endAt: string };
+
+const isObservationSource = (source: AgentSource): source is ObservationSource =>
+  !isWebSource(source) && typeof source.startAt === 'string' && typeof source.endAt === 'string';
 
 /** 展开详情的窗口级缓存：同一窗口多次展开不重复请求。 */
 const observationCache = new Map<string, AgentObservation>();
@@ -72,7 +85,7 @@ function formatWindow(startAt: string, endAt: string): string {
 }
 
 /** 来源卡摘要：覆盖时长与声音事件；无覆盖如实说明（缺数据不伪装成正常）。 */
-function sourceSummary(source: AgentSource): string {
+function sourceSummary(source: ObservationSource): string {
   if (source.observedSeconds == null && source.soundEventCount == null) return '';
   const sounds = source.soundEventCount ?? 0;
   const minutes = Math.round((source.observedSeconds ?? 0) / 60);
@@ -86,21 +99,131 @@ function sourceSummary(source: AgentSource): string {
   return sounds > 0 ? `覆盖 ${coverage} · 声音事件 ${sounds} 次` : `覆盖 ${coverage}`;
 }
 
-/** 相同窗口去重（模型常查重叠窗口）。 */
+/** 来源去重按类型分派：观测按窗口（现状），网页按 url，其余未知类型原样保留。 */
 function dedupeSources(sources: AgentSource[]): AgentSource[] {
-  return sources.filter(
-    (source, index, all) =>
-      all.findIndex((item) => item.startAt === source.startAt && item.endAt === source.endAt) ===
-      index,
-  );
+  return sources.filter((source, index, all) => {
+    if (isWebSource(source)) {
+      return all.findIndex((item) => isWebSource(item) && item.url === source.url) === index;
+    }
+    return (
+      all.findIndex(
+        (item) =>
+          !isWebSource(item) && item.startAt === source.startAt && item.endAt === source.endAt,
+      ) === index
+    );
+  });
 }
 
 function minutesOf(seconds: number | null | undefined): number {
   return Math.round((seconds ?? 0) / 60);
 }
 
+function domainOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
+}
+
+/** 网页核对时间：同天「今天 HH:MM 核对」，跨天给日期，Asia/Shanghai；无效时间省略。 */
+function formatCheckedAt(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const checked = new Date(iso);
+  if (Number.isNaN(checked.getTime())) return '';
+  const stamp = (date: Date) => {
+    const parts = new Intl.DateTimeFormat('zh-CN', {
+      timeZone: SH_TZ,
+      month: 'numeric',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).formatToParts(date);
+    const get = (type: string) => parts.find((part) => part.type === type)?.value ?? '';
+    return { month: get('month'), day: get('day'), hour: get('hour'), minute: get('minute') };
+  };
+  const checkedParts = stamp(checked);
+  const nowParts = stamp(new Date());
+  const time = `${checkedParts.hour}:${checkedParts.minute}`;
+  const sameDay =
+    checkedParts.month === nowParts.month &&
+    checkedParts.day === nowParts.day &&
+    new Intl.DateTimeFormat('zh-CN', { timeZone: SH_TZ, year: 'numeric' }).format(checked) ===
+      new Intl.DateTimeFormat('zh-CN', { timeZone: SH_TZ, year: 'numeric' }).format(new Date());
+  return sameDay
+    ? `今天 ${time} 核对`
+    : `${checkedParts.month}月${checkedParts.day}日 ${time} 核对`;
+}
+
+/** 网页来源卡（W06）：标题（缺省域名）+ 域名 + 核对时间，点击系统浏览器打开。 */
+function WebSourceCard({ source }: { source: AgentWebSource }) {
+  const theme = useTheme();
+  const openable = /^https?:\/\//i.test(source.url);
+  const domain = domainOf(source.url);
+  const checked = formatCheckedAt(source.checkedAt);
+  const open = useCallback(() => {
+    if (openable) void Linking.openURL(source.url);
+  }, [openable, source.url]);
+  return (
+    <Pressable
+      accessibilityRole={openable ? 'link' : 'none'}
+      accessibilityLabel={`网页来源 ${source.title || domain}${checked ? `，${checked}` : ''}`}
+      disabled={!openable}
+      onPress={open}
+      style={[
+        styles.source,
+        styles.webSource,
+        { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
+      ]}
+    >
+      <SymbolView
+        name={{ ios: 'safari', android: 'language', web: 'language' }}
+        tintColor={theme.tint}
+        size={16}
+      />
+      <View style={styles.sourceBody}>
+        <ThemedText type="smallBold" style={styles.sourceText} numberOfLines={1}>
+          {source.title || domain}
+        </ThemedText>
+        <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
+          {checked ? `${domain} · ${checked}` : domain}
+        </ThemedText>
+      </View>
+      <SymbolView
+        name={{ ios: 'arrow.up.right', android: 'north_east', web: 'north_east' }}
+        tintColor={theme.textSecondary}
+        size={12}
+      />
+    </Pressable>
+  );
+}
+
+/** 未知类型来源的安全降级（P00：未知内容安全保留、可理解提示，不崩溃）。 */
+function UnknownSourceCard() {
+  const theme = useTheme();
+  return (
+    <View
+      style={[
+        styles.source,
+        styles.webSource,
+        { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
+      ]}
+    >
+      <SymbolView
+        name={{ ios: 'questionmark.circle', android: 'help_outline', web: 'help_outline' }}
+        tintColor={theme.textSecondary}
+        size={16}
+      />
+      <ThemedText type="small" themeColor="textSecondary">
+        暂不支持展示的来源
+      </ThemedText>
+    </View>
+  );
+}
+
 /** 来源卡：点击就地展开这段窗口的关键数据；「记录页」降级为上探日/周趋势的次级入口。 */
-function SourceCard({ source, petId }: { source: AgentSource; petId: number | null }) {
+function SourceCard({ source, petId }: { source: ObservationSource; petId: number | null }) {
   const theme = useTheme();
   const router = useRouter();
   const [expanded, setExpanded] = useState(false);
@@ -297,9 +420,21 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry }:
           </View>
         ))}
         <View style={styles.replyFootnote}>
-          {dedupeSources(turn.sources).map((source) => (
-            <SourceCard key={`${source.startAt}-${source.endAt}`} source={source} petId={petId} />
-          ))}
+          {dedupeSources(turn.sources).map((source, index) => {
+            if (isWebSource(source)) {
+              return <WebSourceCard key={`web-${index}`} source={source} />;
+            }
+            if (isObservationSource(source)) {
+              return (
+                <SourceCard
+                  key={`${source.startAt}-${source.endAt}`}
+                  source={source}
+                  petId={petId}
+                />
+              );
+            }
+            return <UnknownSourceCard key={`unknown-${index}`} />;
+          })}
           {turn.status !== 'pending' ? (
             <Pressable
               accessibilityRole="button"
@@ -351,6 +486,7 @@ const styles = StyleSheet.create({
     gap: 9,
     padding: 10,
   },
+  webSource: { flexDirection: 'row', alignItems: 'center', gap: 9, padding: 10 },
   sourceBody: { flex: 1, gap: 2 },
   sourceHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   sourceText: { flex: 1 },

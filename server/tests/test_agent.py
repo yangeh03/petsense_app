@@ -212,6 +212,9 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(response.json['turn']['status'], 'complete')
         self.assertEqual(response.json['turn']['sources'], [])
         tools_offered = respond.call_args.kwargs.get('tools')
-        # W02 起事实只读组含 query_observations 与 read_current_status；写入/联网/留意仍无工具
-        self.assertTrue(tools_offered and all(t['name'] in ('query_observations', 'read_current_status')
+        # W02 起事实只读组含 query_observations 与 read_current_status；W06 起 EXTERNAL_READ 组
+        # 含 read_web_page（联网能力已接入，内建 web_search 按 stance 在 loop 侧挂载）；
+        # 写入/持续留意仍无工具
+        self.assertTrue(tools_offered and all(t['name'] in ('query_observations', 'read_current_status',
+                                                            'read_web_page')
                                               for t in tools_offered))
