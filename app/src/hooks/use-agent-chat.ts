@@ -25,6 +25,7 @@ import {
   normalizeForUpload,
 } from '@/services/normalize-image';
 import { useAgentChatStore, type AgentAttachment } from '@/stores/agent-chat';
+import { useCompanionSettingsStore } from '@/stores/companion-settings';
 
 const STORAGE_PREFIX = 'petsense.agent.chat.';
 const POLL_INTERVAL_MS = 800;
@@ -366,6 +367,8 @@ export function useAgentChat(user: { id: number } | null) {
       current.setDraft('');
       current.setReplyTo(undefined);
       current.clearAttachments();
+      // W03：聊天内可能直写了助手设定（如改名），拉齐让副标题/指向 pill/消息标签即时生效
+      void useCompanionSettingsStore.getState().refresh();
     } catch {
       useAgentChatStore.getState().setError('暂时没能确认送达，原话和图片已保留，可以重试');
     } finally {

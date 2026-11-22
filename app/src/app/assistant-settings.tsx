@@ -5,7 +5,7 @@
  * 入口：我的页「伙伴」分组行、伙伴页点击助手头像/名字（成员详情）。
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -42,6 +42,7 @@ export default function AssistantSettingsScreen() {
   const router = useRouter();
   const { user } = useAuth();
   const settings = useCompanionSettingsStore((state) => state.settings);
+  const loaded = useCompanionSettingsStore((state) => state.loaded);
   const refresh = useCompanionSettingsStore((state) => state.refresh);
   // 覆盖式草稿：未改动的字段跟随 store（登录/拉取后自动生效），改过才覆盖
   const [changes, setChanges] = useState<Partial<CompanionSettings> | null>(null);
@@ -51,6 +52,12 @@ export default function AssistantSettingsScreen() {
   const draft: CompanionSettings = { ...settings, ...changes };
   const update = (patch: Partial<CompanionSettings>) => setChanges({ ...changes, ...patch });
 
+  // 进入页面先拉取服务端当前值：store 可能还没加载（未经过伙伴页），
+  // 不拉取会以默认值渲染表单，保存时把已持久化的设定覆盖回默认。
+  useEffect(() => {
+    if (user) void refresh();
+  }, [user, refresh]);
+
   const dirty =
     changes != null &&
     Object.keys(changes).some(
@@ -59,7 +66,7 @@ export default function AssistantSettingsScreen() {
   const nameError = draft.assistantName.trim().length === 0 ? '名字需为 1—20 个字符' : '';
 
   const save = async () => {
-    if (saving || nameError) return;
+    if (saving || nameError || !loaded) return;
     setSaving(true);
     setError('');
     try {
@@ -218,13 +225,13 @@ export default function AssistantSettingsScreen() {
             )}
             <Pressable
               onPress={() => void save()}
-              disabled={saving || !dirty || !!nameError}
+              disabled={saving || !loaded || !dirty || !!nameError}
               accessibilityRole="button"
               style={[
                 styles.primary,
                 {
                   backgroundColor: theme.tint,
-                  opacity: saving || !dirty || !!nameError ? 0.5 : 1,
+                  opacity: saving || !loaded || !dirty || !!nameError ? 0.5 : 1,
                 },
               ]}
             >

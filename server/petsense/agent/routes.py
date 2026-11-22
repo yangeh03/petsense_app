@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from petsense.auth.routes import require_app_user
 from petsense.db import session_scope, utc_now, iso_z
 from petsense.db.models import Pet
-from petsense.db.models.agent import AgentTurn
+from petsense.db.models.agent import AgentProposal, AgentTurn
 from petsense.agent.observations import query
 from petsense.agent import baseline as baseline_service
 from petsense.agent import attachments, loop, runs, snapshot
@@ -203,11 +203,13 @@ def turns(pet_id):
         last_write[0] = time.monotonic()
 
     status = 'complete'
+    refreshed_turn_ids = []
     try:
         outcome = loop.run_dialogue(context, on_progress=progress)
         reply, blocks = outcome['reply'], outcome['blocks']
         speaker[0] = outcome['speaker']
         sources = outcome['sources']
+        refreshed_turn_ids = [tid for tid in outcome.get('refreshedTurnIds') or [] if tid != turn_id]
         if outcome.get('proposals'):
             # W03 确认卡：挂最后一张（同回合多次写入调用时后一张已替代前一张 pending）
             blocks = list(blocks or []) + [{'type': 'proposal',
@@ -232,6 +234,12 @@ def turns(pet_id):
         current_turn.blocks = json.dumps(blocks, ensure_ascii=False) if blocks else None
         result = {'turn': public(current_turn)}
     ws.push_turn(user['id'], pet_id, result['turn'])
+    # W03：被 supersede 的旧卡所在回合已重写 blocks，提交后推帧让历史卡片翻「已有新候选」态
+    for stale_turn_id in refreshed_turn_ids:
+        with session_scope() as s:
+            stale_turn = s.get(AgentTurn, stale_turn_id)
+            if stale_turn is not None and stale_turn.pet_id == pet_id:
+                ws.push_turn(user['id'], pet_id, public(stale_turn))
     return result
 
 
@@ -296,7 +304,15 @@ def proposal_decision(pet_id, proposal_id):
         try:
             row, turn_id = proposal_service.decide(s, pet, proposal_id, action)
         except proposal_service.ProposalError as exc:
-            return {'message': exc.message}, exc.status
+            # 409（已被替代/已处理过）带当前提案与其回合快照：App 按响应覆盖，卡片翻终态禁按钮（§5）
+            body = {'message': exc.message}
+            stale = s.get(AgentProposal, proposal_id)
+            if stale is not None and stale.pet_id == pet.id:
+                body['proposal'] = proposal_service.public(stale)
+                if exc.status == 409 and stale.turn_id:
+                    stale_turn = s.get(AgentTurn, stale.turn_id)
+                    body['turn'] = public(stale_turn) if stale_turn else None
+            return body, exc.status
         turn = s.get(AgentTurn, turn_id) if turn_id else None
         result = {'proposal': proposal_service.public(row),
                   'turn': public(turn) if turn else None}

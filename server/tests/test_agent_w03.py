@@ -111,8 +111,8 @@ class ProposalServiceTests(unittest.TestCase):
     def test_pending_creates_and_supersedes(self):
         with db.session_scope() as s:
             pet = self._pet(s)
-            first, _ = proposal_service.create(s, pet, None, {'birthYear': 2023}, explicit=False)
-            second, _ = proposal_service.create(s, pet, None, {'birthYear': 2022}, explicit=False)
+            first, _, _ = proposal_service.create(s, pet, None, {'birthYear': 2023}, explicit=False)
+            second, _, _ = proposal_service.create(s, pet, None, {'birthYear': 2022}, explicit=False)
             self.assertEqual(first.status, 'superseded')
             self.assertEqual(first.superseded_by, second.id)
             self.assertEqual(second.status, 'pending')
@@ -123,7 +123,7 @@ class ProposalServiceTests(unittest.TestCase):
     def test_explicit_direct_write(self):
         with db.session_scope() as s:
             pet = self._pet(s)
-            row, updated = proposal_service.create(
+            row, updated, _ = proposal_service.create(
                 s, pet, None, {'birthDate': '2023-09-10', 'weightKg': 4.5, 'weightRawText': '九斤'},
                 explicit=True)
             self.assertEqual(row.status, 'confirmed')
@@ -138,7 +138,7 @@ class ProposalServiceTests(unittest.TestCase):
     def test_decide_confirm_reject_and_idempotency(self):
         with db.session_scope() as s:
             pet = self._pet(s)
-            row, _ = proposal_service.create(s, pet, None, {'name': '豆豆'}, explicit=False)
+            row, _, _ = proposal_service.create(s, pet, None, {'name': '豆豆'}, explicit=False)
             decided, _ = proposal_service.decide(s, pet, row.id, 'confirm')
             self.assertEqual(decided.status, 'confirmed')
             self.assertEqual(pet.name, '豆豆')
@@ -151,7 +151,7 @@ class ProposalServiceTests(unittest.TestCase):
     def test_decide_superseded_conflicts(self):
         with db.session_scope() as s:
             pet = self._pet(s)
-            first, _ = proposal_service.create(s, pet, None, {'birthYear': 2023}, explicit=False)
+            first, _, _ = proposal_service.create(s, pet, None, {'birthYear': 2023}, explicit=False)
             proposal_service.create(s, pet, None, {'birthYear': 2022}, explicit=False)
             with self.assertRaises(proposal_service.ProposalError) as ctx:
                 proposal_service.decide(s, pet, first.id, 'confirm')
@@ -161,7 +161,7 @@ class ProposalServiceTests(unittest.TestCase):
     def test_decide_reject_keeps_profile(self):
         with db.session_scope() as s:
             pet = self._pet(s)
-            row, _ = proposal_service.create(s, pet, None, {'name': '豆豆'}, explicit=False)
+            row, _, _ = proposal_service.create(s, pet, None, {'name': '豆豆'}, explicit=False)
             decided, _ = proposal_service.decide(s, pet, row.id, 'reject')
             self.assertEqual(decided.status, 'rejected')
             self.assertEqual(pet.name, 'Max')
@@ -273,10 +273,42 @@ class AgentRouteTests(unittest.TestCase):
         conflict = self.client.post(decision_url, json={'action': 'reject'})
         self.assertEqual(conflict.status_code, 409)
 
+    def test_supersede_updates_old_card_and_conflict_reports_state(self):
+        """v2 替代路径（D2）：旧回合卡片翻 superseded；对旧提案决策 409 且响应带当前状态（§5）。"""
+        write_call = lambda year: [{'name': 'prepare_profile_update',
+                                    'arguments': json.dumps({'fields': {'birthYear': year},
+                                                             'explicit': False}),
+                                    'call_id': 'c1'}]
+        with patch('petsense.agent.model.respond', side_effect=[
+                model_turn(allowed_stance('assistant', 'write'), write_call(2023)),
+                model_turn(allowed_stance('assistant', 'write')
+                           + '【照料助手】整理成候选了，确认一下？')]):
+            first = self.client.post(self.path, json={'text': '它三岁了', 'requestId': 'v1'}).json['turn']
+        with patch('petsense.agent.model.respond', side_effect=[
+                model_turn(allowed_stance('assistant', 'write'), write_call(2022)),
+                model_turn(allowed_stance('assistant', 'write')
+                           + '【照料助手】按新的年份重新整理了一版。')]):
+            second = self.client.post(self.path,
+                                      json={'text': '不对，它是2022年的', 'requestId': 'v2'}).json['turn']
+        turns = {t['id']: t for t in self.client.get(self.path).json['turns']}
+        old_card = [b for b in turns[first['id']]['blocks'] if b['type'] == 'proposal'][0]
+        new_card = [b for b in second['blocks'] if b['type'] == 'proposal'][0]
+        self.assertEqual(old_card['proposal']['status'], 'superseded')
+        self.assertEqual(new_card['proposal']['status'], 'pending')
+        # 旧提案不可再确认：409 且响应带当前提案与其回合快照（App 按响应覆盖，按钮禁用兜底）
+        conflict = self.client.post(
+            f'/api/app/agent/pets/{self.pet}/proposals/{old_card["proposal"]["id"]}/decision',
+            json={'action': 'confirm'})
+        self.assertEqual(conflict.status_code, 409)
+        self.assertEqual(conflict.json['proposal']['status'], 'superseded')
+        self.assertEqual(conflict.json['turn']['id'], first['id'])
+        stale_card = [b for b in conflict.json['turn']['blocks'] if b['type'] == 'proposal']
+        self.assertEqual(stale_card[0]['proposal']['status'], 'superseded')
+
     def test_decision_reject_and_invalid(self):
         with db.session_scope() as s:
             pet = s.get(Pet, self.pet)
-            row, _ = proposal_service.create(s, pet, None, {'name': '豆豆'}, explicit=False)
+            row, _, _ = proposal_service.create(s, pet, None, {'name': '豆豆'}, explicit=False)
             proposal_id = row.id
         decision_url = f'/api/app/agent/pets/{self.pet}/proposals/{proposal_id}/decision'
         response = self.client.post(decision_url, json={'action': 'reject'})
