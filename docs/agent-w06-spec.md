@@ -103,7 +103,8 @@ W00 T6（非流式、单独挂载）已证：message 内容块带 `url_citation`
 
 ### 4.3 model.respond 解析与进度
 
-- final 提取：`output[]` 中 `web_search_call` 项（id/action.query/status）与 `message.content[].annotations[]` 中 `url_citation`（取 title/url，content 片段 ≤200 字符存轨迹摘要）；
+- final 提取：`output[]` 中 `web_search_call` 项（id/action.query/status）与 `message.content[].annotations[]` 中 `url_citation`（取 title/url，content 片段 ≤200 字符存轨迹摘要）；annotations 兼容 content 块级与 message 项级两种形态；
+- **工件双通道回收（2026-11-23 E35 归因补充）**：实测供应商不保证工件随 `response.completed` 到达——带工具调用的搜索轮可能以 `web_search_call status=in_progress` 收尾（无 annotations），长搜索流可能以 `response.incomplete` 结束（无 completed、无 `[DONE]`）。因此 `response.incomplete` 与 completed 同样按 final 提取；`url_citation` 另从 `response.output_text.annotation.added` 流事件累计兜底、`web_search_call` 另按流事件 item_id 计数兜底（进度事件不带 query，query 仅在 final output；缺失时轨迹如实留空），与 final 提取按 url/id 合并去重；
 - 返回值增加 `web_search_calls`（本轮）与 `citations`（累计去重 by url）字段，loop 汇总；
 - 流式期间收到首个 `web_search_call` 事件时经 `on_delta` 推一次「正在联网核实…」可见提示（后继真实正文会覆盖它，DB 节流写以最终值为准）——主人等待 30–60s 不空白。
 
@@ -127,9 +128,10 @@ schema：`{url: string}`（必填）。description 引导：深读 web_search �
 ### 4.5 系统提示更新（loop.SYSTEM_PROMPT）
 
 1. 诚实性条款改写：「目前支持聊天、只读观测查询与联网搜索；资料保存、持续留意尚未接入——被要求时如实说明」；
-2. 新增搜索指导段：
-   - 时机：时效性问题（今天/最近/最新）、具体可核查事实、数字与程序类知识、争议话题、主人要求核实、自己不确定的养宠知识 → 搜索；稳定常识、陪伴闲聊、本宠数据（用观测工具）→ 不搜索；
-   - 表达：结论 + 适用条件 + 来源（正文自然提及来源名，来源卡自动附上）；时效答案注明核对口径（如「截至今天上午」）；
+2. 新增搜索指导段（2026-11-23 按 E36/E35 归因校准为「先判断再搜」的两向判定 + 具体例证）：
+   - 时机：答案依赖会过期的信息才搜索——时效状态（今天/最近天气、空气质量、限行、新闻）、具体数字与程序类知识（疫苗程序、剂量标准）、争议话题、主人明确要求核实或给出链接、自己确实没把握的养宠知识；原理与习性等长期稳定常识（如「猫为什么爱纸箱」）直接用自己的知识回答，**不为「显得有依据」而搜索**；陪伴闲聊、本宠数据（用观测工具）不搜索；并明示搜索会明显增加本轮等待；
+   - 轮次卫生：发起搜索的那一轮不同时调用其他工具（搜索需完整一轮才返回结果与来源），设备数据/深读下一轮再调用（E35 归因：「搜索+工具调用」同轮时搜索常以 in_progress 收尾、结果丢失）；
+   - 表达：结论 + 适用条件 + 来源（正文自然提及来源名，来源卡自动附上）；时效答案注明核对口径（如「截至今天上午」）；搜索无结果时据实说明，不编造来源；
    - 区分：一般知识与本宠实际记录必须分开陈述（「幼猫通常睡 X 小时」vs「它今天观测到躺卧 Y 分钟」）；
    - 不写入：外部知识、拟人表达不构成本宠事实；
    - 重核：**聊天历史里的搜索结果与来源同样不能当作本次依据**（沿用既有「历史数字不可当次依据」句式），时效敏感的追问须重新搜索；
@@ -140,6 +142,8 @@ schema：`{url: string}`（必填）。description 引导：深读 web_search �
 ### 4.6 sources 组装与轨迹
 
 - `turn.sources` 追加 web 来源：`{type:'web', url, title, checkedAt}`（checkedAt = 运行组装时刻），按 url 去重、上限 6 条；与观测来源并存；
+- **来源 = 搜索 citations ∪ read_web_page 成功抓取页面（2026-11-23 E35 修复扩展）**：抓取成功的页面（url 为重定向后最终地址、标题来自页面提取）是本运行真实核对过的来源，与 citations 并入同一组去重上限；无 citations 且无成功抓取时不产生任何 web 来源，不编造；
+- **跨轮搜索记录提醒（2026-11-23 E35 修复补充）**：无状态全量回显下搜索结果不进 input，搜索轮以工具调用收尾时结果可能不随本轮返回——该轮结束、后续轮次继续时，loop 以 user 角色「（系统提醒）联网搜索记录…」确定性注入：有本轮 citations 时按 url 摘要回带（≤4 条，注明不要重复搜索），没有时如实说明「搜索结果未随本轮返回」并引导换 read_web_page 或基于已有知识作答；轨迹记 `search_carryover` 标记；
 - 轨迹 `tool_summary` 增加伪条目：`{name:'web_search', allowed:true, reason:'server_side', arguments:{queries:[…]}, result_bytes, citations:n}`（`agent_replay.py` 无需改动即可回放）；
 - degraded 标记：`search_budget_detached` / `search_on_out_of_scope`（§2.1）。
 
@@ -228,3 +232,26 @@ W01/W02 的 E1–E6、E8–E15 全量保留通过（预算变化 90→120s 不�
 2. §8 iOS 模拟器验收（生产 + `petsense` 账号）与轨迹回放抽查；
 3. §6.3 两阶段发布：main 合入后生产 drop-in `PETSENSE_SEARCH_DISABLED=1` 起步，OTA 覆盖后移除；
 4. D6 计费控制台核对。
+
+### 10.2 E35/E36 放行前修复与真实评测复验（2026-11-23，worktree `codex/agent-w06-search`）
+
+**首轮真实评测结论（QA 独立会话，腾讯云隔离实例，生产凭据）**：E7/E37/E38 通过；**E35 失败**（搜索发生但回合 0 条网页来源）、**E36 失败**（「猫为什么爱纸箱」触发 web_search）。QA dump 与本线独立探针（raw SSE 抓包）归因：
+
+1. **供应商工件不保证随 completed 到达**（探针实据）：「搜索+function_call」同轮的 final 中 `web_search_call` 以 `status=in_progress` 收尾、message `annotations: []`——搜索未完成即无 citations 可言；长搜索流以 `response.incomplete` 结束（无 completed、无 `[DONE]`），原实现丢弃整轮工件；而 `url_citation` 实际经 `response.output_text.annotation.added` 流事件可达；
+2. **loop 仅在「本轮有 web_search_call」时收 citations**，后续轮 message 上的 annotations 被丢弃；
+3. **read_web_page 成功抓取的真实页面（E35 实跑中 weather.com.cn 两页，正文已入答案）未记录为来源**——真实溯源被丢弃；
+4. **搜索结果不跨轮保留**（无状态全量回显、web_search_call 不回显），搜索+工具调用同轮后模型只能改用 read_web_page 重取（E35 实跑即此路径）；
+5. **E36 为模型行为方差**（同一问题 QA 套件轮搜索、探针轮直答），原提示词双向清单不够决定性。
+
+**修复（增量提交，断言未放松、无占位来源）**：`model.py` 双通道工件回收（incomplete 按 final 提取、annotation.added 流事件与 item_id 兜底、项级 annotations 兼容、按 url/id 去重）；`loop.py` 每轮收 citations、read_web_page 成功抓取并入网页来源（url/title 来自页面，checkedAt 同一时刻，合并去重后仍上限 6）、搜索轮后确定性注入跨轮搜索记录提醒（有 citations 摘要回带，无则如实说明「结果未随本轮返回」，轨迹记 `search_carryover`）；系统提示改为「先判断再搜」两向判定并加例证、时延代价、搜索轮不混排其他工具。保留已确认决策：同 Responses 主运行挂内建 web_search、初始默认关闭、累计 2 次限次、越权审计不变。
+
+**单元测试**：`tests/test_agent_w06.py` 新增 9 项（流事件兜底/incomplete 提取/final 与流合并去重/项级 annotations/抓取页入来源/无搜索轮 citations/跨轮提醒两形态/无工件不编造来源/提示词校准锚点），服务端全量 `python -m unittest discover -s server/tests` 通过（本线与隔离实例各 33 项 W06 用例 OK，全量 OK、1 skip 为无凭据行为组）。
+
+**真实模型复验（2026-11-23，腾讯云隔离实例 `/tmp/yh-w06-acc`，修复后代码，生产凭据，只读场景）**：
+
+- E7（关闭态）/E35/E36/E37/E38 **5/5 通过**；
+- E35 稳定性 ×3 全过：每轮 `complete`、含 web_search 伪条目、**6 条真实网页来源**（证据 run：2 次搜索、queries 实录、10 条去重 citations、来源含 qweather/大洋网/腾讯新闻等真实 url+title+checkedAt、正文带「核对口径」），无需 read_web_page 兜底；
+- E36 稳定性 ×3 全过：整场 `webSearchCalls=0`，直答无搜索；
+- 证据落盘 `/tmp/yh-w06-acc/out/E35-evidence.json`（隔离实例内）。
+
+**仍未完成（承接 §10.1 待办）**：E1–E6/E8–E15 真实凭据回归（W01/W02 号段，集成侧统一安排）、§8 模拟器验收、§6.3 两阶段发布、D6 计费核对。已知边界：搜索+工具调用同轮时搜索结果仍可能不随本轮返回（跨轮提醒已如实降级，sources 以真实到达工件为准）；流式 citations 兜底通道捕获的条目无 query 归属（轨迹 queries 如实留空）。
