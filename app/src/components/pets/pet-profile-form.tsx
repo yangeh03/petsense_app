@@ -204,6 +204,32 @@ export function PetProfileForm({
             {errors.breed}
           </ThemedText>
         )}
+        <View style={styles.labelRow}>
+          <ThemedText type="smallBold">
+            生日{' '}
+            <ThemedText type="small" themeColor="textSecondary">
+              （选填）
+            </ThemedText>
+          </ThemedText>
+        </View>
+        <TextInput
+          value={draft.birthDate}
+          onChangeText={(birthDate) => onChange({ birthDate })}
+          editable={!disabled}
+          accessibilityLabel="宠物生日"
+          placeholder="2023-09-10 / 2023-09 / 2023"
+          placeholderTextColor={theme.textSecondary}
+          returnKeyType="done"
+          style={inputStyle}
+        />
+        {!!errors.birthDate && (
+          <ThemedText type="small" style={{ color: theme.danger }}>
+            {errors.birthDate}
+          </ThemedText>
+        )}
+        <ThemedText type="small" themeColor="textSecondary">
+          只知道大概也没关系：填到年或月即可，展示为「约 N 岁」，之后可以随时补精确日期。
+        </ThemedText>
       </View>
     </>
   );

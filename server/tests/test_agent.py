@@ -204,17 +204,16 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(self.client.post(url, json={'ids': [turn['id']]}).status_code, 404)
 
     def test_unavailable_capabilities_answered_without_tools(self):
-        """未开放能力（写入/联网/持续留意）由模型按注册表如实说明，不走固定文案分支。"""
+        """未开放能力（联网/持续留意）由模型按注册表如实说明，不走固定文案分支；
+        W03 起档案与设定写入工具已注册，不再属于「未开放」。"""
         with patch('petsense.agent.model.respond') as respond:
-            respond.return_value = model_turn(allowed_stance('assistant', 'write')
-                                               + '【照料助手】这条信息留在聊天里了，保存能力还在准备。')
-            response = self.client.post(self.path, json={'text': '记住它今天体重九斤', 'requestId': 'write'})
+            respond.return_value = model_turn(allowed_stance('assistant', 'search')
+                                               + '【照料助手】联网查证还没接入，先不能帮你搜。')
+            response = self.client.post(self.path, json={'text': '帮我上网查一下这个粮的评价', 'requestId': 'write'})
         self.assertEqual(response.json['turn']['status'], 'complete')
         self.assertEqual(response.json['turn']['sources'], [])
         tools_offered = respond.call_args.kwargs.get('tools')
-        # 事实只读组（W02 实时/历史 + W05 个人基线）与 W04 长期记忆组（write/search/forget）；
-        # 联网/档案确认写/持续留意仍无工具
-        self.assertTrue(tools_offered and all(
-            t['name'] in ('query_observations', 'read_baseline', 'read_current_status',
-                          'write_memory', 'search_memories', 'forget_memory')
-            for t in tools_offered))
+        self.assertEqual({tool['name'] for tool in tools_offered},
+                         {'query_observations', 'read_baseline', 'read_current_status', 'write_memory',
+                          'search_memories', 'forget_memory', 'read_pet_profile', 'prepare_profile_update',
+                          'prepare_role_settings'})

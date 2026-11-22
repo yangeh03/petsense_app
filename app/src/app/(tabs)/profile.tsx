@@ -236,6 +236,23 @@ export default function ProfileScreen() {
         <DeviceCard />
 
         <View style={styles.sectionHeader}>
+          <ThemedText type="smallBold">伙伴</ThemedText>
+        </View>
+        <Pressable onPress={() => router.push('/assistant-settings')} accessibilityRole="button">
+          <ThemedView type="backgroundElement" style={styles.menuRow}>
+            <SymbolView
+              name={{ ios: 'sparkles', android: 'auto_awesome', web: 'auto_awesome' }}
+              size={20}
+              tintColor={theme.tint}
+            />
+            <ThemedText type="default" style={styles.menuLabel}>
+              助手设定
+            </ThemedText>
+            <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
+          </ThemedView>
+        </Pressable>
+
+        <View style={styles.sectionHeader}>
           <ThemedText type="smallBold">社区与内容</ThemedText>
         </View>
         <Pressable onPress={() => router.push('/social-inbox')} accessibilityRole="button">

@@ -73,3 +73,36 @@ class PetBaseline(Base):
     slot_stats = Column(Text, nullable=False, default='[]')
     revision = Column(Integer, nullable=False, default=0)
     computed_at = Column(UTCDatetime, nullable=False)
+
+
+class CompanionSettings(Base):
+    """W03 助手设定：只影响表达、不改变话题与工具（V11 §13.4）；proactivity 由 W09 消费。
+
+    助手属于主人（一人一助手），行按 user_id 懒创建，无行时按 DEFAULTS 渲染。
+    """
+    __tablename__ = 'companion_settings'
+    user_id = Column(Integer, ForeignKey('users.id'), primary_key=True)
+    assistant_name = Column(String(20), nullable=False, default='照料助手')
+    owner_title = Column(String(20), nullable=True)
+    verbosity = Column(String(8), nullable=False, default='concise')
+    proactivity = Column(Integer, nullable=False, default=1)
+    updated_at = Column(UTCDatetime, nullable=False)
+
+
+class AgentProposal(Base):
+    """W03 确认提案：确认门服务的持久对象（agent-w03-spec.md §3.3），W08 计划/W10 设备控制复用。
+
+    status: pending / confirmed / rejected / superseded；同宠物同 kind 的新 pending 提案
+    自动把旧 pending 置 superseded（superseded_by 指向新提案）。payload 为归一化候选字段 JSON。
+    """
+    __tablename__ = 'agent_proposals'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    pet_id = Column(Integer, ForeignKey('pets.id'), nullable=False, index=True)
+    turn_id = Column(Integer, nullable=True)
+    kind = Column(String(24), nullable=False)
+    payload = Column(Text, nullable=False, default='{}')
+    version = Column(Integer, nullable=False, default=1)
+    status = Column(String(16), nullable=False, default='pending')
+    superseded_by = Column(Integer, nullable=True)
+    created_at = Column(UTCDatetime, nullable=False)
+    decided_at = Column(UTCDatetime, nullable=True)

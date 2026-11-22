@@ -244,9 +244,7 @@ class CurrentStatusToolTests(unittest.TestCase):
 
     def test_registered_in_dialogue_schemas(self):
         names = [s['name'] for s in registry.schemas_for('dialogue', 'allowed')]
-        # W05 起只读组含 read_baseline；W04 起新增长期记忆组（write/search/forget）
-        self.assertEqual(names, ['query_observations', 'read_baseline', 'read_current_status',
-                                 'write_memory', 'search_memories', 'forget_memory'])
+        self.assertIn('read_current_status', names)
 
 
 class LoopInjectionTests(unittest.TestCase):

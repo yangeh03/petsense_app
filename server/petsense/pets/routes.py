@@ -12,11 +12,13 @@ from petsense import config, stats
 from petsense.auth.routes import require_app_user
 from petsense.common import shanghai_now
 from petsense.db import iso_z, session_scope, utc_now
-from petsense.db.models import DailyStat, Pet
+from petsense.db.models import DailyStat, Pet, PetWeightRecord
 from petsense.devices.routes import DEVICE_ID_PATTERN, claim_device
 from petsense.petgif.proxy import (PETGIF_AVATAR_TEMPLATES, app_petgif_avatar_template,
                                    app_petgif_pet)
-from petsense.pets.profile import decode_avatar, validate_fields
+from petsense.pets.profile import (decode_avatar, latest_weight, upsert_weight_record,
+                                   validate_fields, validate_weight_record,
+                                   weight_record_dict)
 from petsense.telemetry.status import latest_telemetry
 
 bp = Blueprint('pets', __name__, url_prefix='/api/app')
@@ -73,11 +75,14 @@ def pet_dict(pet, public=False):
             'breed': pet.breed, 'avatar_emoji': pet.avatar_emoji, 'device_id': pet.device_id,
             'petgif_id': verified_petgif_id, 'avatar_template_id': pet.avatar_template_id,
             'avatar_image': pet.avatar_image,
+            'birthDate': pet.birth_date.isoformat() if pet.birth_date else None,
+            'birthDatePrecision': pet.birth_date_precision,
             'created_at': iso_z(pet.created_at)}
     telemetry = pet_latest_telemetry(pet.device_id)
     item['batteryPercent'] = telemetry.get('batteryPercent') if telemetry else None
     item['online'] = telemetry.get('online') if telemetry else False
     item['avatarImageUrl'] = '/uploads/' + pet.avatar_image if pet.avatar_image else None
+    item['latestWeight'] = latest_weight(pet.id)  # W03：最新体重（measured_on 最大），开独立会话
     if public:
         item = {key: item[key] for key in ('id', 'name', 'species', 'breed', 'avatar_emoji',
                                          'avatarImageUrl')}
@@ -146,7 +151,7 @@ def app_pet_profile(pet_id):
                 multipart = request.mimetype == 'multipart/form-data'
                 data = request.form.to_dict() if multipart else request.get_json(silent=True)
                 allowed = {'name', 'species', 'breed', 'avatarEmoji', 'avatarMode',
-                           'avatarTemplateId'}
+                           'avatarTemplateId', 'birthDate'}
                 if not isinstance(data, dict) or not data or set(data) - allowed:
                     raise ValueError('请提交有效的宠物资料，不能修改设备或账号归属')
                 if multipart and any(len(request.form.getlist(k)) != 1 for k in request.form):
@@ -193,6 +198,49 @@ def app_pet_profile(pet_id):
         raise
     # Serialize after commit: telemetry reads open their own scoped transaction.
     return {'success': True, 'pet': pet_dict(pet)}
+
+
+@bp.route('/pets/<int:pet_id>/weight-records', methods=['GET', 'POST'])
+def app_pet_weight_records(pet_id):
+    """W03 体重记录（agent-w03-spec.md §3.7）：倒序列表 / 添加（当日 upsert，source=owner）。"""
+    user, error = require_app_user()
+    if error:
+        return error
+    if request.method == 'GET':
+        with session_scope() as s:
+            pet = s.get(Pet, pet_id)
+            if pet is None or pet.user_id != user['id']:
+                return {'success': False, 'message': '宠物档案不存在'}, 404
+            rows = s.execute(select(PetWeightRecord).where(PetWeightRecord.pet_id == pet_id)
+                             .order_by(PetWeightRecord.measured_on.desc()).limit(50)).scalars().all()
+            return {'success': True, 'records': [weight_record_dict(r) for r in rows]}
+    data = request.get_json(silent=True)
+    try:
+        measured_on, weight_g = validate_weight_record(data)
+    except ValueError as exc:
+        return {'success': False, 'message': str(exc)}, 400
+    with session_scope() as s:
+        pet = s.get(Pet, pet_id)
+        if pet is None or pet.user_id != user['id']:
+            return {'success': False, 'message': '宠物档案不存在'}, 404
+        record = upsert_weight_record(s, pet_id, measured_on, weight_g, source='owner')
+        return {'success': True, 'record': weight_record_dict(record)}
+
+
+@bp.delete('/pets/<int:pet_id>/weight-records/<int:record_id>')
+def app_pet_weight_record_delete(pet_id, record_id):
+    user, error = require_app_user()
+    if error:
+        return error
+    with session_scope() as s:
+        pet = s.get(Pet, pet_id)
+        if pet is None or pet.user_id != user['id']:
+            return {'success': False, 'message': '宠物档案不存在'}, 404
+        record = s.get(PetWeightRecord, record_id)
+        if record is None or record.pet_id != pet_id:
+            return {'success': False, 'message': '体重记录不存在'}, 404
+        s.delete(record)
+        return {'success': True}
 
 
 @bp.route('/pets/<int:pet_id>/avatar-image', methods=['POST'])

@@ -2,16 +2,20 @@
  * 伙伴会话单条交换（W01 自建渲染层）：主人气泡 + 1–2 段人格回复。
  * 优先消费服务端 blocks（按发言人拆好的内容块），旧数据无 blocks 时回退
  * 到单发言人 + 标记剥离，保证历史回合展示不劣化。
+ * W03：blocks 另含确认提案卡（type=proposal）；点击角色头像进入成员详情
+ * （宠物 → 档案页，照料助手 → 助手设定页）；助手显示名从设定读取。
  */
 
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
+import { ProposalCard } from '@/components/agent/proposal-card';
 import { ThemedText } from '@/components/themed-text';
 import { Shadows } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import { fetchAgentObservation, type AgentObservation, type AgentTurn } from '@/services/agent';
+import { assistantDisplayName, useCompanionSettingsStore } from '@/stores/companion-settings';
 
 type Props = {
   turn: AgentTurn;
@@ -248,7 +252,10 @@ function SourceCard({ source, petId }: { source: AgentSource; petId: number | nu
 
 export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry }: Props) {
   const theme = useTheme();
-  const segments = turn.blocks?.length
+  const router = useRouter();
+  const settings = useCompanionSettingsStore((state) => state.settings);
+  const assistantName = assistantDisplayName(settings);
+  const blocks = turn.blocks?.length
     ? turn.blocks
     : [
         {
@@ -257,15 +264,29 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry }:
           text: turn.reply.replace(/^【[^】]+】/, ''),
         },
       ];
+  const textSegments = blocks.filter((block) => block.type === 'text');
+  const proposals = blocks.filter((block) => block.type === 'proposal');
+  const hasUnknownBlocks = blocks.length > textSegments.length + proposals.length;
+
+  const openMember = (speaker: 'pet' | 'assistant') =>
+    router.push(speaker === 'pet' ? '/pet' : '/assistant-settings');
+
   return (
     <View style={styles.exchange}>
       <View style={[styles.ownerBubble, { backgroundColor: theme.tintBackground }]}>
         <ThemedText>{turn.text}</ThemedText>
       </View>
       <View style={styles.replyColumn}>
-        {segments.map((segment, index) => (
+        {textSegments.map((segment, index) => (
           <View key={index} style={styles.replyRow}>
-            <View
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={
+                segment.speaker === 'pet'
+                  ? `查看${petName ?? '爱宠'}的档案`
+                  : `查看${assistantName}的设定`
+              }
+              onPress={() => openMember(segment.speaker)}
               style={[
                 styles.avatar,
                 {
@@ -287,14 +308,24 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry }:
                   size={17}
                 />
               )}
-            </View>
+            </Pressable>
             <View style={styles.replyBody}>
-              <ThemedText type="smallBold" themeColor="textSecondary">
-                {segment.speaker === 'pet' ? (petName ?? '爱宠') : '照料助手'}
-              </ThemedText>
+              <Pressable accessibilityRole="button" onPress={() => openMember(segment.speaker)}>
+                <ThemedText type="smallBold" themeColor="textSecondary">
+                  {segment.speaker === 'pet' ? (petName ?? '爱宠') : assistantName}
+                </ThemedText>
+              </Pressable>
               <ThemedText>{segment.text || '正在接话…'}</ThemedText>
             </View>
           </View>
+        ))}
+        {hasUnknownBlocks ? (
+          <ThemedText type="small" themeColor="textSecondary">
+            这条消息里有暂不支持的内容。
+          </ThemedText>
+        ) : null}
+        {proposals.map((block) => (
+          <ProposalCard key={block.proposal.id} petId={petId} proposal={block.proposal} />
         ))}
         <View style={styles.replyFootnote}>
           {dedupeSources(turn.sources).map((source) => (

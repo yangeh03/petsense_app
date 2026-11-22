@@ -27,6 +27,7 @@ import { useAgentChat } from '@/hooks/use-agent-chat';
 import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
 import { useAgentChatStore } from '@/stores/agent-chat';
+import { assistantDisplayName, useCompanionSettingsStore } from '@/stores/companion-settings';
 import type { AgentTurn } from '@/services/agent';
 
 export default function CompanionScreen() {
@@ -67,10 +68,19 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
     loadOlder,
     markRead,
   } = useAgentChat(user);
+  const settings = useCompanionSettingsStore((state) => state.settings);
+  const refreshSettings = useCompanionSettingsStore((state) => state.refresh);
+  const assistantName = assistantDisplayName(settings); // W03：页头副标题随设定更新
   const [showLearning, setShowLearning] = useState(false);
   const [keyboardOpen, setKeyboardOpen] = useState(() => Keyboard.isVisible());
   const scroll = useRef<ScrollViewInstance>(null);
   const restored = useRef(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refreshSettings(); // W03：回到伙伴页拉齐助手设定（改名即时生效）
+    }, [refreshSettings]),
+  );
 
   useEffect(() => {
     const show = Keyboard.addListener('keyboardWillShow', () => setKeyboardOpen(true));
@@ -127,7 +137,7 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
           <ThemedText style={styles.title}>伙伴</ThemedText>
           {petId ? (
             <ThemedText type="small" themeColor="textSecondary">
-              你 · {petName ?? '爱宠'} · 照料助手
+              你 · {petName ?? '爱宠'} · {assistantName}
             </ThemedText>
           ) : null}
         </View>

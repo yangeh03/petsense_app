@@ -59,6 +59,15 @@ export type SocialPet = {
   avatarImageUrl?: string | null;
   batteryPercent?: number | null;
   online?: boolean;
+  /** W03 档案扩展：生日（精度感知）与最新体重（agent-w03-spec.md §3.7） */
+  birthDate?: string | null;
+  birthDatePrecision?: 'day' | 'month' | 'year' | null;
+  latestWeight?: {
+    id: number;
+    measuredOn: string;
+    weightKg: number;
+    rawText: string | null;
+  } | null;
 };
 
 export type PostAuthor = {

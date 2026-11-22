@@ -1,5 +1,24 @@
 import { request } from '@/services/api';
 
+/** W03 确认提案卡（agent-w03-spec.md §3.5）：fields 为归一化候选，状态由决策端点翻转。 */
+export type AgentProposal = {
+  id: number;
+  kind: string;
+  status: 'pending' | 'confirmed' | 'rejected' | 'superseded';
+  version: number;
+  fields: {
+    name?: string;
+    breed?: string;
+    birthDate?: string;
+    birthDatePrecision?: 'day' | 'month' | 'year';
+    weightKg?: number;
+    weightMeasuredOn?: string;
+    weightRawText?: string;
+  };
+  createdAt: string;
+  decidedAt: string | null;
+};
+
 export type AgentTurn = {
   id: number;
   requestId: string;
@@ -21,7 +40,12 @@ export type AgentTurn = {
     observedSeconds?: number | null;
     soundEventCount?: number | null;
   }[];
-  blocks: { type: 'text'; speaker: 'pet' | 'assistant'; text: string }[] | null;
+  blocks:
+    | (
+        | { type: 'text'; speaker: 'pet' | 'assistant'; text: string }
+        | { type: 'proposal'; proposal: AgentProposal }
+      )[]
+    | null;
 };
 export const fetchAgentTurns = (pet: number, before?: number) =>
   request<{ turns: AgentTurn[] }>(`/agent/pets/${pet}/turns${before ? `?before=${before}` : ''}`);
@@ -37,6 +61,17 @@ export const sendAgentTurn = (
     method: 'POST',
     body: { text, target, requestId, topicId, replyTo },
   });
+
+/** 确认卡决策：幂等；响应带刷新后的 turn（按 id 覆盖本地回合）。 */
+export const decideAgentProposal = (
+  pet: number,
+  proposalId: number,
+  action: 'confirm' | 'reject',
+) =>
+  request<{ proposal: AgentProposal; turn: AgentTurn | null }>(
+    `/agent/pets/${pet}/proposals/${proposalId}/decision`,
+    { method: 'POST', body: { action } },
+  );
 
 export type AgentObservation = {
   startAt: string;

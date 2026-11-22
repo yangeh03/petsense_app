@@ -10,6 +10,7 @@ import { ThemedText } from '@/components/themed-text';
 import { Shadows } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 import type { AgentTarget } from '@/stores/agent-chat';
+import { assistantDisplayName, useCompanionSettingsStore } from '@/stores/companion-settings';
 
 type Props = {
   draft: string;
@@ -40,8 +41,10 @@ export function AgentComposer({
 }: Props) {
   const theme = useTheme();
   const [showTargets, setShowTargets] = useState(false);
+  const settings = useCompanionSettingsStore((state) => state.settings);
+  const assistantName = assistantDisplayName(settings); // W03：助手名从设定读取
   const targetLabel =
-    target === 'pet' ? (petName ?? '爱宠') : target === 'assistant' ? '照料助手' : '大家';
+    target === 'pet' ? (petName ?? '爱宠') : target === 'assistant' ? assistantName : '大家';
   return (
     <View style={[styles.footer, !keyboardOpen && { marginBottom: bottomInset }]}>
       {showTargets ? (
@@ -64,7 +67,7 @@ export function AgentComposer({
               }}
             >
               <ThemedText type="smallBold">
-                {value === 'auto' ? '大家' : value === 'pet' ? petName : '照料助手'}
+                {value === 'auto' ? '大家' : value === 'pet' ? petName : assistantName}
               </ThemedText>
             </Pressable>
           ))}
