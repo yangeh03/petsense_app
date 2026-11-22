@@ -212,8 +212,10 @@ class BehaviorScenarioTests(unittest.TestCase):
             self.assertEqual(pet.birth_date.strftime('%Y-%m-%d'), '2023-09-10')
             self.assertEqual(pet.birth_date_precision, 'day')
         reply = turn['reply']
-        self.assertTrue(any(k in reply for k in ('已记录', '已保存', '已更新', '记好了', '保存好', '记下了', '已写入档案')),
-                        f'写入成功才说成功：{reply}')
+        self.assertRegex(reply, r'(?:已(?:经|成功)?\s*(?:记下|记好|记录|保存|写入|更新)|(?:记下|记好|保存)了)',
+                         f'应确认写入成功：{reply}')
+        self.assertRegex(reply, r'2023\s*(?:年|-)\s*0?9\s*(?:月|-)\s*10',
+                         f'应回显确认写入的日期：{reply}')
         self.assertFalse(any(k in reply for k in ('还不能保存', '未开放', '暂时无法保存')),
                         f'写入已开放，不得再称能力未接入：{reply}')
 

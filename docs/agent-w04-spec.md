@@ -236,13 +236,13 @@ parameters={'type':'object','properties':{
 
 ### 9.1 实施与收尾记录（2026-11-22）
 
-- 实现已落分支 `codex/agent-w04-memory`（4b00790 / 6777232 / 33408d9）：§3.1 模块布局全量（memory.py、memory_jobs.py、registry 三工具、loop 提示词、routes turn_id、snapshot memory 节、alembic 0012——并入 W05 lineage 后由 0011 重编号）、单测、行为评测 E21–E28、`server/tools/agent_memory.py`、P00 §4 与 V11 §5.2 契约同步（33408d9）。
+- 实现已落分支 `codex/agent-w04-memory`（4b00790 / 6777232 / 33408d9）：§3.1 模块布局全量（memory.py、memory_jobs.py、registry 三工具、loop 提示词、routes turn_id、snapshot memory 节、alembic 0012——并入 W05 lineage 后由 0011 重编号）、单测、行为评测 E27–E34、`server/tools/agent_memory.py`、P00 §4 与 V11 §5.2 契约同步（33408d9）。
 - 收尾修复（包执行者，同分支本地提交）：
   1. **测试根**：`tests/helpers.py` fresh_db 将 `config.RUNTIME_ROOT` 重定向到临时目录并在用例后还原。修复：MemoryJobsTests 经 `process_pet → write_report` 以默认 RUNTIME_ROOT（= `server/`）写报告，`server/agent-memory/pet-1/memory.md` 曾作为运行产物被误提交且每次全量测试后被改写；已从分支移除该产物并把 `agent-memory/` 加入 `server/.gitignore`。
   2. **忘掉/纠正后的认识卡与导出泄露**（§9.4 链路前置修复）：新增 `memory.stale_citations`（active 卡引用的候选已 retired/superseded 即视为污染）。效果：快照 memory 节与报告认识卡节暂停展示该卡（如实标注待更新）；蒸馏不受 24h 节奏限制强制提前，重建提示词不回喂旧卡文字（仅依据仍有效候选）；候选全部失效时 worker 确定性退役旧卡（轨迹 decision=retired_stale，无需模型）。`forget_memory` 工具执行成功后即时重写 markdown 报告（OSError 不影响工具结果）；`process_pet` 报告刷新条件放宽为存在任意条目，全部遗忘后报告也会刷新。历史版本章节按 §3.8 保留 retired/superseded 可审计，不算泄露。已知边界：daily/weekly 的 summary 文字是当日成立的观测小结，其后发生遗忘不回溯改写（§3.6 无此要求，靠检索只返 active + 提示词禁令约束）。
   3. **轨迹溯源补齐 §3.11**：summary/distill 由「先条目后轨迹」改为 spec 要求的「先轨迹后条目」——先 `runs.save` 取 run id，条目 `source_refs` 增加 `{type:'run', id}`，条目落库后 `runs.update_conclusion`（runs.py 新增）回填 memoryId/supersededInsightId/kept；daily/weekly 条目写入前在自身作用域复核 active 不存在（幂等）。
 - 本地验证（包执行者）：`PETSENSE_MQTT_DISABLED=1 python -m unittest discover -s server/tests` 303 通过、1 skip（行为评测无凭据自动 skip）；全量测试后 `git status` 干净，确认无 repo 运行时写入。W04 单测 36 个含新增 LeakControlTests 4 条（重建不回喂旧文、候选全失效退役、纠正触发重建、forget 后报告即时刷新）。
-- 待总协调者/后续：§9.3 行为评测 E21–E28 真实凭据跑通、§9.4 iOS 模拟器全链路（讲述→回显→找回→纠正→忘掉）、§9.5 回放抽查、§9.6 部署后报告落盘与 SQLite 版本核对。
+- 待总协调者/后续：§9.3 行为评测 E27–E34 真实凭据跑通、§9.4 iOS 模拟器全链路（讲述→回显→找回→纠正→忘掉）、§9.5 回放抽查、§9.6 部署后报告落盘与 SQLite 版本核对。
 
 ## 10. 合入与文档更新
 
