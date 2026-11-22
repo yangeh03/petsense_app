@@ -73,7 +73,7 @@ Read the exact versioned docs at https://docs.expo.dev/versions/v58.0.0/ before 
 ## Agent 开发入口
 
 - [Agent 产品设计](docs/agent-product-integration-design.md)、[技术选型](docs/agent-technical-decisions.md)、[P00 契约](docs/agent-p00-contract.md)、[实施路线](docs/agent-implementation-roadmap.md)及[工作包](docs/agent-implementation-work-packages.md)共同指导后续 spec。现有功能和验证范围见[第一阶段实施记录](docs/agent-phase-one.md)。
-- Agent 在同一运行循环中根据上下文选择回答、澄清与工具。禁止新增以关键词、正则、原话形式或独立意图预判来分派能力、解释日期或挑选答案模板的逻辑。P05 替换现有前置分流。代码执行已登记工具的鉴权、结构校验、观测计算、来源绑定、确认和幂等。
+- 伙伴接受任意主题的问题，由模型在同一运行循环内按需回答、澄清、查询数据、联网或读写记忆。禁止用养宠话题白名单限制回答，禁止用关键词、正则、原话形式或独立意图预判分派能力、解释日期或挑选答案模板。P05 替换现有前置分流并去除旧话题限制。代码执行已登记工具的鉴权、结构校验、观测计算、来源绑定、确认和幂等。
 - Agent 服务端域在 `server/petsense/agent/`，App 使用独立业务服务。模型凭据仅由服务端环境或外部文件读取，禁止纳入 Git。
 
 ## 运动日记
