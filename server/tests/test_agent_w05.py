@@ -1,10 +1,13 @@
 """W05 单元测试：基线计算、水位重算、read_baseline、快照/observations 共用结果（agent-w05-spec.md）。"""
+from contextlib import redirect_stdout
 import hashlib
 import importlib.util
+import io
 import json
 import secrets
 import sqlite3
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -401,11 +404,15 @@ class ObservationsStateTests(BaselineTestBase):
 class RebuildToolTests(BaselineTestBase):
     """回填核验工具（spec §3.8）：重建逻辑、版本归属、跨日/跨时段切分与线上累计一致。"""
 
-    def _rebuild(self):
+    def _report_module(self):
         path = Path(__file__).resolve().parents[1] / 'tools' / 'agent_baseline_rebuild.py'
         spec = importlib.util.spec_from_file_location('agent_baseline_rebuild', path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
+        return module
+
+    def _rebuild(self):
+        module = self._report_module()
         connection = sqlite3.connect(db.engine().url.database)
         try:
             return module.rebuild(connection)
@@ -445,6 +452,18 @@ class RebuildToolTests(BaselineTestBase):
         self.assertEqual(rebuilt[key]['seconds'], 21600)
         self.assertEqual(sorted(rebuilt[key]['slots']), [1, 2])
         self.assertEqual(stored[('actions', 'v1', sh_day(-2))], (21600.0, [1, 2]))  # 与线上累计逐日一致
+
+    def test_report_matches_learning_days_when_owner_and_pet_ids_differ(self):
+        with db.session_scope() as s:
+            s.get(Pet, self.pet_id).device_id = ''
+            s.add(Pet(user_id=self.uid, name='Other pet', device_id=self.device, created_at=utc_now()))
+        self._seed_online(sh_day(-1), 8, 30)
+        stream = io.StringIO()
+        argv = ['rebuild', '--db', db.engine().url.database, '--owner-id', str(self.uid)]
+        with patch('sys.argv', argv), redirect_stdout(stream):
+            self._report_module().main()
+        self.assertIn('线上缺失（分钟行有标注但学习日无行）：0', stream.getvalue())
+        self.assertIn('重建缺失（学习日有行但分钟行无标注/已裁剪）：0', stream.getvalue())
 
     def test_version_attribution_and_untagged(self):
         self._seed_online(sh_day(-1), 8, 30, versions=('v1',))

@@ -11,7 +11,7 @@
 
 用法：
   python3 agent_baseline_rebuild.py [--db /path/to/data.db] [--tolerance 600]
-  缺省 --db 取 PETSENSE_ROOT（或包上一级运行目录）下的 data.db。
+  缺省 --db 取 PETSENSE_ROOT（或包上一级运行目录）下的 petsense.db。
 """
 import argparse
 import json
@@ -29,16 +29,16 @@ def default_db():
     root = os.environ.get('PETSENSE_ROOT')
     if not root:
         root = str(Path(__file__).resolve().parents[2])
-    return os.path.join(root, 'data.db')
+    return os.path.join(root, 'petsense.db')
 
 
-def rebuild(connection):
-    """返回 {(pet_id, device_id, feature, version, day): {'seconds', 'slots'}} 与无标注计数。"""
+def rebuild(connection, owner_id=None):
+    """以主人、设备、维度、版本和日期分组，并统计无标注分钟。"""
     rebuilt = defaultdict(lambda: {'seconds': 0.0, 'slots': set()})
     untagged = 0
     rows = connection.execute(
         'SELECT owner_id, device_id, minute, observed_seconds, sound_observed_seconds, source_versions '
-        'FROM telemetry_minutes').fetchall()
+        'FROM telemetry_minutes WHERE (? IS NULL OR owner_id = ?)', (owner_id, owner_id))
     for owner_id, device_id, minute, observed, sound_observed, versions_json in rows:
         try:
             versions = json.loads(versions_json or '[]')
@@ -67,14 +67,17 @@ def rebuild(connection):
 def main():
     parser = argparse.ArgumentParser(description='学习日累计回填核验（只读比对）')
     parser.add_argument('--db', default=default_db())
+    parser.add_argument('--owner-id', type=int, help='只核验指定主人的观测与学习日')
     parser.add_argument('--tolerance', type=float, default=600,
                         help='单日秒数容差（默认600秒，分钟级记账近似）')
     args = parser.parse_args()
     connection = sqlite3.connect(f'file:{args.db}?mode=ro', uri=True)
     connection.row_factory = sqlite3.Row
-    rebuilt, untagged = rebuild(connection)
+    rebuilt, untagged = rebuild(connection, args.owner_id)
     stored = connection.execute(
-        'SELECT pet_id, device_id, feature, version, day, seconds, slots FROM agent_learning_days'
+        'SELECT pets.user_id, days.* FROM agent_learning_days AS days '
+        'JOIN pets ON pets.id = days.pet_id WHERE (? IS NULL OR pets.user_id = ?)',
+        (args.owner_id, args.owner_id),
     ).fetchall()
 
     def valid(seconds, slots_json):
@@ -84,14 +87,21 @@ def main():
             slot_count = 0
         return seconds >= VALID_SECONDS and slot_count >= VALID_SLOTS
 
-    stored_by_key = {(r['pet_id'], r['device_id'], r['feature'], r['version'], r['day']): r
-                     for r in stored}
-    diffs, missing_in_stored, missing_in_rebuild = [], [], []
+    # 分钟行没有宠物 ID，按逐间隔留下的学习日匹配。一天内同一设备对应多只宠物时无法拆分。
+    stored_by_key = defaultdict(list)
+    for row in stored:
+        owner_key = (row['user_id'], row['device_id'], row['feature'], row['version'], row['day'])
+        stored_by_key[owner_key].append(row)
+    diffs, missing_in_stored, ambiguous = [], [], []
     for key, entry in sorted(rebuilt.items()):
-        row = stored_by_key.get(key)
-        if row is None:
+        matches = stored_by_key.get(key, ())
+        if not matches:
             missing_in_stored.append(key)
             continue
+        if len(matches) > 1:
+            ambiguous.append(key)
+            continue
+        row = matches[0]
         delta = abs(entry['seconds'] - row['seconds'])
         if delta > args.tolerance:
             diffs.append((key, entry['seconds'], row['seconds'], delta))
@@ -99,13 +109,13 @@ def main():
         if rebuilt_valid != valid(row['seconds'], row['slots']):
             diffs.append((key, 'valid-day 判定不一致', f'rebuilt={rebuilt_valid}',
                           f"stored={valid(row['seconds'], row['slots'])}"))
-    for key in sorted(set(stored_by_key) - set(rebuilt)):
-        missing_in_rebuild.append(key)
+    missing_in_rebuild = sorted(stored_by_key.keys() - rebuilt.keys())
 
-    print(f'比对完成：分钟行重建 {len(rebuilt)} 个 (宠物,版本,日) 键，线上学习日 {len(stored_by_key)} 行。')
+    print(f'比对完成：分钟行重建 {len(rebuilt)} 个 (主人,设备,维度,版本,日) 键，线上学习日 {len(stored)} 行。')
     print(f'无版本标注分钟行（不归集，P00 §1）：{untagged} 行。')
     for title, items in (('线上缺失（分钟行有标注但学习日无行）', missing_in_stored),
                          ('重建缺失（学习日有行但分钟行无标注/已裁剪）', missing_in_rebuild),
+                         ('归属歧义（同日同设备对应多只宠物）', ambiguous),
                          (f'超出容差（>{args.tolerance:.0f}s）或判定不一致', diffs)):
         print(f'{title}：{len(items)}')
         for item in items[:20]:

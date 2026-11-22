@@ -162,6 +162,11 @@ server/tools/minimax_vision_smoke.py        # §0 冒烟脚本（已入库）
 5. 轨迹取证：`agent_replay.py` 回放含图片摘要（无 base64）；E40 的「不把照片当实时状态」以轨迹工具路径为证。
 6. 验收结论回写本 spec §10.1。
 
+### 10.1 合流验收记录（2026-11-22）
+
+- iPhone 17 Pro 模拟器、Expo Go SDK 58、隔离后端 `petsense`。从相册选择测试照片，上传返回 201、鉴权读取返回 200。带图发出后模型识别图中狗与马，回合持久化 1 个图片引用，点击打开原生灯箱。MiniMax 凭据留在腾讯云。照片归属提示随后收紧，避免将照片中的动物直接等同本宠。
+- `react-native-image-viewing` 仅进入原生构建。Web 使用 Expo Image 和模态图片查看器，通过 Metro 静态导出。Web 浏览器交互、原生断网重试和生产环境待验收。
+
 ## 11. 文档更新
 
 - 本 spec；P00 §7 图片行更新为 Responses API 实测证据；AGENTS.md 增 W07 完成状态一句（图片输入链路与规格要点）；V11 §4.2 图片行状态更新。
