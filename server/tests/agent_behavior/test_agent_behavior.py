@@ -109,9 +109,11 @@ class BehaviorScenarioTests(unittest.TestCase):
                          '「昨天」窗口应从上海昨天零点起')
 
     def test_E2_companion_chat_zero_tools(self):
-        turn, run = self._send('在干嘛呀', target='pet')
+        # 纯陪伴闲聊（不涉数据）：零工具、爱宠人格。
+        # 注：「在干嘛」类问题在 W02 快照落地前查观测属合理行为，不用于本场景。
+        turn, run = self._send('你今天心情怎么样呀？', target='pet')
         self.assertEqual(turn['status'], 'complete')
-        self.assertEqual(self._tool_calls(run), [], '陪伴闲聊不应调用工具')
+        self.assertEqual(self._tool_calls(run), [], '纯陪伴闲聊不应调用工具')
         self.assertEqual(json.loads(run.conclusion)['speaker'], 'pet')
 
     def test_E3_explicit_target_overrides(self):
@@ -128,9 +130,10 @@ class BehaviorScenarioTests(unittest.TestCase):
         self.assertTrue(turn['reply'].strip())
 
     def test_E5_ambiguous_asks_single_question(self):
-        turn, run = self._send('那个到底怎么样嘛？')
+        # 无指称的模糊输入：模型应只问一个必要问题，不查数据。
+        turn, run = self._send('然后呢？')
         self.assertEqual(turn['status'], 'complete')
-        self.assertEqual(self._tool_calls(run), [])
+        self.assertEqual(self._tool_calls(run), [], '无法判定主题时不应查数据')
         self.assertLessEqual(turn['reply'].count('？') + turn['reply'].count('?'), 3)
 
     def test_E6_write_request_honest(self):

@@ -166,6 +166,7 @@ def run_dialogue(context, on_progress=None):
     rounds = 0
     degraded = []
     visible_speaker = 'assistant'
+    empty_retries = 0
     while True:
         allow_tools = rounds < MAX_TOOL_ROUNDS and time.monotonic() < deadline
         if not allow_tools and rounds >= MAX_TOOL_ROUNDS:
@@ -174,7 +175,10 @@ def run_dialogue(context, on_progress=None):
             degraded.append('wall_clock_exceeded')
         schemas = registry.schemas_for(registry.DIALOGUE, stance['scope'] if stance else None) if allow_tools else []
         stream = DeltaFilter(lambda text: on_progress(visible_speaker, text) if on_progress else None)
-        turn = model.respond(input_items, tools=schemas or None, on_delta=stream.feed)
+        # 空响应（推理耗尽输出预算等）放宽 token 上限重试，而不是直接失败
+        budget_tokens = 1800 if empty_retries == 0 else 3600 * empty_retries
+        turn = model.respond(input_items, tools=schemas or None, on_delta=stream.feed,
+                             max_output_tokens=budget_tokens)
         stream.close()
         round_stance, stripped = parse_stance(turn['text'])
         if round_stance is not None:
@@ -188,6 +192,10 @@ def run_dialogue(context, on_progress=None):
         dropped = len(turn['function_calls']) - MAX_CALLS_PER_ROUND
         if not calls:
             if not stripped.strip():
+                empty_retries += 1
+                if empty_retries <= 2:
+                    degraded.append(f'empty_response_retry_{empty_retries}')
+                    continue
                 raise ValueError('模型未返回可用回复')
             break
         if not schemas:
