@@ -284,7 +284,8 @@ register(ToolSpec(
                 '（session_takeaway，默认不记）。禁止：假设（假如/如果）、否定句式的转述、'
                 '其他主体（朋友家的宠物）、长期偏好（喜欢/不喜欢某物，属确认写、尚未接入）、'
                 '爱宠人格的拟人表达。发生时间未知就不传时间参数，不要用当前时间冒充。'
-                '纠正旧记忆时传 supersedesId=旧记忆id。写入成功才可对主人回显「记下了」。',
+                '纠正旧记忆时传 supersedesId=旧记忆id（新条目必须与被替换条目同类型；'
+                '认识卡等系统条目由系统维护，不能替换）。写入成功才可对主人回显「记下了」。',
     parameters={'type': 'object', 'properties': {
         'kind': {'type': 'string', 'enum': ['episode', 'owner_event', 'habit_candidate', 'session_takeaway']},
         'summary': {'type': 'string', 'description': '一句话人类可读表达（≤300字），是检索与认识卡蒸馏的原料'},
@@ -293,7 +294,7 @@ register(ToolSpec(
         'endAt': {'type': 'string', 'description': '发生结束时间（ISO，带时区），可选'},
         'facts': {'type': 'object', 'description': '可选结构化字段（地点/对象/事件名等）'},
         'tentative': {'type': 'boolean', 'description': '是否为不确定的规律候选，仅 habit_candidate 可为 true'},
-        'supersedesId': {'type': 'integer', 'description': '纠正旧记忆时被替换条目的 id'}},
+        'supersedesId': {'type': 'integer', 'description': '纠正旧记忆时被替换条目的 id，须与新条目同类型'}},
         'required': ['kind', 'summary'], 'additionalProperties': False},
     group=MEMORY, forms=(DIALOGUE,), execute=_execute_write_memory))
 

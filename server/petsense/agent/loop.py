@@ -89,7 +89,8 @@ _MEMORY_RULES = (
     '仅在主人交代照顾安排等确有后续价值时记 session_takeaway，默认不记。'
     '发生时间未知就不传时间参数，不要用当前时间冒充。假设（假如/如果）、否定句式的转述、'
     '其他主体（朋友家的宠物）、长期偏好（喜欢/不喜欢某物——需确认保存、尚未接入，如实说明）、'
-    '爱宠人格的拟人表达一律不写入。纠正旧记忆用 write_memory 传 supersedesId；'
+    '爱宠人格的拟人表达一律不写入。纠正旧记忆用 write_memory 传 supersedesId'
+    '（新条目须与被替换条目同类型；认识卡等系统条目不能由工具替换）；'
     '主人明确要求忘掉用 forget_memory。写入被拒或失败时不得声称已记住。'
     '收尾检查：完成回答后，若本轮还有值得记的内容现在就写，宁少勿错。\n'
     '外部知识、拟人表达不构成本宠事实，不写入档案或记忆。\n')
@@ -303,6 +304,28 @@ def _search_carryover_note(round_search, round_citations):
             '不要原样重复同一搜索词，也不要声称已引用本次搜索内容。' % query_text)
 
 
+# W04 原生验收缺陷1（2026-11-23）兜底：首轮 write_memory 被 stance_missing 拒绝后，
+# 模型只重发了读工具却回复「我把这件事记下了」——虚假写入回执（pet_memories 0 条佐证）。
+# 确定性收紧覆盖两种失败形态：无执行（写入调用被拒/未重发）与结构化未写入
+# （调用执行了但 saved=false）。词表只匹配长期记忆写入回执；否定句不算声称；
+# 本运行从未发起写入调用的回复不拦截（可能是早前回合写入的合规回显，只落审计标记）。
+_WRITE_CLAIM_RE = re.compile(
+    r'记下了|记下来了|记进|帮你记|已经记住|已记住|记住了|记好了|写进记忆|写入记忆|存进记忆|已记入')
+_WRITE_NEGATION_RE = re.compile(r'(不能|无法|没法|不会|没有|尚未|还没|别)[^。！？\n]{0,6}(记|写入|存)')
+
+_WRITE_RECEIPT_REMINDER = (
+    '（系统提醒）本次运行没有任何写入长期记忆成功的记录（相关 write_memory 调用被拒绝或未成功保存）。'
+    '禁止声称「已记下/已记住/已保存这条记忆」。二选一：'
+    '① 现在真正调用 write_memory 完成写入，再向主人回显；'
+    '② 如实告诉主人这条还没有保存，不要让主人误以为已记录。')
+
+
+def _claims_memory_write(text):
+    """最终回复是否声称已写入长期记忆（确定性词表；否定句不算声称）。"""
+    if not text or not _WRITE_CLAIM_RE.search(text):
+        return False
+    return not _WRITE_NEGATION_RE.search(text)
+
 
 def run_dialogue(context, on_progress=None):
     """执行一次对话运行。
@@ -361,6 +384,32 @@ def run_dialogue(context, on_progress=None):
     visible_speaker = 'assistant'
     empty_retries = 0
     stance_retry_reminded = False
+    write_receipt_reminded = False
+    memory_write_calls = 0   # 本运行发起的 write_memory 调用数（含被拒与失败）
+    memory_write_saved = 0   # 其中真正保存成功（result.saved=true）的次数
+
+    def _false_receipt_guard():
+        """虚假写入回执兜底（W04 原生验收缺陷1）。返回 True 表示已注入一次性提醒，需再跑一轮。
+
+        覆盖两种失败形态：写入调用被拒或漏重发（无执行）、调用执行了但 saved=false
+        （结构化未写入）。本运行从未发起写入调用的声称不拦截（可能是早前回合写入的
+        合规回显），只落审计标记；提醒后仍声称的落 degraded 标记供监控与回放检查，
+        不改写模型回复文本。
+        """
+        nonlocal write_receipt_reminded
+        if not _claims_memory_write(stripped) or memory_write_saved > 0:
+            return False
+        if memory_write_calls > 0 and not write_receipt_reminded:
+            write_receipt_reminded = True
+            messages_trace.append({'write_receipt_reminder': True})
+            input_items.append({'role': 'assistant', 'content': stripped})
+            input_items.append({'role': 'user', 'content': _WRITE_RECEIPT_REMINDER})
+            return True
+        if memory_write_calls > 0:
+            degraded.append('false_write_receipt')
+        messages_trace.append({'write_receipt_audit': 'claim_without_saved_write'})
+        return False
+
     while True:
         allow_tools = rounds < MAX_TOOL_ROUNDS and time.monotonic() < deadline
         if not allow_tools and rounds >= MAX_TOOL_ROUNDS:
@@ -414,11 +463,15 @@ def run_dialogue(context, on_progress=None):
                     degraded.append(f'empty_response_retry_{empty_retries}')
                     continue
                 raise ValueError('模型未返回可用回复')
+            if _false_receipt_guard():
+                continue
             break
         if not schemas:
             # 预算耗尽后已不提供工具；模型仍试图调用时按降级交付，避免无限循环
             degraded.append('model_called_without_tools')
             if stripped.strip():
+                if _false_receipt_guard():
+                    continue
                 break
             raise ValueError('模型未返回可用回复')
         if dropped > 0:
@@ -457,6 +510,12 @@ def run_dialogue(context, on_progress=None):
             tool_summary.append({'name': name, 'allowed': gate['allowed'], 'reason': gate['reason'],
                                  'arguments': (call['arguments'] or '')[:300],
                                  'duration_ms': gate['duration_ms'], 'result_bytes': len(result_json)})
+            if name == 'write_memory':
+                # W04 缺陷1 兜底计数：被拒=无执行；执行但 saved=false=结构化未写入
+                memory_write_calls += 1
+                if gate['allowed'] and gate['reason'] is None \
+                        and isinstance(gate['result'], dict) and gate['result'].get('saved') is True:
+                    memory_write_saved += 1
             if gate['reason'] is None and isinstance(gate['result'], dict) and gate['result'].get('source'):
                 # 来源卡摘要字段：覆盖时长与声音事件数随窗口一并交付（旧客户端忽略新字段，向后兼容）
                 source = dict(gate['result']['source'])

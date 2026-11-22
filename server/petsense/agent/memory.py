@@ -73,6 +73,13 @@ def save_entry(session, pet_id, *, kind, summary, subject='pet', start_at=None, 
             return None, '被纠正的记忆不存在'
         if supersedes.status != 'active':
             return None, '被纠正的记忆已不是当前有效版本'
+        if supersedes.kind != kind:
+            # W04 原生验收缺陷2（2026-11-23）：跨 kind supersedes 会把认识卡等系统条目
+            # 换成经历类条目，版本链语义被破坏并持续误导模型措辞。版本链只允许同类替换；
+            # 认识卡由蒸馏 worker 重建（insight_card→insight_card 同类，不受影响）。
+            return None, (f'被纠正条目的类型是 {supersedes.kind}，与新条目 {kind} 不同：'
+                          '纠正必须使用与原条目相同的类型。如要修正内容，请用相同类型'
+                          '重写要点；认识卡等系统条目由系统蒸馏维护，不能通过写入替换')
     entry = PetMemory(pet_id=pet_id, kind=kind, subject=subject,
                       start_at=start_at, end_at=end_at,
                       generated_at=generated_at or utc_now(),

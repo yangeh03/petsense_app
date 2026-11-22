@@ -10,7 +10,7 @@ from helpers import fresh_db
 from test_pets import seed_user_with_pet
 
 from petsense import db
-from petsense.agent import memory, memory_jobs, registry, runs, snapshot
+from petsense.agent import loop, memory, memory_jobs, registry, runs, snapshot
 from petsense.agent.routes import bp
 from petsense.db import iso_z, utc_now
 from petsense.db.models import Pet, TelemetryMinute
@@ -119,6 +119,44 @@ class SaveModelWriteTests(unittest.TestCase):
         self.assertIn('不是当前有效版本', error)  # 已被替换的条目不能再被纠正
         _, error = self._write({'kind': 'episode', 'summary': 'x', 'supersedesId': 99999})
         self.assertIn('不存在', error)
+
+    def test_supersede_rejects_cross_kind(self):
+        """原生验收缺陷2（2026-11-23）：episode 不得替换 active 的 insight_card——版本链同类型约束。"""
+        with db.session_scope() as s:
+            pet = s.execute(select(Pet)).scalars().first()
+            card, error = memory.save_entry(s, pet.id, kind='insight_card',
+                                            summary='它常去公园玩飞盘，喜欢搬家后的新窝',
+                                            source_type='worker')
+            self.assertIsNone(error)
+        _, error = self._write({'kind': 'episode', 'summary': '只记得搬家适应',
+                                'supersedesId': card.id})
+        self.assertIn('相同类型', error)
+        self.assertIn('insight_card', error)
+        with db.session_scope() as s:
+            row = s.get(PetMemory, card.id)
+            self.assertEqual(row.status, 'active')  # 认识卡未被替换，蒸馏 worker 仍持有
+        # worker 同类重建路径不受影响（insight_card → insight_card）
+        with db.session_scope() as s:
+            pet = s.execute(select(Pet)).scalars().first()
+            rebuilt, error = memory.save_entry(s, pet.id, kind='insight_card',
+                                               summary='只含搬家适应的新认识',
+                                               source_type='worker', supersedes_id=card.id)
+            self.assertIsNone(error)
+            self.assertEqual(rebuilt.version, 2)
+        with db.session_scope() as s:
+            self.assertEqual(s.get(PetMemory, card.id).status, 'superseded')
+
+    def test_model_write_cannot_target_system_kinds(self):
+        """模型写入路径对认识卡等系统条目无入口：白名单拒绝 + 同类型约束兜底。"""
+        _, error = self._write({'kind': 'insight_card', 'summary': '手工造认识卡'})
+        self.assertIn('不在可写类型', error)
+        with db.session_scope() as s:
+            pet = s.execute(select(Pet)).scalars().first()
+            daily, error = memory.save_entry(s, pet.id, kind='daily', summary='当日汇总',
+                                             source_type='worker')
+            self.assertIsNone(error)
+        _, error = self._write({'kind': 'episode', 'summary': 'x', 'supersedesId': daily.id})
+        self.assertIn('相同类型', error)
 
     def test_forget_idempotent(self):
         entry, _ = self._write({'kind': 'episode', 'summary': '要忘掉的事'})
@@ -609,6 +647,119 @@ class LeakControlTests(unittest.TestCase):
             card = memory.active_insight(s, self.pet_id)
             self.assertTrue(memory.stale_citations(s, card))
             self.assertEqual(memory.search(s, self.pet_id, keyword='稳定认识')['matched'], 0)
+
+
+class FalseWriteReceiptGuardTests(unittest.TestCase):
+    """虚假写入回执兜底（原生验收缺陷1，2026-11-23）：最终回复声称「记下了」但本运行
+    无任何 write_memory 保存成功时，确定性注入一次性系统提醒；覆盖无执行（被拒/漏重发）
+    与结构化未写入（执行但 saved=false）两种形态；无写入调用的合规回显不拦截。"""
+
+    def setUp(self):
+        fresh_db(self)
+        self.uid = seed_user_with_pet()
+        with db.session_scope() as s:
+            self.pet_id = s.execute(select(Pet)).scalar_one().id
+        self.snap = {'sections': {}, 'meta': {'chars': 10, 'trimmed': [], 'degraded': []}}
+
+    def _run(self, turns, patch_observations=True):
+        context = {'pet_id': self.pet_id, 'user_id': self.uid, 'text': '上周末我们搬家了',
+                   'target': 'auto', 'history': [], 'snapshot': self.snap,
+                   'now_iso': iso_z(utc_now())}
+        with patch('petsense.agent.model.respond', side_effect=turns) as respond:
+            if patch_observations:
+                with patch('petsense.agent.registry.observations_query') as tool:
+                    tool.return_value = {'observedSeconds': 0, 'source': {'type': 'observations'}}
+                    outcome = loop.run_dialogue(dict(context))
+            else:
+                outcome = loop.run_dialogue(dict(context))
+        return outcome, respond
+
+    def _memory_count(self):
+        with db.session_scope() as s:
+            return len(s.execute(select(PetMemory)).scalars().all())
+
+    def test_rejected_write_then_false_receipt_gets_one_time_reminder(self):
+        """缺陷路径回放：write_memory 被 stance_missing 拒后漏重发，回复却称「记下了」。"""
+        write_call = {'name': 'write_memory',
+                      'arguments': json.dumps({'kind': 'episode', 'summary': '上周末搬家了'},
+                                              ensure_ascii=False),
+                      'call_id': 'c1'}
+        read_call = {'name': 'query_observations',
+                     'arguments': json.dumps({'start': '2026-11-01T00:00:00+08:00',
+                                              'end': '2026-11-02T00:00:00+08:00'}),
+                     'call_id': 'c2'}
+        turns = [
+            {'text': '', 'function_calls': [write_call], 'usage': {}},  # 无 stance → 被拒（无执行）
+            {'text': '{"scope":"allowed","intent":"write","speaker":"assistant"}\n',
+             'function_calls': [read_call], 'usage': {}},               # 只重发读工具，漏写
+            {'text': '【照料助手】我把这件事记下了。', 'function_calls': [], 'usage': {}},  # 虚假回执
+            {'text': '【照料助手】刚才那条还没有保存下来，要我现在记下来吗？',
+             'function_calls': [], 'usage': {}},                        # 提醒后如实说明
+        ]
+        outcome, respond = self._run(turns)
+        self.assertEqual(respond.call_count, 4, '虚假回执后应补跑一轮而不是直接结束')
+        self.assertIn({'write_receipt_reminder': True}, outcome['trace']['messages'])
+        self.assertEqual(outcome['reply'], '【照料助手】刚才那条还没有保存下来，要我现在记下来吗？')
+        self.assertEqual(self._memory_count(), 0, '自始至终不应有记忆落库')
+
+    def test_executed_but_not_saved_still_flagged(self):
+        """结构化未写入：write_memory 执行了但 result.saved=false（supersedesId 不存在）。"""
+        write_call = {'name': 'write_memory',
+                      'arguments': json.dumps({'kind': 'episode', 'summary': '上周末搬家了',
+                                               'supersedesId': 99999}, ensure_ascii=False),
+                      'call_id': 'c1'}
+        turns = [
+            {'text': '{"scope":"allowed","intent":"write","speaker":"assistant"}\n',
+             'function_calls': [write_call], 'usage': {}},  # 执行了但 saved=false
+            {'text': '【照料助手】这条我已经记下了。', 'function_calls': [], 'usage': {}},
+            {'text': '【照料助手】抱歉，刚才那条没有保存成功。', 'function_calls': [], 'usage': {}},
+        ]
+        outcome, respond = self._run(turns, patch_observations=False)
+        self.assertEqual(respond.call_count, 3)
+        self.assertIn({'write_receipt_reminder': True}, outcome['trace']['messages'])
+        self.assertEqual(self._memory_count(), 0)
+
+    def test_claim_without_write_call_is_audited_not_reminded(self):
+        """本运行从未发起写入调用的「已记下」不拦截（早前回合写入的合规回显），只落审计标记。"""
+        turns = [{'text': '{"scope":"allowed","intent":"social","speaker":"assistant"}\n'
+                          '【照料助手】嗯，之前已经记下来了。',
+                  'function_calls': [], 'usage': {}}]
+        outcome, respond = self._run(turns)
+        self.assertEqual(respond.call_count, 1, '合规回显不得触发额外轮次')
+        self.assertNotIn({'write_receipt_reminder': True}, outcome['trace']['messages'])
+        self.assertIn({'write_receipt_audit': 'claim_without_saved_write'},
+                      outcome['trace']['messages'])
+        self.assertEqual(outcome['reply'], '【照料助手】嗯，之前已经记下来了。')
+
+    def test_real_write_claim_passes_untouched(self):
+        """真正写入成功后的回显直通：不提醒、不降级。"""
+        write_call = {'name': 'write_memory',
+                      'arguments': json.dumps({'kind': 'episode', 'summary': '上周末搬家了'},
+                                              ensure_ascii=False),
+                      'call_id': 'c1'}
+        turns = [
+            {'text': '{"scope":"allowed","intent":"write","speaker":"assistant"}\n',
+             'function_calls': [write_call], 'usage': {}},
+            {'text': '【照料助手】我把这件事记下了。', 'function_calls': [], 'usage': {}},
+        ]
+        outcome, respond = self._run(turns, patch_observations=False)
+        self.assertEqual(respond.call_count, 2)
+        self.assertEqual(outcome['reply'], '【照料助手】我把这件事记下了。')
+        self.assertEqual(self._memory_count(), 1)
+        self.assertNotIn({'write_receipt_reminder': True}, outcome['trace']['messages'])
+        self.assertNotIn({'write_receipt_audit': 'claim_without_saved_write'},
+                         outcome['trace']['messages'])
+
+    def test_negation_is_not_a_claim(self):
+        """否定句（「还没保存」）不算声称，不触发兜底提醒。"""
+        turns = [{'text': '{"scope":"allowed","intent":"write","speaker":"assistant"}\n'
+                          '【照料助手】这条我还没有帮你记下来。',
+                  'function_calls': [], 'usage': {}}]
+        outcome, respond = self._run(turns)
+        self.assertEqual(respond.call_count, 1)
+        self.assertNotIn({'write_receipt_reminder': True}, outcome['trace']['messages'])
+        self.assertNotIn({'write_receipt_audit': 'claim_without_saved_write'},
+                         outcome['trace']['messages'])
 
 
 class DialogueIntegrationTests(unittest.TestCase):
