@@ -11,8 +11,12 @@ import { SymbolView } from 'expo-symbols';
 
 import { ThemedText } from '@/components/themed-text';
 import { useTheme } from '@/hooks/use-theme';
-import { decideAgentProposal, type AgentProposal } from '@/services/agent';
+import { ApiError } from '@/services/api';
+import { decideAgentProposal, type AgentProposal, type AgentTurn } from '@/services/agent';
 import { useAgentChatStore } from '@/stores/agent-chat';
+
+/** 409 响应体（§5）：带当前提案与其回合快照，App 按响应覆盖翻终态。 */
+type DecisionConflict = { proposal?: AgentProposal; turn?: AgentTurn | null };
 
 /** 生日按精度渲染（D1）：2023-09-10 / 约 2023 年 9 月 / 约 2023 年。 */
 function birthLabel(fields: AgentProposal['fields']): string | null {
@@ -61,6 +65,14 @@ export function ProposalCard({
       const result = await decideAgentProposal(petId, proposal.id, action);
       if (result.turn) applyTurn(result.turn); // 决策后服务端重写 blocks 并推 turn；本地按 id 覆盖
     } catch (exc) {
+      // 409（已被新版本替代 / 已处理过）：服务端已翻终态，按响应覆盖翻卡，不再提示可重试
+      if (exc instanceof ApiError && exc.status === 409) {
+        const conflict = exc.payload as DecisionConflict | undefined;
+        if (conflict?.turn) {
+          applyTurn(conflict.turn);
+          return;
+        }
+      }
       setError(exc instanceof Error && exc.message ? exc.message : '操作失败，请稍后再试');
     } finally {
       setBusy(false);

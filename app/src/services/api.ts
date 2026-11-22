@@ -37,6 +37,7 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly payload?: unknown,
   ) {
     super(message);
   }
@@ -137,7 +138,7 @@ async function parseApiResponse<T>(status: number, body: string): Promise<T> {
       payload && typeof payload === 'object' && 'message' in payload
         ? String((payload as { message: unknown }).message)
         : `请求失败（${status}）`;
-    throw new ApiError(message, status);
+    throw new ApiError(message, status, payload ?? undefined);
   }
   if (
     payload &&

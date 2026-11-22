@@ -242,16 +242,19 @@ def _execute_prepare_profile_update(args, context):
             pet = s.get(Pet, context['pet_id'])
             if pet is None or pet.user_id != context['user_id']:
                 raise ValueError('宠物归属已变化')
-            row, updated = proposal_service.create(
+            row, updated, refreshed = proposal_service.create(
                 s, pet, context.get('turn_id'), fields, explicit)
     except proposal_service.ProposalError as exc:
         return {'error': exc.message, 'validationErrors': exc.errors,
                 'guidance': '候选未通过校验，未保存。请向主人如实说明原因；主人补充后可重新发起。'}
+    # 旧 pending 卡随 supersede 翻态的回合 id：routes 提交后推 turn 帧刷新（§3.5）
+    refreshed_ids = [tid for tid in refreshed if tid != context.get('turn_id')]
     if explicit:
         return {'written': True, 'proposal': proposal_service.public(row),
-                'updatedFields': updated,
+                'updatedFields': updated, 'refreshedTurnIds': refreshed_ids,
                 'guidance': '已写入档案。请如实回显保存结果，与 updatedFields 一致。'}
     return {'written': False, 'proposal': proposal_service.public(row),
+            'refreshedTurnIds': refreshed_ids,
             'guidance': '已生成待确认候选（确认卡会出现在回复中）。未经主人确认不得声称已保存；'
                         '主人要修改候选时，按新内容重新调用本工具生成新版本。'}
 

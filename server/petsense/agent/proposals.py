@@ -147,6 +147,8 @@ def create(session, pet, turn_id, fields, explicit, kind=KIND_PROFILE, now=None)
     """创建提案：explicit=true 直接写入并记 confirmed；否则建 pending 并替代旧 pending。
 
     归一化失败抛 ProposalError（errors 字典带字段级原因），不建提案不落库。
+    旧 pending 提案置 superseded 时同步重写其所属回合 blocks（旧卡翻「已有新候选」态），
+    返回被刷新的回合 id 列表，调用方提交后据此推 WS turn 帧（agent-w03-spec.md §3.5）。
     """
     payload = normalize_fields(fields)
     now = now or utc_now()
@@ -157,14 +159,18 @@ def create(session, pet, turn_id, fields, explicit, kind=KIND_PROFILE, now=None)
                         created_at=now, decided_at=now if explicit else None)
     session.add(row)
     session.flush()
+    refreshed_turn_ids = []
     for old in session.execute(select(AgentProposal).where(
             AgentProposal.pet_id == pet.id, AgentProposal.kind == kind,
             AgentProposal.status == 'pending', AgentProposal.id != row.id)).scalars():
         old.status = 'superseded'
         old.superseded_by = row.id
+        _refresh_turn_blocks(session, old)
+        if old.turn_id and old.turn_id not in refreshed_turn_ids:
+            refreshed_turn_ids.append(old.turn_id)
     session.flush()
     updated = _apply_writes(session, pet, payload) if explicit else {}
-    return row, updated
+    return row, updated, refreshed_turn_ids
 
 
 def decide(session, pet, proposal_id, action, now=None):

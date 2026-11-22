@@ -72,7 +72,7 @@ server/petsense/agent/routes.py        # 组装时读设定注入 context；prop
 - `create(pet_id, turn_id, fields, explicit, now) -> dict`：
   1. **结构校验**（落库前复核第二层，复用 pets/profile.py 校验）：name 1–20 字；breed ≤40 字；生日不在未来、不早于 1990-01-01；weightKg ∈ [0.1, 100]、measuredOn ≤ 今天（上海）；precision 枚举合法。任一不过 → 返回结构化 `validation_error`（字段级原因），不建提案、不落库，模型据此如实说明。
   2. `explicit=true`（模型判定主人明确说「记住/更新」且主体、内容、时间清楚）：直接执行写入（§3.4 直写路径）→ 创建 `confirmed` 提案 → 返回 `{written: true, proposal, updatedFields}`。
-  3. `explicit=false`：同宠物**同 kind 的 pending 提案全部置 `superseded`**（superseded_by=新 id）→ 创建 `pending` 提案 v(n+1) → 返回 `{written: false, proposal}`，提示词要求模型向主人展示候选并等待确认，**不得自称已保存**。
+  3. `explicit=false`：同宠物**同 kind 的 pending 提案全部置 `superseded`**（superseded_by=新 id）→ 创建 `pending` 提案 v(n+1) → 返回 `{written: false, proposal}`，提示词要求模型向主人展示候选并等待确认，**不得自称已保存**。supersede 同时重写旧提案所属回合 blocks（历史卡片翻「已有新候选」态），提交后由 routes 推这些回合的 turn 帧。
 - `decide(proposal_id, pet_id, user_id, action, now)`：归属校验 → `pending` 才执行；`confirm` = 校验后落库 + status/decided_at + 重写 turn blocks + `ws.push_turn`；`reject` = 仅状态翻转 + 同样刷新；重复同 action 幂等返回当前态；对 `superseded`/终态提案执行 → 409 结构化错误（「提案已被新版本替代」/「提案已处理」），App 卡片按钮随之禁用。
 - 落库执行：生日/名字/品种 → `Pet` 行 UPDATE（走 pets 校验）；体重 → `pet_weight_records` 当日 upsert（source='agent'）。同事务内完成提案状态更新。
 
@@ -158,7 +158,7 @@ parameters: {assistantName?(1-20字), ownerTitle?(≤20字，空串=清除), ver
 
 - **校验失败**：工具返回结构化 `validation_error`（字段级），不建提案不落库；模型如实转述原因，候选不丢（主人可重新表述）。
 - **直写失败**（DB 异常）：返回结构化 error，模型如实说明未保存；不产生 confirmed 提案。
-- **决策幂等**：同 action 重复提交返回当前终态；终态后异 action → 409；superseded 提案 confirm → 409「已被新版本替代」。App 按响应覆盖，按钮禁用态兜底。
+- **决策幂等**：同 action 重复提交返回当前终态；终态后异 action → 409；superseded 提案 confirm → 409「已被新版本替代」。409 响应体带当前提案与所属回合快照（`proposal`/`turn`），App 按响应覆盖翻终态（按钮随终态消失），未收到 turn 时退化为错误提示。
 - **confirm 落库失败**：事务回滚（提案保持 pending），响应 500 结构化错误，卡片保持可操作；重试安全。
 - **断线**：决策走 HTTP 同步请求，不依赖 WS；WS 推送仅作加速，重连后 GET turns 拉齐以已保存结果为准（现状语义）。
 - **设定并发**：PATCH 带全量四字段覆盖（无版本号；单用户单设备场景，冲突面可忽略——最后写赢，可推翻）。

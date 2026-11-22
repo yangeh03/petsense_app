@@ -169,13 +169,16 @@ def run_dialogue(context, on_progress=None):
               'turn_id': int|None, 'settings': {...}|None（W03，助手设定注入）}
     on_progress(speaker, cumulative_visible_text)：节流落库与 WS 推送由调用方实现。
     返回 outcome：{'reply','blocks','speaker','sources','stance','degraded','trace',
-                  'proposals': [提案 dict]}（proposals 供 routes 追加确认卡块，一回合取最后一张）。
+                  'proposals': [提案 dict],
+                  'refreshedTurnIds': [int]}（proposals 供 routes 追加确认卡块，一回合取最后一张；
+                  refreshedTurnIds 为被 supersede 的旧卡所在回合，routes 提交后推帧刷新）。
     异常向上抛（routes 按失败保留原话处理）。
     """
     started = time.monotonic()
     deadline = started + RUN_WALL_LIMIT_S
     stance = None
     sources, tool_summary, messages_trace, proposals = [], [], [], []
+    refreshed_turn_ids = []
     snap = context.get('snapshot')
     system_content = SYSTEM_PROMPT + '\n实时快照：' + build_context(snap) \
         + f"\n本轮指向：{context['target']}。"
@@ -265,6 +268,11 @@ def run_dialogue(context, on_progress=None):
                 # W03 提案卡：同回合多次写入调用时，后一调用已把前一 pending 替代（supersede），
                 # routes 只挂最后一张（agent-w03-spec.md §3.5）
                 proposals.append(gate['result']['proposal'])
+            if gate['reason'] is None and isinstance(gate['result'], dict):
+                # W03：被 supersede 的旧卡所在回合需推帧刷新（历史回合卡片翻「已有新候选」）
+                for turn_id in gate['result'].get('refreshedTurnIds') or []:
+                    if isinstance(turn_id, int) and turn_id not in refreshed_turn_ids:
+                        refreshed_turn_ids.append(turn_id)
         messages_trace.append({'tool_round': rounds, 'calls': tool_summary[-len(calls):]})
         if not stance_retry_reminded and any(call['reason'] == 'stance_missing' for call in tool_summary[-len(calls):]):
             # W02 复验 run16：被拒后模型自称「已重新发起」并转述聊天历史数字。注入一次性系统提醒，
@@ -293,4 +301,5 @@ def run_dialogue(context, on_progress=None):
              'degraded': degraded}
     return {'reply': stripped.strip(), 'blocks': blocks, 'speaker': blocks[0]['speaker'] if blocks else default_speaker,
             'sources': sources, 'stance': stance or {'scope': 'unknown', 'intent': 'unknown', 'speaker': 'assistant'},
-            'degraded': bool(degraded), 'trace': trace, 'proposals': proposals}
+            'degraded': bool(degraded), 'trace': trace, 'proposals': proposals,
+            'refreshedTurnIds': refreshed_turn_ids}
