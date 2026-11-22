@@ -47,6 +47,7 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
     topic,
     draft,
     target,
+    attachments,
     busy,
     error,
     setDraft,
@@ -62,6 +63,9 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
     setFollowReply,
     reload,
     send,
+    pickImages,
+    retryAttachment,
+    removeAttachment,
     loadOlder,
     markRead,
   } = useAgentChat(user);
@@ -83,7 +87,11 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
     loadedFor === (user?.id ?? -1)
       ? turns.filter((turn) => topic === undefined || (turn.topicId ?? turn.id) === topic)
       : [];
-  const canSend = Boolean(petId && draft.trim() && !busy);
+  // W07：有上传中的图不可发；纯图（无文字）可发；失败重试入口与草稿同源
+  const uploading = attachments.some((item) => item.status === 'uploading');
+  const readyImages = attachments.filter((item) => item.status === 'done' && item.imageId);
+  const canSend = Boolean(petId && !busy && !uploading && (draft.trim() || readyImages.length));
+  const canAttach = Boolean(petId && !busy && attachments.length < 3);
 
   useFocusEffect(
     useCallback(() => {
@@ -98,6 +106,20 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
   const onRetry = (turn: AgentTurn) => {
     setDraft(turn.text);
     setTarget(turn.target);
+    // 失败回合的图片已在服务端，按完成态放回输入区（失败不丢图，重试免重传）
+    if (turn.images?.length) {
+      useAgentChatStore.getState().clearAttachments();
+      useAgentChatStore.getState().addAttachments(
+        turn.images.map((meta) => ({
+          key: `restore-${meta.id}`,
+          localUri: null,
+          width: meta.width ?? 0,
+          height: meta.height ?? 0,
+          imageId: meta.id,
+          status: 'done' as const,
+        })),
+      );
+    }
   };
 
   return (
@@ -291,9 +313,14 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
             canSend={canSend}
             keyboardOpen={keyboardOpen && Platform.OS === 'ios'}
             bottomInset={insets.bottom}
+            attachments={attachments}
+            canAttach={canAttach}
             onDraft={setDraft}
             onTarget={setTarget}
             onSend={() => void send()}
+            onPick={(source) => void pickImages(source)}
+            onRetryAttachment={retryAttachment}
+            onRemoveAttachment={removeAttachment}
           />
         </View>
       ) : null}

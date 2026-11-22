@@ -231,7 +231,7 @@ function PostForm({ diaryJobId }: { diaryJobId?: string }) {
           });
       const picked = (result.assets ?? []).filter((asset) => !!asset.uri);
       if (picked.length) {
-        const selected = await Promise.all(picked.map(normalizeForUpload));
+        const selected = await Promise.all(picked.map((asset) => normalizeForUpload(asset)));
         let durable = selected;
         if (Platform.OS !== 'web') {
           if (!draftDirectory) throw new Error('草稿目录不可用');

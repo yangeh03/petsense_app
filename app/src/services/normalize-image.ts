@@ -8,6 +8,10 @@ export type UploadImage = { uri: string; name: string; type: string };
 export const UPLOAD_MAX_EDGE = 2048;
 const JPEG_QUALITY = 0.85;
 
+/** 伙伴聊天图片档位（W07 D2）：以模型理解为目的，低于社区标准控制 token 成本。 */
+export const AGENT_UPLOAD_MAX_EDGE = 1280;
+export const AGENT_JPEG_QUALITY = 0.8;
+
 /**
  * 把相册/相机返回的图片规范成可上传的 JPEG。
  *
@@ -15,7 +19,12 @@ const JPEG_QUALITY = 0.85;
  * 直接上传会被拒；原图动辄 3–4K 分辨率也没必要全量上传。这里统一解码重编码并限制长边。
  * Web 没有原生解码管线，保留浏览器给的文件原样交给服务端校验。
  */
-export async function normalizeForUpload(asset: ImagePickerAsset): Promise<UploadImage> {
+export async function normalizeForUpload(
+  asset: ImagePickerAsset,
+  options?: { maxEdge?: number; quality?: number },
+): Promise<UploadImage> {
+  const maxEdge = options?.maxEdge ?? UPLOAD_MAX_EDGE;
+  const quality = options?.quality ?? JPEG_QUALITY;
   const fallback: UploadImage = {
     uri: asset.uri,
     name: asset.fileName ?? 'photo.jpg',
@@ -24,8 +33,8 @@ export async function normalizeForUpload(asset: ImagePickerAsset): Promise<Uploa
   if (Platform.OS === 'web') return fallback;
   const context = ImageManipulator.manipulate(asset.uri);
   const longest = Math.max(asset.width ?? 0, asset.height ?? 0);
-  if (longest > UPLOAD_MAX_EDGE) {
-    const scale = UPLOAD_MAX_EDGE / longest;
+  if (longest > maxEdge) {
+    const scale = maxEdge / longest;
     context.resize({
       width: Math.round((asset.width ?? 0) * scale),
       height: Math.round((asset.height ?? 0) * scale),
@@ -33,7 +42,7 @@ export async function normalizeForUpload(asset: ImagePickerAsset): Promise<Uploa
   }
   const rendered = await context.renderAsync();
   try {
-    const saved = await rendered.saveAsync({ format: SaveFormat.JPEG, compress: JPEG_QUALITY });
+    const saved = await rendered.saveAsync({ format: SaveFormat.JPEG, compress: quality });
     return { uri: saved.uri, name: 'photo.jpg', type: 'image/jpeg' };
   } finally {
     rendered.release();

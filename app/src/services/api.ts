@@ -154,7 +154,7 @@ async function parseApiResponse<T>(status: number, body: string): Promise<T> {
  * 带文件的上传：Web 走 fetch + FormData（Blob），原生走 XHR multipart。
  * 两种路径字段与文件一致，服务端按同一套 multipart 解析。
  */
-async function uploadRequest<T>(
+export async function uploadRequest<T>(
   path: string,
   init: { method?: string; fields: Record<string, string>; files: UploadFile[] },
 ): Promise<T> {

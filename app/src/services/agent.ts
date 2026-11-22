@@ -1,4 +1,13 @@
-import { request } from '@/services/api';
+import { absoluteUrl, getToken, request, uploadRequest } from '@/services/api';
+import type { UploadImage } from '@/services/normalize-image';
+
+/** W07 聊天图片引用（服务端 public() 的 images 项） */
+export type AgentImageMeta = {
+  id: string;
+  width: number | null;
+  height: number | null;
+  bytes: number | null;
+};
 
 export type AgentTurn = {
   id: number;
@@ -22,6 +31,7 @@ export type AgentTurn = {
     soundEventCount?: number | null;
   }[];
   blocks: { type: 'text'; speaker: 'pet' | 'assistant'; text: string }[] | null;
+  images: AgentImageMeta[];
 };
 export const fetchAgentTurns = (pet: number, before?: number) =>
   request<{ turns: AgentTurn[] }>(`/agent/pets/${pet}/turns${before ? `?before=${before}` : ''}`);
@@ -32,11 +42,28 @@ export const sendAgentTurn = (
   requestId: string,
   topicId?: number,
   replyTo?: number,
+  images?: string[],
 ) =>
   request<{ turn: AgentTurn }>(`/agent/pets/${pet}/turns`, {
     method: 'POST',
-    body: { text, target, requestId, topicId, replyTo },
+    body: { text, target, requestId, topicId, replyTo, ...(images?.length ? { images } : {}) },
   });
+
+/** W07：上传聊天图片（先传后发；返回内容寻址 id 与尺寸） */
+export const uploadAgentImage = (pet: number, file: UploadImage) =>
+  uploadRequest<AgentImageMeta>(`/agent/pets/${pet}/images`, {
+    fields: {},
+    files: [{ field: 'image', uri: file.uri, name: file.name, type: file.type }],
+  });
+
+/** W07：鉴权图源（仅本人可读，区别于公开 /uploads/） */
+export function agentImageSource(imageId: string) {
+  const token = getToken();
+  return {
+    uri: absoluteUrl(`/api/app/agent/images/${imageId}`),
+    ...(token ? { headers: { 'X-Petsense-Session': token } } : {}),
+  };
+}
 
 export type AgentObservation = {
   startAt: string;
