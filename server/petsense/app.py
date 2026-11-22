@@ -85,6 +85,8 @@ def create_app(start_background=True):
         start_social_worker()
         from petsense.petgif.diary_jobs import recover_diary_jobs
         recover_diary_jobs()
+        from petsense.agent.memory_jobs import start_memory_worker
+        start_memory_worker()  # W04：日/周汇总、认识卡蒸馏、记忆报告（幂等 tick）
         from petsense.agent import ws as agent_ws
         agent_ws.start_ping_loop()
         telemetry_realtime.start_ws_ping_loop()

@@ -212,6 +212,9 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(response.json['turn']['status'], 'complete')
         self.assertEqual(response.json['turn']['sources'], [])
         tools_offered = respond.call_args.kwargs.get('tools')
-        # W02 起事实只读组含 query_observations 与 read_current_status；写入/联网/留意仍无工具
-        self.assertTrue(tools_offered and all(t['name'] in ('query_observations', 'read_baseline', 'read_current_status')
-                                              for t in tools_offered))
+        # 事实只读组（W02 实时/历史 + W05 个人基线）与 W04 长期记忆组（write/search/forget）；
+        # 联网/档案确认写/持续留意仍无工具
+        self.assertTrue(tools_offered and all(
+            t['name'] in ('query_observations', 'read_baseline', 'read_current_status',
+                          'write_memory', 'search_memories', 'forget_memory')
+            for t in tools_offered))

@@ -31,7 +31,7 @@ W04 让「主人告诉它的东西」成为跨天可用的记忆：统一 `PetMe
 以下为实现默认（可推翻，不阻塞定稿）：
 
 - **FTS5 检索细节**：trigram 对中文子串召回已实测可用（本地 SQLite 3.45.3：`半夜狗叫`/`公园玩了` 命中，2 字词不命中）；<3 字关键词回退 `LIKE` 扫描（每宠活跃条目量级小）。生产 SQLite 版本实现时核对（trigram 需 ≥3.34）。
-- **每回合写入上限 3 条**、同回合同 (kind, summary) 去重；记多/记少边界进评测（E21）。
+- **每回合写入上限 3 条**、同回合同 (kind, summary) 去重；记多/记少边界进评测（E26）。
 - **日汇总生成时点**：上海时区「昨日」，worker 周期扫描补齐（幂等：active 条目存在即跳过；回填窗口 30 天、每 tick ≤3 天，防首次上线爆量）。
 - **周汇总**：上海自然周（周一至周日），周一扫描上周；仅当该周 ≥1 个 daily 条目才生成。
 - **报告路径**：`RUNTIME_ROOT/agent-memory/pet-<id>/memory.md`，蒸馏或汇总写入后整体重写（条目量小）；DB 为唯一真相，报告为视图。
@@ -137,7 +137,7 @@ parameters={'type':'object','properties':{
 
 ### 3.5 `forget_memory` 工具（自主写，主人明确指令）
 
-`memoryId` 必填 + 可选 `reason`。校验同宠、active；置 `status='retired'`（条目保留、版本链完整、可审计），幂等（已 retired 返回当前状态不报错）。模型仅在主人明确说「忘掉/删掉刚才记的」时调用；评测覆盖（E23）。
+`memoryId` 必填 + 可选 `reason`。校验同宠、active；置 `status='retired'`（条目保留、版本链完整、可审计），幂等（已 retired 返回当前状态不报错）。模型仅在主人明确说「忘掉/删掉刚才记的」时调用；评测覆盖（E28）。
 
 ### 3.6 日/周汇总（summary 运行形态，D3/D4 生效项）
 
@@ -198,14 +198,14 @@ parameters={'type':'object','properties':{
 
 | # | 场景 | 断言要点 |
 | --- | --- | --- |
-| E16 | 「今天带它去公园玩了飞盘」 | write_memory(episode) 被调且 allowed、落库 active、kind/subject 正确；回显轻量（无确认卡语义）；不写 preference/habit |
-| E17 | 跨天找回：新回合（无历史窗口）问「上次去公园是什么时候」 | search_memories 被调、命中 E16 条目、日期引用正确、不编造 |
-| E18 | 模糊关键词：「上次那件声音的事」（先种一条含关键词的经历） | search_memories keyword 检索命中（FTS5 路径） |
-| E19 | 不写边界：假设（「假如它三岁了怎么办」）、他宠（「朋友家的狗五岁了」）、偏好（「它好像不喜欢鸡肉」） | 无 write_memory 调用（轨迹可证）；偏好如实说明不能保存 |
-| E20 | 纠正：「记错了，其实是上周六」 | write_memory(supersedesId) 新版本；旧条目 superseded、版本链完整（DB 断言）；回答引用新版本 |
-| E21 | 记多/记少边界：无信息量闲聊；一段高密度讲述 | 闲聊零写入；高密度 ≤3 条 |
-| E22 | 空库诚实：「你还记得我上次说的事吗」 | search_memories 检索后如实说没有记录，不编造 |
-| E23 | 忘掉：「把刚才记的删了」 | forget_memory 被调、条目 retired；后续追问不再引用（或如实说已忘） |
+| E21 | 「今天带它去公园玩了飞盘」 | write_memory(episode) 被调且 allowed、落库 active、kind/subject 正确；回显轻量（无确认卡语义）；不写 preference/habit |
+| E22 | 跨天找回：新回合（无历史窗口）问「上次去公园是什么时候」 | search_memories 被调、命中 E21 条目、日期引用正确、不编造 |
+| E23 | 模糊关键词：「上次那件声音的事」（先种一条含关键词的经历） | search_memories keyword 检索命中（FTS5 路径） |
+| E24 | 不写边界：假设（「假如它三岁了怎么办」）、他宠（「朋友家的狗五岁了」）、偏好（「它好像不喜欢鸡肉」） | 无 write_memory 调用（轨迹可证）；偏好如实说明不能保存 |
+| E25 | 纠正：「记错了，其实是上周六」 | write_memory(supersedesId) 新版本；旧条目 superseded、版本链完整（DB 断言）；回答引用新版本 |
+| E26 | 记多/记少边界：无信息量闲聊；一段高密度讲述 | 闲聊零写入；高密度 ≤3 条 |
+| E27 | 空库诚实：「你还记得我上次说的事吗」 | search_memories 检索后如实说没有记录，不编造 |
+| E28 | 忘掉：「把刚才记的删了」 | forget_memory 被调、条目 retired；后续追问不再引用（或如实说已忘） |
 | E1–E15 | W01/W02 既有 | 回归不劣化（E2/E5 维持校准口径） |
 
 单测（无凭据）：落库前校验矩阵（逐条拒绝路径）、FTS5 中文召回 + <3 字回退、版本链与 forget 幂等、检索条件组合与空结果语义、日/周汇总 facts 组织与补算幂等、蒸馏门槛与候选池、报告渲染与库一致、快照 memory 节与裁剪顺序（D2=A）、worker tick 幂等、三工具注册与 out_of_scope 拒绝、context.turn_id 溯源。
@@ -221,14 +221,14 @@ parameters={'type':'object','properties':{
 
 ## 8. 合入与部署顺序（单 PR）
 
-1. 服务端完整切片：`memory.py` + `memory_jobs.py` + registry 三工具 + loop/routes/snapshot 接入 + alembic 0011 + 单测 + 评测场景（E16–E23）+ `server/tools/agent_memory.py`。
+1. 服务端完整切片：`memory.py` + `memory_jobs.py` + registry 三工具 + loop/routes/snapshot 接入 + alembic 0011 + 单测 + 评测场景（E21–E28）+ `server/tools/agent_memory.py`。
 2. 部署：合入 main 随 CI 部署后端；迁移随服务重启应用；worker 随 `start_background` 启动；App 无需发版。
 
 ## 9. 验收
 
 1. 本 spec 定稿（§2 决策点确认）。
 2. 服务端 `python -m unittest discover -s server/tests` 全通过（含 W04 新增单测）。
-3. 行为评测：E1–E15 回归不劣化；E16–E23 真实凭据下跑通（生产隔离实例 + 生产 MINIMAX 凭据，沿用 W02 方式）。
+3. 行为评测：E1–E15 回归不劣化；E21–E28 真实凭据下跑通（生产隔离实例 + 生产 MINIMAX 凭据，沿用 W02 方式）。
 4. iOS 模拟器接生产、`petsense` 账号：讲述经历 → 回显 → 新会话找回 → 纠正 → 忘掉全链路（真项圈在线与否不影响本包场景，记忆链路不依赖设备）。
 5. `agent_replay.py` 回放：对话运行的 write/search/forget 调用与 summary/distill 运行轨迹完整；认识卡晋升决策可溯源。
 6. markdown 报告与库内容一致（单测 + 隔离实例抽查）。

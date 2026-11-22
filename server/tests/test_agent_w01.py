@@ -142,7 +142,9 @@ class RegistryMatrixTests(unittest.TestCase):
     def test_schemas_for_scope(self):
         self.assertEqual(registry.schemas_for('dialogue', 'out_of_scope'), [])
         names = [s['name'] for s in registry.schemas_for('dialogue', 'allowed')]
-        self.assertEqual(names, ['query_observations', 'read_baseline', 'read_current_status'])
+# W05 起只读组含 read_baseline；W04 起新增长期记忆组（write/search/forget）
+        self.assertEqual(names, ['query_observations', 'read_baseline', 'read_current_status',
+                                 'write_memory', 'search_memories', 'forget_memory'])
         self.assertEqual(registry.schemas_for('review', 'allowed'), [])
 
 
