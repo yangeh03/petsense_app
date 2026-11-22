@@ -559,6 +559,57 @@ class LeakControlTests(unittest.TestCase):
         self.assertNotIn('- [episode] 上周三半夜狗叫了好久', content)  # 不再出现在有效经历里
         self.assertIn('[episode/retired] 上周三半夜狗叫了好久', content)  # 历史版本保留可审计
 
+    def test_forget_cited_memory_hides_daily_text_from_search_and_report(self):
+        """日汇总文字编入当日记忆原文（2026-11-22 集成核查）：引用失效后不得从当前记忆复述。
+
+        检索不再返回、报告展示层占位；条目不物理删除、文字不回溯改写，历史章节保持可审计。
+        """
+        now_local = memory.parse_time('2026-11-22T20:00:00+08:00')
+        day = (now_local.astimezone(SH) - timedelta(days=1)).strftime('%Y-%m-%d')
+        start, _ = memory.shanghai_day_bounds(day)
+        for i in range(60):
+            seed_minute(self.uid, 'esp32-001', start + timedelta(minutes=i))
+        fact = '昨天下午去了海边看日出'
+        with db.session_scope() as s:
+            memory.save_entry(s, self.pet_id, kind='episode', summary=fact,
+                              start_at=start + timedelta(hours=6),
+                              generated_at=start + timedelta(hours=6))  # 当天讲述进当天日报
+        with patch.object(memory_jobs, '_model_text',
+                          return_value=f'当日小结：{fact}。观测覆盖充足。'):
+            outcome = memory_jobs.process_pet(self.pet_id, now=now_local)
+        self.assertTrue(outcome['daily'] and outcome['daily'][0]['created'])
+        with db.session_scope() as s:
+            daily = s.execute(select(PetMemory).where(PetMemory.kind == 'daily')).scalars().first()
+            self.assertIn(fact, daily.summary)
+            self.assertEqual(memory.search(s, self.pet_id, keyword='海边')['matched'], 2)  # 遗忘前：经历与日报都可检索
+        with db.session_scope() as s:
+            ep = s.execute(select(PetMemory).where(PetMemory.kind == 'episode')).scalars().first()
+            _, error = memory.forget(s, self.pet_id, ep.id)
+            self.assertIsNone(error)
+        with db.session_scope() as s:
+            daily = s.execute(select(PetMemory).where(PetMemory.kind == 'daily')).scalars().first()
+            self.assertEqual(daily.status, 'active')  # 不物理删除
+            self.assertIn(fact, daily.summary)  # 文字不回溯改写（DB 历史可审计）
+            self.assertEqual(memory.search(s, self.pet_id, keyword='海边')['matched'], 0)  # 检索不复述
+            report = memory.render_report(s, s.get(Pet, self.pet_id))
+            self.assertIn(f'- daily {day}：（待更新：引用的部分记忆已被遗忘或纠正）', report)
+            self.assertIn('## 历史版本', report)
+            self.assertIn('[episode/retired]', report)
+
+    def test_stale_insight_card_excluded_from_search(self):
+        """认识卡引用失效后同样退出检索结果（此前仅快照/报告暂停展示）。"""
+        self._seed_two_habits()
+        outcome = memory_jobs.process_pet(self.pet_id, now=utc_now())
+        self.assertTrue(outcome['distill']['distilled'])
+        with db.session_scope() as s:
+            self.assertEqual(memory.search(s, self.pet_id, keyword='稳定认识')['matched'], 1)
+        (forgotten_id, _), _ = self._habits()
+        self._forget(forgotten_id)
+        with db.session_scope() as s:
+            card = memory.active_insight(s, self.pet_id)
+            self.assertTrue(memory.stale_citations(s, card))
+            self.assertEqual(memory.search(s, self.pet_id, keyword='稳定认识')['matched'], 0)
+
 
 class DialogueIntegrationTests(unittest.TestCase):
     """POST 链路：context.turn_id 溯源、检索结果不进 sources、快照含 memory 节。"""

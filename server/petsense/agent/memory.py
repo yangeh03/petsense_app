@@ -149,8 +149,16 @@ def _fts_ids(session, pet_id, keyword):
 
 
 def search(session, pet_id, kinds=None, from_dt=None, to_dt=None, keyword=None, limit=10):
-    """结构化条件 + summary 关键词检索（只返回 active）。无发生时间的条目仅在无时间条件时返回。"""
+    """结构化条件 + summary 关键词检索（只返回 active）。
+
+    引用已失效记忆的条目（日/周汇总文字、认识卡，见 polluted_active_ids）一并
+    暂停展示——其文字可能含被遗忘/纠正的内容，不得从当前记忆复述。
+    无发生时间的条目仅在无时间条件时返回。
+    """
+    polluted = polluted_active_ids(session, pet_id)
     stmt = select(PetMemory).where(PetMemory.pet_id == pet_id, PetMemory.status == 'active')
+    if polluted:
+        stmt = stmt.where(PetMemory.id.not_in(polluted))
     if kinds:
         valid = [k for k in kinds if k in KINDS]
         if valid:
@@ -172,7 +180,7 @@ def search(session, pet_id, kinds=None, from_dt=None, to_dt=None, keyword=None, 
     rows = session.execute(stmt.order_by(PetMemory.generated_at.desc())
                            .limit(max(1, min(limit, 30)))).scalars().all()
     total = session.execute(select(func.count()).select_from(PetMemory).where(
-        PetMemory.pet_id == pet_id, PetMemory.status == 'active')).scalar_one()
+        PetMemory.pet_id == pet_id, PetMemory.status == 'active')).scalar_one() - len(polluted)
     result = {'memories': [entry_public(row) for row in rows], 'matched': len(rows),
               'totalActive': total,
               'note': '检索只覆盖当前有效记忆；无匹配不等于没有记忆，可换关键词或条件再试'}
@@ -221,10 +229,11 @@ def active_insight(session, pet_id):
 
 
 def stale_citations(session, card):
-    """认识卡引用的候选是否已失效（被遗忘或被纠正替换）。
+    """条目引用的候选是否已失效（被遗忘或被纠正替换）。
 
-    引用失效即视为卡被污染：快照与报告暂停展示该卡，蒸馏被强制提前，
-    重建时不回喂旧卡文字——保证「忘掉」后旧内容不再经认识卡泄露。
+    引用失效即视为该条文字被污染：快照与报告暂停展示认识卡，检索与报告
+    展示层暂停日/周汇总（见 polluted_active_ids），蒸馏被强制提前，
+    重建时不回喂旧卡文字——保证「忘掉」后旧内容不再经这些条目泄露。
     """
     try:
         refs = json.loads(card.source_refs or '[]')
@@ -238,6 +247,19 @@ def stale_citations(session, card):
     active = set(session.execute(select(PetMemory.id).where(
         PetMemory.id.in_(ids), PetMemory.status == 'active')).scalars().all())
     return any(i not in active for i in ids)
+
+
+def polluted_active_ids(session, pet_id):
+    """active 条目中引用已失效记忆的 id 集合（2026-11-22 集成核查推广）。
+
+    日汇总文字在生成时编入当日记忆条目原文（source_refs 引用全部当日条目），
+    认识卡同理引用其候选；其引用被遗忘/纠正后，文字不能继续当作当前记忆复述：
+    检索不再返回、报告展示层以「待更新」占位。条目本身不物理删除、文字不回溯
+    改写，历史版本章节保留可审计（spec §3.8）。
+    """
+    rows = session.execute(select(PetMemory).where(
+        PetMemory.pet_id == pet_id, PetMemory.status == 'active')).scalars().all()
+    return {row.id for row in rows if stale_citations(session, row)}
 
 
 def insight_line(session, pet_id):
@@ -364,13 +386,18 @@ def render_report(session, pet):
         or ['（暂无）']
     lines.append('')
     lines.append('## 日/周汇总（最近 14 条）')
+    polluted = polluted_active_ids(session, pet.id)
     summaries = session.execute(select(PetMemory).where(
         PetMemory.pet_id == pet.id, PetMemory.kind.in_(('daily', 'weekly')), PetMemory.status == 'active')
         .order_by(PetMemory.generated_at.desc()).limit(14)).scalars().all()
     if summaries:
         for row in summaries:
             when = row.start_at.astimezone(SHANGHAI).strftime('%Y-%m-%d') if row.start_at else '?'
-            lines.append(f'- {row.kind} {when}：{row.summary or "（仅结构化事实，无文字小结）"}')
+            if row.id in polluted:
+                # 引用失效即污染：文字不再展示（检索同样排除），条目保留、历史章节可审计
+                lines.append(f'- {row.kind} {when}：（待更新：引用的部分记忆已被遗忘或纠正）')
+            else:
+                lines.append(f'- {row.kind} {when}：{row.summary or "（仅结构化事实，无文字小结）"}')
     else:
         lines.append('（暂无）')
     lines.append('')
