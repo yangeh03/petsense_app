@@ -258,6 +258,57 @@ function SourceCard({ source, petId }: { source: AgentSource; petId: number | nu
   );
 }
 
+/** 单张主人图片：加载失败（网络/文件清理）显示占位与「图片不可用」，不影响文本渲染（spec §4.3） */
+function OwnerImage({
+  meta,
+  style,
+  label,
+  onOpen,
+}: {
+  meta: AgentImageMeta;
+  style: { width: number; height: number };
+  label: string;
+  onOpen: () => void;
+}) {
+  const theme = useTheme();
+  const [failed, setFailed] = useState(false);
+  return (
+    <Pressable
+      accessibilityRole="imagebutton"
+      accessibilityLabel={failed ? '图片不可用' : label}
+      onPress={onOpen}
+      style={[styles.ownerImage, style]}
+    >
+      {failed ? (
+        <View
+          style={[
+            StyleSheet.absoluteFill,
+            styles.ownerImageUnavailable,
+            { backgroundColor: theme.backgroundSelected },
+          ]}
+        >
+          <SymbolView
+            name={{ ios: 'photo', android: 'image', web: 'image' }}
+            tintColor={theme.textSecondary}
+            size={20}
+          />
+          <ThemedText type="small" themeColor="textSecondary">
+            图片不可用
+          </ThemedText>
+        </View>
+      ) : (
+        <Image
+          source={agentImageSource(meta.id)}
+          style={StyleSheet.absoluteFill}
+          contentFit="cover"
+          transition={120}
+          onError={() => setFailed(true)}
+        />
+      )}
+    </Pressable>
+  );
+}
+
 /** 主人气泡图片：1 张按宽高比自适应，2–3 张两列方格（W07 §4.3） */
 function OwnerImages({
   images,
@@ -272,38 +323,19 @@ function OwnerImages({
     const width = 232;
     const height = Math.max(96, Math.min(320, Math.round(width / ratio)));
     return (
-      <Pressable
-        accessibilityRole="imagebutton"
-        accessibilityLabel="查看图片"
-        onPress={() => onOpen(0)}
-        style={[styles.ownerImage, { width, height }]}
-      >
-        <Image
-          source={agentImageSource(meta.id)}
-          style={StyleSheet.absoluteFill}
-          contentFit="cover"
-          transition={120}
-        />
-      </Pressable>
+      <OwnerImage meta={meta} style={{ width, height }} label="查看图片" onOpen={() => onOpen(0)} />
     );
   }
   return (
     <View style={styles.ownerGrid}>
       {images.map((meta, index) => (
-        <Pressable
+        <OwnerImage
           key={meta.id}
-          accessibilityRole="imagebutton"
-          accessibilityLabel={`查看第 ${index + 1} 张图片`}
-          onPress={() => onOpen(index)}
-          style={styles.ownerGridCell}
-        >
-          <Image
-            source={agentImageSource(meta.id)}
-            style={StyleSheet.absoluteFill}
-            contentFit="cover"
-            transition={120}
-          />
-        </Pressable>
+          meta={meta}
+          style={{ width: 104, height: 104 }}
+          label={`查看第 ${index + 1} 张图片`}
+          onOpen={() => onOpen(index)}
+        />
       ))}
     </View>
   );
@@ -436,13 +468,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   ownerImage: { borderRadius: 12, overflow: 'hidden' },
+  ownerImageUnavailable: { alignItems: 'center', justifyContent: 'center', gap: 6 },
   ownerGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 4 },
-  ownerGridCell: {
-    width: 104,
-    height: 104,
-    borderRadius: 10,
-    overflow: 'hidden',
-  },
   replyColumn: { gap: 10 },
   replyRow: { flexDirection: 'row', gap: 9, alignItems: 'flex-start' },
   replyBody: { flex: 1, gap: 6, paddingTop: 2 },

@@ -18,7 +18,7 @@ import {
   uploadAgentImage,
   type AgentTurn,
 } from '@/services/agent';
-import { fetchDashboard } from '@/services/api';
+import { ApiError, fetchDashboard } from '@/services/api';
 import {
   AGENT_JPEG_QUALITY,
   AGENT_UPLOAD_MAX_EDGE,
@@ -249,9 +249,14 @@ export function useAgentChat(user: { id: number } | null) {
         width: meta.width ?? attachment.width,
         height: meta.height ?? attachment.height,
         status: 'done',
+        failReason: undefined,
       });
-    } catch {
-      useAgentChatStore.getState().updateAttachment(attachment.key, { status: 'failed' });
+    } catch (error) {
+      // 服务端结构化消息如实透出（如超配额「请先清理历史图片」），网络失败用通用文案
+      const reason = error instanceof ApiError ? error.message : '图片上传失败，请检查网络后重试';
+      useAgentChatStore
+        .getState()
+        .updateAttachment(attachment.key, { status: 'failed', failReason: reason });
     }
   }, []);
 
@@ -274,10 +279,15 @@ export function useAgentChat(user: { id: number } | null) {
       if (result.canceled) return;
       for (const asset of result.assets.slice(0, limit)) {
         const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        const normalized = await normalizeForUpload(asset, {
-          maxEdge: AGENT_UPLOAD_MAX_EDGE,
-          quality: AGENT_JPEG_QUALITY,
-        });
+        let normalized: Awaited<ReturnType<typeof normalizeForUpload>>;
+        try {
+          normalized = await normalizeForUpload(asset, {
+            maxEdge: AGENT_UPLOAD_MAX_EDGE,
+            quality: AGENT_JPEG_QUALITY,
+          });
+        } catch {
+          continue; // 单张压缩失败跳过该张，不阻断其余选择
+        }
         const attachment: AgentAttachment = {
           key,
           localUri: normalized.uri,
@@ -311,7 +321,8 @@ export function useAgentChat(user: { id: number } | null) {
     const state = useAgentChatStore.getState();
     const draft = state.draft.trim();
     if (!state.petId || state.busy) return;
-    if (state.attachments.some((item) => item.status === 'uploading')) return;
+    // 未全完成不可发（含失败，spec §4.1）：失败图留在预览条等重试或移除，不随消息发出也不被清掉
+    if (state.attachments.some((item) => item.status !== 'done')) return;
     const images = state.attachments
       .filter((item) => item.status === 'done' && item.imageId)
       .map((item) => item.imageId as string);

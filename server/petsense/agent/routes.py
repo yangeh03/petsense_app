@@ -84,7 +84,8 @@ def serve_image(image_id):
     if not path or not os.path.isfile(path):
         return {'message': '图片不存在'}, 404
     response = send_file(path, mimetype='image/jpeg')  # 内容寻址，永不变化
-    response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+    # private：鉴权端点（D3 仅本人可读），内容寻址故 immutable，但不进共享缓存
+    response.headers['Cache-Control'] = 'private, max-age=31536000, immutable'
     return response
 
 
@@ -132,9 +133,10 @@ def turns(pet_id):
             return {'message': '请输入消息'}, 400
         text, key, target = data.get('text'), data.get('requestId'), data.get('target', 'auto')
         raw_images = data.get('images') if data.get('images') is not None else []
+        # 先校验元素类型（非字符串不可哈希，set() 去重必须放在后面，否则 500）
         if not isinstance(raw_images, list) or len(raw_images) > MAX_IMAGES_PER_TURN \
-                or len(set(raw_images)) != len(raw_images) \
-                or any(not isinstance(i, str) or not attachments.IMAGE_ID_RE.match(i) for i in raw_images):
+                or any(not isinstance(i, str) or not attachments.IMAGE_ID_RE.match(i) for i in raw_images) \
+                or len(set(raw_images)) != len(raw_images):
             return {'message': '图片引用无效'}, 400
         # 有图可纯图发送（W07 D2/实现默认）：text 允许为空，但仍须是字符串且 ≤4000
         if not isinstance(text, str) or len(text) > 4000 or (not text.strip() and not raw_images) \

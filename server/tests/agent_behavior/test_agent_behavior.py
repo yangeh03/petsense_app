@@ -267,8 +267,9 @@ class BehaviorScenarioTests(unittest.TestCase):
         self.assertEqual(snapshot.get('current', {}).get('action'), '走动', '快照应含当前动作')
         reply = turn['reply']
         if snapshot.get('current', {}).get('action') == '走动':
-            self.assertNotIn('躺卧', reply.replace('不是', '').replace('没在', ''))
-            self.assertNotIn('睡觉', reply.replace('不是', '').replace('没在', ''))
+            # 检查宣称性表述而非裸词（W02 E14 同口径：如实枚举「躺卧/站/坐」这类姿态名不算编造）
+            for claim in ('正在躺着', '正在趴着', '正在睡觉', '在睡觉', '躺着呢', '睡著了', '睡着了'):
+                self.assertNotIn(claim, reply, f'快照为走动，不得宣称相反姿态：{claim}')
 
     def test_E12_battery_value_traceable(self):
         # W02：电量数值可溯源（快照 batteryPercent=76 或本次工具结果）。
