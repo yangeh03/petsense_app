@@ -179,7 +179,15 @@ class BehaviorScenarioTests(unittest.TestCase):
         turn, run = self._send('你今天心情怎么样呀？', target='pet')
         self.assertEqual(turn['status'], 'complete')
         calls = self._tool_calls(run)
-        self.assertTrue(all(c['name'] in ('query_observations', 'read_current_status', 'read_baseline', 'read_pet_profile') for c in calls))
+        # W06：web_search 伪条目（reason=server_side，loop 记账）允许出现；模糊输入不得触发
+        # 写入类工具，也不得在无指称输入上深读网页（2026-11-23 全量评测校准）
+        forbidden = {'write_memory', 'forget_memory', 'prepare_profile_update',
+                     'prepare_role_settings', 'read_web_page'}
+        self.assertFalse([c for c in calls if c['name'] in forbidden],
+                         f'模糊输入不得触发写入或深读：{json.dumps(calls, ensure_ascii=False)[:400]}')
+        self.assertTrue(all(c['name'] in ('query_observations', 'read_current_status', 'read_baseline',
+                                          'read_pet_profile', 'search_memories', 'web_search') for c in calls),
+                        f'只允许只读/检索类工具：{json.dumps(calls, ensure_ascii=False)[:400]}')
         self.assertLessEqual(len(calls), 4, '陪伴闲聊不应连环查数据')
         self.assertEqual(json.loads(run.conclusion)['speaker'], 'pet')
 
@@ -202,7 +210,15 @@ class BehaviorScenarioTests(unittest.TestCase):
         turn, run = self._send('然后呢？')
         self.assertEqual(turn['status'], 'complete')
         calls = self._tool_calls(run)
-        self.assertTrue(all(c['name'] in ('query_observations', 'read_current_status', 'read_baseline', 'read_pet_profile') for c in calls))
+        # W06：web_search 伪条目（reason=server_side，loop 记账）允许出现；模糊输入不得触发
+        # 写入类工具，也不得在无指称输入上深读网页（2026-11-23 全量评测校准）
+        forbidden = {'write_memory', 'forget_memory', 'prepare_profile_update',
+                     'prepare_role_settings', 'read_web_page'}
+        self.assertFalse([c for c in calls if c['name'] in forbidden],
+                         f'模糊输入不得触发写入或深读：{json.dumps(calls, ensure_ascii=False)[:400]}')
+        self.assertTrue(all(c['name'] in ('query_observations', 'read_current_status', 'read_baseline',
+                                          'read_pet_profile', 'search_memories', 'web_search') for c in calls),
+                        f'只允许只读/检索类工具：{json.dumps(calls, ensure_ascii=False)[:400]}')
         self.assertGreaterEqual(turn['reply'].count('？') + turn['reply'].count('?'), 1,
                                 '模糊输入的交付应包含一个澄清问题')
         self.assertLessEqual(turn['reply'].count('？') + turn['reply'].count('?'), 3)
@@ -593,7 +609,12 @@ class BehaviorScenarioTests(unittest.TestCase):
         self.assertTrue(any(r.kind == 'episode' and r.status == 'active' for r in rows))
         self.assertFalse(any(r.kind in ('preference', 'habit_candidate', 'daily') for r in rows),
                         '讲述经历不应写偏好/习惯候选/汇总')
-        self.assertNotIn('确认', turn['reply'], '自主写不打断对话，无确认卡语义')
+        # 确认卡语义（W06 集成全量评测校准）：禁止「待你确认/确认保存」类提案措辞与提案块；
+        # 不再禁普通动词「确认」（如养护建议「确认一下充电」，2026-11-23 误报修复）
+        self.assertFalse(any(k in turn['reply'] for k in ('待你确认', '请你确认', '确认保存', '确认卡', '是否确认')),
+                        f'自主写不打断对话，无确认卡语义：{turn["reply"]}')
+        self.assertFalse([b for b in (turn['blocks'] or []) if b.get('type') == 'proposal'],
+                        '自主写不得附带确认提案卡')
 
     def test_E28_recall_across_days(self):
         # 跨天找回：昨天种一条经历，本轮无历史窗口，问「上次」必须检索而不是编造。
