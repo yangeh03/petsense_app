@@ -386,6 +386,140 @@ class BehaviorScenarioTests(unittest.TestCase):
                             ('认识', '学习', '积累', '有效日', '还需要', '暂时', '还不', '无法', '不能')),
                         f'声音认识中应说明学习状态：{reply}')
 
+    # ---- W04：长期记忆与分级写入（agent-w04-spec.md §6，E21–E28） ----
+
+    def _write_calls(self, run):
+        return [c for c in self._tool_calls(run)
+                if c['name'] == 'write_memory' and c['allowed']]
+
+    def _memory_rows(self, kind=None):
+        from petsense.db.models.memory import PetMemory
+        with db.session_scope() as s:
+            stmt = select(PetMemory).where(PetMemory.pet_id == self.pet)
+            if kind:
+                stmt = stmt.where(PetMemory.kind == kind)
+            return s.execute(stmt.order_by(PetMemory.id)).scalars().all()
+
+    def _seed_episode(self, summary, day_offset=1):
+        from petsense.agent import memory as memory_store
+        from petsense.db.models.memory import PetMemory
+        start = (datetime.now(SHANGHAI) - timedelta(days=day_offset)).replace(
+            hour=15, minute=0, second=0, microsecond=0)
+        with db.session_scope() as s:
+            entry, error = memory_store.save_entry(
+                s, self.pet, kind='episode', summary=summary,
+                start_at=start.astimezone(ZoneInfo('UTC')), end_at=None)
+            assert error is None, error
+            return entry.id
+
+    def test_E21_experience_autonomous_write(self):
+        # 主人讲述经历 → write_memory(episode) 自主写、轻量回显；不写偏好/习惯候选。
+        turn, run = self._send('今天下午带它去公园玩了飞盘，它玩得特别开心')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        writes = self._write_calls(run)
+        self.assertTrue(writes, '主人讲述经历应触发 write_memory（轨迹可证）')
+        args = json.loads(writes[0]['arguments'])
+        self.assertEqual(args.get('kind'), 'episode', json.dumps(writes, ensure_ascii=False))
+        rows = self._memory_rows()
+        self.assertTrue(any(r.kind == 'episode' and r.status == 'active' for r in rows))
+        self.assertFalse(any(r.kind in ('preference', 'habit_candidate', 'daily') for r in rows),
+                        '讲述经历不应写偏好/习惯候选/汇总')
+        self.assertNotIn('确认', turn['reply'], '自主写不打断对话，无确认卡语义')
+
+    def test_E22_recall_across_days(self):
+        # 跨天找回：昨天种一条经历，本轮无历史窗口，问「上次」必须检索而不是编造。
+        yesterday = (datetime.now(SHANGHAI) - timedelta(days=1)).strftime('%Y-%m-%d')
+        self._seed_episode('带它去公园玩了飞盘，它玩得特别开心')
+        turn, run = self._send('我上次说去公园是什么时候来着？')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        calls = [c for c in self._tool_calls(run) if c['name'] == 'search_memories' and c['allowed']]
+        self.assertTrue(calls, '找回过去的事必须先 search_memories（轨迹可证）')
+        self.assertIn('公园', turn['reply'])
+        self.assertTrue(any((k in turn['reply']) for k in (yesterday, '昨天', '前一天')),
+                        f'日期应来自记忆条目：{turn["reply"]}')
+
+    def test_E23_fuzzy_keyword_recall(self):
+        # 模糊关键词（「上次那件半夜叫的事」）：FTS5 关键词召回。
+        self._seed_episode('上周三半夜狗叫了好久，后来发现是隔壁装修')
+        turn, run = self._send('上次那件半夜叫的事是什么情况来着？')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        calls = [c for c in self._tool_calls(run) if c['name'] == 'search_memories' and c['allowed']]
+        self.assertTrue(calls, json.dumps(self._tool_calls(run), ensure_ascii=False))
+        args = json.loads(calls[0]['arguments'])
+        self.assertTrue(args.get('keyword'), '模糊指称应带关键词检索')
+        self.assertTrue(any(k in turn['reply'] for k in ('叫', '装修', '隔壁')),
+                        f'应引用记忆内容：{turn["reply"]}')
+
+    def test_E24_no_write_boundaries(self):
+        # 假设、他宠、偏好：一律不写（轨迹可证）；偏好如实说明确认保存未接入。
+        turn, run = self._send('假如它三岁了，一天要睡多久？')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        self.assertEqual(self._write_calls(run), [], '假设不写入')
+        turn, run = self._send('朋友家的狗今年五岁了，帮我记住')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        self.assertEqual(self._write_calls(run), [], '其他主体不写入')
+        turn, run = self._send('它好像不喜欢吃鸡肉，帮我记住这个')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        writes = self._write_calls(run)
+        self.assertEqual(writes, [], '长期偏好属确认写，本包不自主写入')
+        self.assertTrue(any(k in turn['reply'] for k in ('确认', '不能', '暂时', '还无法', '尚未')),
+                        f'偏好应如实说明确认保存未接入：{turn["reply"]}')
+        self.assertEqual(self._memory_rows(), [], '三类内容都不应落库')
+
+    def test_E25_correction_supersedes(self):
+        # 纠正：「记错了」→ supersedesId 新版本，旧条目 superseded、版本链完整。
+        turn, run = self._send('记住：它上次洗澡是上周六')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        self.assertTrue(self._write_calls(run), '先正确写入一条')
+        first = self._memory_rows('episode')[0]
+        turn, run = self._send('刚才记错了，它上次洗澡其实是上周日')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        writes = self._write_calls(run)
+        self.assertTrue(writes, '纠正应再次写入')
+        args = json.loads(writes[-1]['arguments'])
+        self.assertTrue(args.get('supersedesId') or args.get('forget'),
+                        f'纠正应引用旧条目：{json.dumps(writes, ensure_ascii=False)}')
+        rows = self._memory_rows('episode')
+        active = [r for r in rows if r.status == 'active']
+        self.assertEqual(len(active), 1, '纠正后只有一条当前有效版本')
+        self.assertEqual(active[0].version, 2, '版本链应递增')
+        self.assertTrue(any(r.status in ('superseded', 'retired') for r in rows), '旧版本保留可追溯')
+
+    def test_E26_write_boundaries_chitchat_vs_dense(self):
+        # 记少：无信息量闲聊零写入；记多上限：高密度讲述 ≤3 条。
+        turn, run = self._send('在吗？')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        self.assertEqual(self._write_calls(run), [], '闲聊不写记忆')
+        turn, run = self._send(
+            '今天去了趟宠物医院，医生说它耳朵有点发炎给开了滴耳液；'
+            '顺路买了新的鸡肉冻干它超爱；护士提醒下周三要复诊')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        writes = self._write_calls(run)
+        self.assertTrue(writes, '高密度讲述应至少记一条')
+        self.assertLessEqual(len(self._memory_rows()), 3, '每回合写入上限 3 条')
+
+    def test_E27_empty_store_honest(self):
+        # 空库诚实：无记忆时不编造。
+        turn, run = self._send('你还记得我上次跟你说的事吗？')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        calls = [c for c in self._tool_calls(run) if c['name'] == 'search_memories' and c['allowed']]
+        self.assertTrue(calls, '应先检索记忆')
+        self.assertTrue(any(k in turn['reply'] for k in ('没有', '还没', '不记得', '没记住', '暂时没有')),
+                        f'空库应如实说明：{turn["reply"]}')
+
+    def test_E28_forget_on_request(self):
+        # 忘掉：主人明确要求 → forget_memory，条目 retired。
+        turn, run = self._send('记住：它下周四要吃驱虫药')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        self.assertTrue(self._write_calls(run), '先写入一条')
+        memory_id = self._memory_rows()[0].id
+        turn, run = self._send('把刚才记的那条忘掉吧')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        calls = [c for c in self._tool_calls(run) if c['name'] == 'forget_memory' and c['allowed']]
+        self.assertTrue(calls, '明确要求忘掉应调用 forget_memory')
+        rows = self._memory_rows()
+        self.assertTrue(all(r.status == 'retired' for r in rows), '条目应 retired 且保留可审计')
+
 
 if __name__ == '__main__':
     unittest.main()

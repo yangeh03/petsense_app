@@ -164,6 +164,7 @@ flowchart TD
 | 事实 | `read_pet_profile()` | 只读 | 完整档案（含体重记录等扩展字段） |
 | 记忆 | `search_memories(filters, keyword?)` | 只读 | 按宠物/日期/类型/主题/任务的结构化条件 + summary 关键词（FTS5）检索经历、偏好、回信 |
 | 记忆 | `write_memory(entry)` | **自主写** | 分级写入：经历、事件、习惯候选、会话要点（见第 8 章），带来源与版本 |
+| 记忆 | `forget_memory(memoryId)` | **自主写** | 主人明确要求忘掉时将条目置 retired（保留可审计、幂等；W04 注册） |
 | 资料 | `prepare_profile_update(fields)` | 确认写 | 档案事实写入提案（生日/体重/品种等），经确认协议生效 |
 | 设定 | `read_role_settings()` / `prepare_role_settings(...)` | 读 / 直写 | 助手设定；明确指令（「以后叫你小禾」）直写回显 |
 | 任务 | `read_task(task_id?)` | 只读 | 目标计划、进度、已观察窗口、结果；缺省列活跃目标 |
