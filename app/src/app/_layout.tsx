@@ -30,6 +30,7 @@ export default function RootLayout() {
             <Stack.Screen name="social-inbox" />
             <Stack.Screen name="bookmarks" />
             <Stack.Screen name="profile-edit" options={{ presentation: 'modal' }} />
+            <Stack.Screen name="assistant-settings" options={{ presentation: 'modal' }} />
             <Stack.Screen
               name="records"
               options={{ headerShown: true, title: '记录', headerBackButtonDisplayMode: 'minimal' }}

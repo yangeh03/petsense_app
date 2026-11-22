@@ -31,7 +31,44 @@ test('editing other fields preserves an existing photo; whitespace alone is not 
     avatarEmoji: '🐶',
     avatarMode: 'keep',
     avatarTemplateId: 'marni',
+    birthDate: null,
   });
+});
+test('birthday accepts precision-aware inputs; labels and age follow precision', () => {
+  const draft = profile.createPetDraft(pet);
+  assert.equal(
+    profile.validatePetDraft({ ...draft, birthDate: '2023-09-10' }).birthDate,
+    undefined,
+  );
+  assert.equal(profile.validatePetDraft({ ...draft, birthDate: '2023-09' }).birthDate, undefined);
+  assert.equal(profile.validatePetDraft({ ...draft, birthDate: '2023' }).birthDate, undefined);
+  assert.ok(profile.validatePetDraft({ ...draft, birthDate: '2024-13' }).birthDate);
+  assert.ok(profile.validatePetDraft({ ...draft, birthDate: '1800' }).birthDate);
+  assert.ok(profile.validatePetDraft({ ...draft, birthDate: '20230910' }).birthDate);
+  assert.equal(
+    profile.birthLabel({ birthDate: '2023-09-10', birthDatePrecision: 'day' }),
+    '2023-09-10',
+  );
+  assert.equal(
+    profile.birthLabel({ birthDate: '2023-09-01', birthDatePrecision: 'month' }),
+    '约 2023 年 9 月',
+  );
+  assert.equal(
+    profile.birthLabel({ birthDate: '2023-01-01', birthDatePrecision: 'year' }),
+    '约 2023 年',
+  );
+  assert.equal(profile.birthLabel({}), '未填写');
+  assert.match(
+    profile.ageLabel({ birthDate: '2023-09-10', birthDatePrecision: 'day' }) ?? '',
+    /^\d+ 岁$/,
+  );
+  assert.match(
+    profile.ageLabel({ birthDate: '2023-01-01', birthDatePrecision: 'year' }) ?? '',
+    /^约 \d+ 岁$/,
+  );
+  assert.equal(profile.ageLabel({}), null);
+  assert.equal(profile.isPetDraftDirty(pet, { ...draft, birthDate: '2023' }), true);
+  assert.equal(profile.buildPetUpdate({ ...draft, birthDate: ' 2023-09 ' }).birthDate, '2023-09');
 });
 test('photo selection and switching to emoji are explicit mutations', () => {
   const draft = profile.createPetDraft(pet);

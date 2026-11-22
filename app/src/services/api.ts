@@ -245,6 +245,48 @@ export async function updatePet(petId: number, input: PetUpdate): Promise<{ pet:
   });
 }
 
+// ─── W03：体重记录与助手设定（agent-w03-spec.md §3.7） ───
+
+export interface WeightRecord {
+  id: number;
+  measuredOn: string;
+  weightKg: number;
+  rawText: string | null;
+  source: 'owner' | 'agent';
+}
+
+export function fetchWeightRecords(petId: number): Promise<{ records: WeightRecord[] }> {
+  return request(`/pets/${petId}/weight-records`);
+}
+
+export function addWeightRecord(
+  petId: number,
+  input: { weightKg: number; measuredOn?: string },
+): Promise<{ record: WeightRecord }> {
+  return request(`/pets/${petId}/weight-records`, { method: 'POST', body: input });
+}
+
+export function deleteWeightRecord(petId: number, recordId: number): Promise<{ success: boolean }> {
+  return request(`/pets/${petId}/weight-records/${recordId}`, { method: 'DELETE' });
+}
+
+export interface CompanionSettings {
+  assistantName: string;
+  ownerTitle: string | null;
+  verbosity: 'concise' | 'detailed';
+  proactivity: 0 | 1 | 2;
+}
+
+export function fetchAssistantSettings(): Promise<{ settings: CompanionSettings }> {
+  return request('/agent/assistant-settings');
+}
+
+export function updateAssistantSettings(
+  input: Partial<CompanionSettings>,
+): Promise<{ settings: CompanionSettings }> {
+  return request('/agent/assistant-settings', { method: 'PATCH', body: input });
+}
+
 // ─── 设备（一人一设备，认领即绑定宠物） ───
 
 export interface MyDevice {
