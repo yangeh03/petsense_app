@@ -95,9 +95,10 @@ def main():
         delta = abs(entry['seconds'] - row['seconds'])
         if delta > args.tolerance:
             diffs.append((key, entry['seconds'], row['seconds'], delta))
-        if valid(entry['seconds'], json.dumps(sorted(entry['slots']))) != valid(row['seconds'], row['slots']):
-            diffs.append((key, 'valid-day 判定不一致',
-                          f"rebuilt={valid(entry['seconds'], '[]')}", f"stored={valid(row['seconds'], row['slots'])}"))
+        rebuilt_valid = valid(entry['seconds'], json.dumps(sorted(entry['slots'])))
+        if rebuilt_valid != valid(row['seconds'], row['slots']):
+            diffs.append((key, 'valid-day 判定不一致', f'rebuilt={rebuilt_valid}',
+                          f"stored={valid(row['seconds'], row['slots'])}"))
     for key in sorted(set(stored_by_key) - set(rebuilt)):
         missing_in_rebuild.append(key)
 
