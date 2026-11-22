@@ -12,6 +12,7 @@ from concurrent.futures import TimeoutError as FutureTimeout
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from petsense.agent import baseline as baseline_service
 from petsense.agent.observations import query as observations_query
 from petsense.common import shanghai_now
 from petsense.db import iso_z, session_scope, utc_now
@@ -94,6 +95,36 @@ register(ToolSpec(
                         'description': 'minute=分钟汇总（默认）；summary=仅窗口总量'}},
         'required': ['start', 'end'], 'additionalProperties': False},
     group=FACT_READ, forms=(DIALOGUE,), execute=_execute_query_observations))
+
+
+def _execute_read_baseline(args, context):
+    feature = args.get('feature')
+    features = [feature] if feature in ('actions', 'sounds') else None
+    date = args.get('date')
+    date = date.strip() if isinstance(date, str) else None
+    with session_scope() as s:
+        pet = s.get(Pet, context['pet_id'])
+        if pet is None or pet.user_id != context['user_id']:
+            raise ValueError('宠物归属已变化')
+        try:
+            return baseline_service.read_baseline(s, pet, features=features, date_str=date)
+        except ValueError as exc:
+            return {'error': f'{exc}。请修正参数后重试（date 为上海日期 YYYY-MM-DD，不晚于今天）。'}
+
+
+register(ToolSpec(
+    name='read_baseline',
+    description='查询本宠的个人基线与认识进度：认识中（不足7个有效日）只有进度、没有个人参照范围，'
+                '不得说「比平时」；已就绪时给出全天与四个时段（夜间/上午/下午/晚间）的个人参照范围'
+                '（p10–p90 与中位数）以及当天（或指定日期）实际值、覆盖与能否比较。'
+                'feature 缺省查动作与声音两个维度；date 缺省今天（上海日期 YYYY-MM-DD，不晚于今天）。'
+                '参照范围与当日数值只能来自本工具结果，覆盖不足的时段不能当作活动减少或增加。',
+    parameters={'type': 'object', 'properties': {
+        'feature': {'type': 'string', 'enum': ['actions', 'sounds'],
+                    'description': '维度：actions=动作（走动），sounds=声音（叫声等事件）'},
+        'date': {'type': 'string', 'description': '对比日期，上海日期 YYYY-MM-DD，缺省今天'}},
+        'additionalProperties': False},
+    group=FACT_READ, forms=(DIALOGUE,), execute=_execute_read_baseline))
 
 
 def _bucket_actions(rows, start):

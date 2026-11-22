@@ -58,6 +58,8 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
   const {
     learningDays,
     soundDays,
+    learningState,
+    soundState,
     followReply,
     setFollowReply,
     reload,
@@ -136,18 +138,27 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
             accessibilityState={{ expanded: showLearning }}
             style={[styles.pill, { backgroundColor: theme.backgroundSelected }]}
           >
-            <ThemedText type="smallBold">认识中 {Math.min(7, learningDays)}/7</ThemedText>
+            <ThemedText type="smallBold">
+              {learningState === 'ready' ? '已认识' : `认识中 ${Math.min(7, learningDays)}/7`}
+            </ThemedText>
           </Pressable>
         ) : null}
       </View>
       {showLearning && learningDays !== null ? (
         <View style={[styles.learning, { backgroundColor: theme.backgroundElement }]}>
-          <ThemedText type="smallBold">慢慢认识它的日常</ThemedText>
-          <ThemedText type="small" themeColor="textSecondary">
-            动作 {Math.min(7, learningDays)}/7 天 · 声音 {Math.min(7, soundDays)}/7 天
+          <ThemedText type="smallBold">
+            {learningState === 'ready' && soundState === 'ready'
+              ? '已经认识它的日常'
+              : '慢慢认识它的日常'}
           </ThemedText>
           <ThemedText type="small" themeColor="textSecondary">
-            区域观察等待接入，个人日常参照仍在建立。
+            {learningState === 'ready' ? '动作 已认识' : `动作 ${Math.min(7, learningDays)}/7 天`} ·{' '}
+            {soundState === 'ready' ? '声音 已认识' : `声音 ${Math.min(7, soundDays)}/7 天`}
+          </ThemedText>
+          <ThemedText type="small" themeColor="textSecondary">
+            {learningState === 'ready' && soundState === 'ready'
+              ? '动作与声音的个人日常参照已建立。'
+              : '区域观察等待接入，个人日常参照仍在建立。'}
           </ThemedText>
         </View>
       ) : null}

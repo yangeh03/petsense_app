@@ -159,3 +159,11 @@ read_baseline(feature?: 'actions'|'sounds', date?: 'YYYY-MM-DD')
 - [ ] 回填核验工具在云端只读副本上运行，差异为零或差异均有解释（无版本标注数据单列）。
 - [ ] iOS 模拟器接生产（账号 `petsense`）：学习行/认识中卡状态正确；就绪维度对话「比平时」类问题回答引用工具结果（轨迹回放取证）。
 - [ ] 文档更新：本 spec §9、AGENTS.md 工作包状态、P00 契约如需（`read_baseline` 已在契约工具清单，无字段级变更则不动）。
+
+### 9.1 实施记录（2026-11-22，分支 `agent-w05-baseline`）
+
+按定稿 spec 完成：`agent/baseline.py`（样本口径、惰性重算、dimension_states 单一结果源、read_baseline 组装）、`pet_baselines` 表（alembic 0011，迁移链隔离实例 `upgrade head` 验证至 0011）、`read_baseline` 工具注册（FACT_READ / DIALOGUE）、`GET /api/app/agent/pets/<id>/baseline`、快照学习行逐维度状态（「动作 已就绪、声音 n/7 天（学习中）」，维度顺序固定 actions→sounds）、observations `learning*` 真实状态、系统提示补基线语义与「认识中不得说比平时」约束、回填核验工具 `server/tools/agent_baseline_rebuild.py`（只读；开发中修复了 UTC→上海时区解析导致日期归属差一天的 bug）、App 认识中卡就绪态（服务 `state` 字段 + 卡片文案）。
+
+本地已验证：服务端全量 271 测试通过（新增 `test_agent_w05.py` 21 个：分位、水位幂等、28 天窗口、覆盖门槛、明细裁剪、版本切换、date 截断、工具/HTTP/越权、observations 状态、未绑定；三处旧测试的工具清单断言与表清单守护测试按加法变更更新）；客户端 lint / typecheck / format:check / test（99 个）全绿；核验工具在一致种子数据上差异为零。
+
+待验收：行为评测 E16–E20（需 MINIMAX 凭据）、云端只读副本核验、模拟器接生产实测——合入部署后按上面清单逐项勾选。

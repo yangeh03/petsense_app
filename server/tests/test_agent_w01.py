@@ -142,7 +142,7 @@ class RegistryMatrixTests(unittest.TestCase):
     def test_schemas_for_scope(self):
         self.assertEqual(registry.schemas_for('dialogue', 'out_of_scope'), [])
         names = [s['name'] for s in registry.schemas_for('dialogue', 'allowed')]
-        self.assertEqual(names, ['query_observations', 'read_current_status'])
+        self.assertEqual(names, ['query_observations', 'read_baseline', 'read_current_status'])
         self.assertEqual(registry.schemas_for('review', 'allowed'), [])
 
 

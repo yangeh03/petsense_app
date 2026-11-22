@@ -53,6 +53,8 @@ export function useAgentChat(user: { id: number } | null) {
   const store = useAgentChatStore();
   const [learningDays, setLearningDays] = useState<number | null>(null);
   const [soundDays, setSoundDays] = useState(0);
+  const [learningState, setLearningState] = useState('learning');
+  const [soundState, setSoundState] = useState('learning');
   const [followReply, setFollowReply] = useState(false);
   const restoredFor = useRef<number | null>(null);
   const wasOpen = useRef(false);
@@ -85,8 +87,13 @@ export function useAgentChat(user: { id: number } | null) {
           end.toISOString(),
         );
         setLearningDays(facts.learning.validDays);
+        setLearningState(facts.learning.state);
         setSoundDays(
           facts.learningDimensions.find((value) => value.dimension === 'sounds')?.validDays ?? 0,
+        );
+        setSoundState(
+          facts.learningDimensions.find((value) => value.dimension === 'sounds')?.state ??
+            'learning',
         );
       }
       useAgentChatStore.getState().setLoadedFor(userId);
@@ -276,6 +283,8 @@ export function useAgentChat(user: { id: number } | null) {
   return {
     learningDays,
     soundDays,
+    learningState,
+    soundState,
     followReply,
     setFollowReply,
     reload,

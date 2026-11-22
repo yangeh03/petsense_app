@@ -7,7 +7,7 @@
 import json
 
 from petsense import config
-from petsense.agent import learning
+from petsense.agent import baseline
 from petsense.common import shanghai_now
 from petsense.db import iso_z
 from petsense.db.models import TelemetryLatest
@@ -46,13 +46,25 @@ def _ambient(session, pet, now):
 
 
 def _learning_line(session, pet):
-    dimensions = learning.progress(session, pet)
-    if not dimensions:
+    """学习行（W05 升级）：逐维度真实状态；触发惰性基线重算（D4），失败不影响展示。"""
+    try:
+        baseline.ensure_baseline(session, pet)
+    except Exception:
+        pass  # 重算失败时按证据行现算状态，对话不阻断（spec §5）
+    states = [d for d in baseline.dimension_states(session, pet) if d.get('active')]
+    states.sort(key=lambda d: baseline.FEATURES.index(d['dimension'])
+                if d['dimension'] in baseline.FEATURES else 99)
+    if not states:
         return '尚无有效观测累计（学习中）'
-    parts = [f"{_DIMENSION_LABELS.get(d['dimension'], d['dimension'])} {d['validDays']}/{d['requiredDays']} 天"
-             for d in dimensions[:3]]
-    ready = all(d['validDays'] >= d['requiredDays'] for d in dimensions)
-    return '、'.join(parts) + ('（已就绪）' if ready else '（学习中）')
+    parts, learning = [], False
+    for d in states:
+        label = _DIMENSION_LABELS.get(d['dimension'], d['dimension'])
+        if d['state'] == 'ready':
+            parts.append(f'{label} 已就绪')
+        else:
+            parts.append(f"{label} {d['validDays']}/{d['requiredDays']} 天")
+            learning = True
+    return '、'.join(parts) + ('（学习中）' if learning else '')
 
 
 def _trim(sections, limit=None):
