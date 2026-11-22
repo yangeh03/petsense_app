@@ -463,10 +463,10 @@ sequenceDiagram
 | 15 | 进程模型 | 单进程（执行器/worker 与 Flask 同进程）；扩展多进程前需改共享协调 | 已确认 |
 | 16 | 记忆整理 | 认识卡蒸馏晋升（决策入轨迹）+ 收尾保存提醒 + markdown 记忆报告导出（DB 为真相、md 为视图）；机制借鉴 OpenClaw/Hermes，存储不采用文件方案 | 已确认 |
 | 17 | 会话状态管理 | zustand：模块级单例 store（消息流/主题/草稿/卡片状态），订阅式更新，跨页面共享 | 已确认 |
-| 18 | 消息渲染 | 助手正文用 expo-ai-elements 内置流式 markdown（模型输出约束为受限子集）；结构化内容走卡片字段排版 | 已确认（随 20 联动修订） |
+| 18 | 消息渲染 | 当前自建流式文本与结构化卡片；Markdown 留待后续 | W01 自建回退已落地 |
 | 19 | 本地持久化 | AsyncStorage 轻量：草稿/主题/滚动位置/最近会话片段；历史靠服务端分页，不做离线缓存 | 已确认 |
-| 20 | 聊天 UI 主体 | **expo-ai-elements**（Vercel AI Elements 的 RN 移植，Agent 对话范式；shadcn 复制粘贴模式 vendor 进仓库，上游停更无风险；纯 UI 层接自有数据层）。双层结构：渲染层用库，消息列表/输入区/键盘容器自建。决策轨迹：kesha-antonov（IM 范式、95 stars）因范式与热度否决 → 自建为推荐 → 负责人定稿 expo-ai-elements，自建保留为 spike 不通过时的回退 | 已确认 |
-| 21 | 定点工具库 | `react-native-keyboard-controller`（Expo Go 内置）+ `react-native-image-viewing`；随 20 引入 Uniwind + React Native Reusables（token 从 theme.ts 派生、图标替换为 expo-symbols）；不引入 FlashList（inverted 聊天列表已知问题） | 已确认（随 20 联动修订） |
+| 20 | 聊天 UI 主体 | 自建消息渲染、列表、输入区与键盘容器 | expo-ai-elements spike 未通过，采用回退方案 |
+| 21 | 定点工具库 | `react-native-keyboard-controller`；W07 原生灯箱使用 `react-native-image-viewing`，Web 使用 Expo Image 模态查看器 | 实施选型 |
 
 记忆存储选型的对照结论（2026-11-22 复核）：考察了 OpenClaw（markdown 文件为真相 + SQLite/PG 混合检索索引）、pi（核心不含记忆，生态有 markdown 与向量两派扩展）、Hermes（agent 自治整理 + 可插拔 provider）——文件方案成立的前提是单用户本机、自由文本为主、操作者即用户；PetSense 是多用户多宠物的服务端产品，记忆以结构化事实为主且需与观测数据同事务，故维持数据库为唯一真相源，仅吸收其机制层（第 8.4 节）。外部依赖（MiniMax 搜索能力、推送凭据、区域语义）验证状态以 [P00 契约](./agent-p00-contract.md)第 7 节为准。
 
@@ -520,23 +520,13 @@ components/agent/*         气泡定制、卡片族、输入区
 
 本地持久化（AsyncStorage，按用户隔离）：草稿、选中主题、滚动位置、最近会话片段——冷启动首屏不空白；历史本体靠服务端分页，不做离线全量缓存。
 
-### 18.2 聊天主体与卡片族：渲染层用库，容器自建
+### 18.2 聊天主体与卡片族
 
-伙伴页是「Agent 对话为主、群聊人格为表」的形态，聊天主体采用**双层结构**：
-
-**渲染层 —— expo-ai-elements**（Vercel AI Elements 的 React Native 移植，Agent 对话范式）。2026-11-22 核实：MIT、shadcn/ui 复制粘贴分发模式（组件经 CLI 复制进项目，代码完全自有——上游停更不构成依赖风险）、纯 UI 层（`Conversation` 只接收消息数组、`renderItem` 按 role 自定义渲染，`PromptInput` 仅回调，不绑定任何后端）。采用的组件子集：Conversation / Message / MessageResponse（流式 markdown 正文，基于 streamdown）、Reasoning / Tool（工具调用与「正在查观测…」状态行）、Suggestion（快捷追问）、Shimmer（生成中占位）；代码类组件（CodeBlock/Terminal 等）不引入。
-
-**容器层 —— 自建**：消息列表壳（inverted FlatList + 滚动锚定）、输入区外壳（键盘、安全区、@ 指向、草稿）、导航与状态机（§18.1 的 WS + zustand）仍由本项目实现。这样库的可替换面被限制在内容渲染，且 25 个组件的体量在 vendor 模式下可整体读改。
-
-**风险缓解（针对 32 stars / 2026-07 后无提交 / 基线 SDK 55）**：
-
-1. **vendor 进仓库**：组件源码放 `app/src/components/agent/ai-kit/`，按需改主题与图标，不直接依赖 npm 包的上游演进；
-2. **W01 前置 spike**：在 Expo Go（SDK 58 / RN 0.88 / React 19.3）跑通基础对话流（流式渲染 + renderItem 三人格）作为 go/no-go 门槛，不通过则回退自建方案（该方案保留为 fallback）；
-3. **前置依赖收编**：Uniwind（Tailwind for RN）与 React Native Reusables 是库的前置，引入时 tailwind 色彩 token 从 `theme.ts` 派生映射，全局颜色真值仍是 theme.ts（仓库约定不变）；组件自带的 lucide 图标替换为 `expo-symbols`（仓库约定）。
+伙伴页使用自建渲染层和会话容器。W01 的 expo-ai-elements 试接因 npm 包缺少可用组件、原生依赖与现有工具链冲突而启用自建回退。实现与试接记录见 [W01 spec](./agent-w01-spec.md)。消息列表、输入区、导航与状态由 §18.1 的 WS 和 zustand 管理。
 
 **卡片族**（`components/agent/cards/`，对应 P00 契约内容块，经 renderItem 挂载）：确认卡（计划/档案写入/设备控制，三态：待确认/已确认/已拒绝，操作幂等）、回信卡（宠物一句话承接 + 助手结果展开 + 时段依据入口）、来源卡（Citation，沿用现有，跳转记录）、执行结果卡（录音已执行/日记生成中与完成/失败/草稿已保存）、学习卡（沿用现有）、任务状态卡（约好了/正在留意/回信到了/已暂停/已结束）。未知内容块安全降级提示。
 
-**消息渲染**：助手正文用库内置流式 markdown（Agent 对话范式标配）；模型输出约束为受限子集（标题/列表/粗体/段落，不输出代码块与表格）；回信、计划等结构化内容仍走卡片字段排版，不混入 markdown。**双人格映射**：`renderItem` 按 speaker（owner/pet/assistant）区分——主人消息短气泡靠右，爱宠与照料助手靠左且各自头像、名字标签（颜色取 `theme.ts` 派生 token，不写死）。
+**消息渲染**：当前正文随 WS 增量以文本渲染，流式 Markdown 留待后续。确认提案、观测和其他结构化内容走独立卡片。**双人格映射**：`renderItem` 按 speaker（owner/pet/assistant）区分——主人消息短气泡靠右，爱宠与照料助手靠左且各自头像、名字标签（颜色取 `theme.ts` 派生 token，不写死）。
 
 **键盘**：`react-native-keyboard-controller` 替代 KeyboardAvoidingView（AGENTS.md 记录的 padding 覆盖与标签栏遮挡问题即其主场）；输入区底部安全区沿用 NativeTabs 结论，只用一次。
 
