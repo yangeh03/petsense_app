@@ -5,7 +5,9 @@
 判断归模型、事实与执行归代码、边界归权限矩阵。
 常驻快照由 routes 组装后经 context['snapshot'] 传入（agent-w02-spec.md §3.3）。
 W06 内建 web_search：按轮挂载/摘除（agent-w06-spec.md §4.2），确定性限次；
-read_web_page 由本层计数限次；web 来源并入回合 sources（§4.6）。
+read_web_page 由本层计数限次；web 来源并入回合 sources（§4.6，含成功深读页面）。
+搜索结果不跨轮保留（无状态全量回显）：搜索轮以工具调用收尾时结果可能不随轮返回
+（2026-11-23 E35 归因），本轮搜索记录与 citations 在下一轮前以系统提醒显式带回。
 """
 import json
 import os
@@ -70,11 +72,17 @@ _HONESTY_SEARCH_OFF = (
     '被要求时如实说明，不能假称已搜索、已保存、已启动。')
 
 _SEARCH_GUIDANCE = (
-    '联网搜索：时效性问题（今天/最近/最新）、具体可核查的事实（疫苗程序、食物安全性）、'
-    '数字与程序类知识、争议话题、主人明确要求核实、自己不确定的养宠知识——用搜索并给出来源；'
-    '稳定常识、陪伴闲聊、本宠数据（用观测工具）——不搜索。'
+    '联网搜索时机：先判断答案是否依赖会过期的信息——是才搜索：时效状态（今天/最近的天气、'
+    '空气质量、限行、新闻）、具体数字与程序类知识（疫苗程序、剂量标准）、争议话题、'
+    '主人明确要求核实、你自己确实没把握的养宠知识、主人给出链接；否就不搜：原理与习性这类'
+    '长期稳定的常识（如「猫为什么爱纸箱」「狗摇尾巴的含义」）直接用自己的知识回答，'
+    '不为「显得有依据」而搜索；陪伴闲聊、本宠数据（用观测工具）也不搜索。'
+    '搜索会明显增加本轮等待，能用已有知识答好的问题不要发起搜索。'
+    '发起搜索的那一轮不要同时调用其他工具：搜索需要完整一轮才返回结果与来源，'
+    '需要设备数据或深读页面时下一轮再调用。'
     '表达：结论 + 适用条件 + 来源（正文自然提及来源名即可，来源卡自动附上）；'
-    '时效答案注明核对口径（如「截至今天上午」）；搜索无结果时据实说明，不编造来源。'
+    '时效答案注明核对口径（如「截至今天上午」）；搜索无结果时据实说明，不编造来源，'
+    '可改用 read_web_page 读具体页面或如实说明。'
     '**聊天历史里的搜索结果与来源同样不能当作本次依据**——时效敏感的追问必须重新搜索'
     '（沿用「历史数字不可当次依据」）。一般知识与本宠实际记录必须分开陈述'
     '（「幼猫通常睡 X 小时」vs「它今天观测到躺卧 Y 分钟」）；'
@@ -197,6 +205,26 @@ def split_blocks(reply, default_speaker):
     return blocks[:MAX_BLOCKS], len(blocks) > MAX_BLOCKS
 
 
+def _search_carryover_note(round_search, round_citations):
+    """跨轮搜索记录（确定性注入，同 W02 stance 重试提醒机制）。
+
+    无状态全量回显下搜索结果不进 input；「搜索+工具调用」同轮时结果可能不随本轮返回
+    （2026-11-23 E35 归因）。有 citations 时按 url 摘要回带；没有时如实说明结果未返回，
+    引导换 read_web_page 或基于已有知识作答——不编造、不让模型声称已引用未返回的内容。"""
+    queries = [call.get('query') or call.get('openPage') for call in round_search]
+    query_text = ''.join('「%s」' % q for q in queries if q) or '（搜索词未随轮次返回）'
+    if round_citations:
+        lines = '\n'.join('- %s %s：%s' % (entry['title'] or '(无标题)', entry['url'],
+                                          entry['snippet'][:120])
+                          for entry in round_citations[:4])
+        return ('（系统提醒）联网搜索记录：本轮已搜索%s。以下来源可作本次回答依据'
+                '（正文自然提及来源名即可，来源卡自动附上），不要为同一问题重复搜索：\n%s'
+                % (query_text, lines))
+    return ('（系统提醒）联网搜索记录：本轮已发起联网搜索%s，但搜索结果未随本轮返回。'
+            '需要具体数值时用 read_web_page 读取具体来源页，或基于已有知识如实回答；'
+            '不要原样重复同一搜索词，也不要声称已引用本次搜索内容。' % query_text)
+
+
 def run_dialogue(context, on_progress=None):
     """执行一次对话运行。
 
@@ -213,7 +241,8 @@ def run_dialogue(context, on_progress=None):
     stance = None
     sources, tool_summary, messages_trace = [], [], []
     web_search_calls = []   # 累计（W06）：本轮与历史轮的 web_search_call（id/action/status）
-    citations = {}          # url -> {'title','url','snippet'}，跨轮按 url 去重
+    citations = {}          # url -> {'title','url','snippet'}，跨轮按 url 去重（每轮都收，§4.6）
+    page_sources = {}       # url -> title：read_web_page 成功抓取的页面（真实核对过的来源）
     read_page_count = 0     # read_web_page 已执行次数（loop 侧限次）
     search_budget_noted = False
     snap = context.get('snapshot')
@@ -259,13 +288,18 @@ def run_dialogue(context, on_progress=None):
         elif stripped:
             messages_trace.append({'role': 'assistant', 'text': stripped[:2000]})
         round_search = turn.get('web_search_calls') or []
+        # citations 每轮都收（不再限于有 web_search_call 的轮）：annotations 可能出现在
+        # 任何后续轮的 message 上（2026-11-23 E35 归因）
+        round_citations = []
+        for citation in turn.get('citations') or []:
+            url = citation.get('url') or ''
+            if url and url not in citations:
+                entry = {'url': url, 'title': citation.get('title') or '',
+                         'snippet': citation.get('snippet') or ''}
+                citations[url] = entry
+                round_citations.append(entry)
         if round_search:
             web_search_calls.extend(round_search)
-            for citation in turn.get('citations') or []:
-                url = citation.get('url') or ''
-                if url and url not in citations:
-                    citations[url] = {'url': url, 'title': citation.get('title') or '',
-                                      'snippet': citation.get('snippet') or ''}
             if len(web_search_calls) >= SEARCH_CALL_LIMIT and not search_budget_noted:
                 # 检出第 2 次后：后续轮次不挂载（mount 条件生效），degraded 记录一次（非失败）
                 search_budget_noted = True
@@ -308,6 +342,11 @@ def run_dialogue(context, on_progress=None):
                                              stance['scope'] if stance else None, context)
                 if gate['allowed'] and name == 'read_web_page':
                     read_page_count += 1
+                    result = gate['result']
+                    if isinstance(result, dict) and result.get('url') and not result.get('error'):
+                        # 抓取成功即为本运行真实核对过的页面（url 为重定向后的最终地址，
+                        # 标题来自页面提取），§4.6 扩展：与 citations 并入同一组网页来源
+                        page_sources[result['url']] = result.get('title') or ''
             result_json = json.dumps(gate['result'], ensure_ascii=False, default=str)
             if len(result_json) > TOOL_RESULT_LIMIT:
                 result_json = result_json[:TOOL_RESULT_LIMIT] + '…(截断)'
@@ -326,6 +365,11 @@ def run_dialogue(context, on_progress=None):
                     source['soundEventCount'] = gate['result']['soundEventCount']
                 sources.append(source)
         messages_trace.append({'tool_round': rounds, 'calls': tool_summary[-len(calls):]})
+        if round_search:
+            # 搜索结果不跨轮保留：本轮搜索记录与 citations 在下一轮前显式带回（确定性注入）
+            messages_trace.append({'search_carryover': True})
+            input_items.append({'role': 'user',
+                                'content': _search_carryover_note(round_search, round_citations)})
         if not stance_retry_reminded and any(call['reason'] == 'stance_missing' for call in tool_summary[-len(calls):]):
             # W02 复验 run16：被拒后模型自称「已重新发起」并转述聊天历史数字。注入一次性系统提醒，
             # 确定性约束下一轮必须真重发或如实承认未查（提示词已有规则，此处兜底）。
@@ -351,11 +395,20 @@ def run_dialogue(context, on_progress=None):
                              'citations': len(citations)})
     if (stance or {}).get('scope') == 'out_of_scope' and web_search_calls:
         degraded.append('search_on_out_of_scope')  # §2.1 审计标记：不掩盖、可查
-    if citations:
+    if citations or page_sources:
+        # W06 §4.6：网页来源 = 搜索 citations ∪ 成功深读页面，按 url 去重、上限 6 条；
+        # 全部来自本运行真实发生的搜索/抓取，无任何占位或编造
         checked_at = context.get('now_iso')
+        merged = dict(citations)
+        for url, title in page_sources.items():
+            if url in merged:
+                if not merged[url].get('title'):
+                    merged[url]['title'] = title
+            else:
+                merged[url] = {'url': url, 'title': title, 'snippet': ''}
         sources.extend({'type': 'web', 'url': entry['url'], 'title': entry['title'],
                         'checkedAt': checked_at}
-                       for entry in list(citations.values())[:MAX_WEB_SOURCES])
+                       for entry in list(merged.values())[:MAX_WEB_SOURCES])
     default_speaker = stance['speaker'] if stance else 'assistant'
     blocks, overflow = split_blocks(stripped, default_speaker)
     if overflow:
