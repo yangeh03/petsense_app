@@ -164,6 +164,18 @@ read_baseline(feature?: 'actions'|'sounds', date?: 'YYYY-MM-DD')
 
 按定稿 spec 完成：`agent/baseline.py`（样本口径、惰性重算、dimension_states 单一结果源、read_baseline 组装）、`pet_baselines` 表（alembic 0011，迁移链隔离实例 `upgrade head` 验证至 0011）、`read_baseline` 工具注册（FACT_READ / DIALOGUE）、`GET /api/app/agent/pets/<id>/baseline`、快照学习行逐维度状态（「动作 已就绪、声音 n/7 天（学习中）」，维度顺序固定 actions→sounds）、observations `learning*` 真实状态、系统提示补基线语义与「认识中不得说比平时」约束、回填核验工具 `server/tools/agent_baseline_rebuild.py`（只读；开发中修复了 UTC→上海时区解析导致日期归属差一天的 bug）、App 认识中卡就绪态（服务 `state` 字段 + 卡片文案）。
 
-本地已验证：服务端全量 271 测试通过（新增 `test_agent_w05.py` 21 个：分位、水位幂等、28 天窗口、覆盖门槛、明细裁剪、版本切换、date 截断、工具/HTTP/越权、observations 状态、未绑定；三处旧测试的工具清单断言与表清单守护测试按加法变更更新）；客户端 lint / typecheck / format:check / test（99 个）全绿；核验工具在一致种子数据上差异为零。
+本地已验证：服务端全量 271 测试通过（新增 `test_agent_w05.py` 21 个：分位、水位幂等、28 天窗口、覆盖门槛、明细裁剪、版本切换、date 截断、工具/HTTP/越权、observations 状态、未绑定；三处旧测试的工具清单断言与表清单守护测试按加法变更更新）；客户端 lint / typecheck / format:check / test（99 个）全绿；核验工具在一致种子数据上差异为零。行为场景编号因 W03 线先行占用 E16–E21，本包改为 **E22–E26**（2026-11-22 与并行线撞号后重排）。
 
-待验收：行为评测 E22–E26（需 MINIMAX 凭据）、云端只读副本核验、模拟器接生产实测——合入部署后按上面清单逐项勾选。
+### 9.2 隔离实例验收（2026-11-22）
+
+隔离后端（`PETSENSE_ROOT` 临时库，账号 `petsense`）种 8 个动作有效日 + 2 个声音有效日：
+
+- `GET /api/app/agent/pets/<id>/baseline`：动作 `ready`（全天 p10/p50/p90=3500s、上午时段 2100s、8 样本、revision 1），声音 `learning 2/7` + 「不能说比平时」提示；来源卡含样本窗口与版本；当天各时段覆盖不足均给出「覆盖不足60分钟，不能当作活动减少或增加」note，不伪造比较。
+- `observations` 接口 `learning.state=ready`、`learningDimensions` 分维度状态与 active 标记正确。
+- iOS 模拟器（Expo Go + 独立 Metro 8084，`EXPO_PUBLIC_API_BASE_URL` 指隔离后端）登录后进入伙伴页：胶囊显示「**已认识**」，展开卡逐字为「慢慢认识它的日常 / 动作 已认识 · 声音 2/7 天 / 区域观察等待接入，个人日常参照仍在建立。」（AX 树取证）。对话往返需模型凭据，轨迹级验收并入生产阶段。
+
+### 9.3 待验收（合入部署后）
+
+- [ ] 行为评测 E22–E26（需 MINIMAX 凭据，`cd server && MINIMAX_API_KEY(_FILE)=… python3 -m unittest discover -s tests -p test_agent_behavior.py`，含既有 E1–E15 回归）。
+- [ ] 模拟器接生产（账号 `petsense`）：就绪维度问「比平时」类问题，回答引用 `read_baseline` 结果（`agent_replay.py` 轨迹取证）。
+- [ ] 回填核验工具在云端只读副本上运行，差异为零或差异均有解释（无版本标注数据单列）。
