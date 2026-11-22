@@ -85,6 +85,8 @@ def create_app(start_background=True):
         start_social_worker()
         from petsense.petgif.diary_jobs import recover_diary_jobs
         recover_diary_jobs()
+        from petsense.agent import ws as agent_ws
+        agent_ws.start_ping_loop()
         telemetry_realtime.start_ws_ping_loop()
         mqtt_ingest.start_mqtt()
     return app

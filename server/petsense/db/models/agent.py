@@ -1,4 +1,4 @@
-"""Durable owner turns and model output; request IDs deduplicate retries."""
+"""Durable owner turns, model output and run trajectories; request IDs deduplicate retries."""
 from sqlalchemy import Column, ForeignKey, Float, Integer, String, Text, UniqueConstraint
 from petsense.db.base import Base, UTCDatetime
 
@@ -16,9 +16,26 @@ class AgentTurn(Base):
     speaker = Column(String(16), nullable=False, default='assistant')
     read_at = Column(UTCDatetime, nullable=True)
     reply = Column(Text, nullable=False, default='')
+    blocks = Column(Text, nullable=True)
     status = Column(String(16), nullable=False)
     created_at = Column(UTCDatetime, nullable=False)
     __table_args__ = (UniqueConstraint('pet_id', 'request_id'),)
+
+
+class AgentRun(Base):
+    """W01 运行轨迹：完整判断与工具路径，可回放可审计；不对 App 开放（P00 §3）。"""
+    __tablename__ = 'agent_runs'
+    id = Column(Integer, primary_key=True)
+    pet_id = Column(Integer, ForeignKey('pets.id'), nullable=False, index=True)
+    turn_id = Column(Integer, nullable=True)
+    form = Column(String(16), nullable=False)
+    status = Column(String(16), nullable=False)
+    conclusion = Column(Text, nullable=False, default='{}')
+    messages = Column(Text, nullable=False, default='[]')
+    tool_summary = Column(Text, nullable=False, default='[]')
+    budget = Column(Text, nullable=False, default='{}')
+    error = Column(Text, nullable=True)
+    created_at = Column(UTCDatetime, nullable=False)
 
 
 class AgentLearningDay(Base):

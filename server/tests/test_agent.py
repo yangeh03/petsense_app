@@ -1,3 +1,4 @@
+import json
 import unittest
 from datetime import timedelta
 from unittest.mock import patch
@@ -11,6 +12,14 @@ from petsense.agent.observations import query
 from sqlalchemy import select
 
 
+def model_turn(text, calls=()):
+    return {'text': text, 'function_calls': list(calls), 'usage': {}}
+
+
+def allowed_stance(speaker='assistant', intent='read'):
+    return ('{"scope":"allowed","intent":"%s","speaker":"%s"}\n' % (intent, speaker))
+
+
 class AgentTests(unittest.TestCase):
     def setUp(self):
         fresh_db(self)
@@ -19,9 +28,6 @@ class AgentTests(unittest.TestCase):
         self.app.register_blueprint(bp)
         self.client = self.app.test_client()
         self.auth = patch('petsense.agent.routes.require_app_user', return_value=({'id': self.uid}, None))
-        route = patch('petsense.agent.model.decide', return_value={'scope': 'allowed', 'speaker': 'assistant'})
-        route.start()
-        self.addCleanup(route.stop)
         self.auth.start()
         self.addCleanup(self.auth.stop)
         with db.session_scope() as s:
@@ -29,13 +35,18 @@ class AgentTests(unittest.TestCase):
         self.path = f'/api/app/agent/pets/{self.pet}/turns'
 
     def test_idempotency_and_restart_history(self):
-        with patch('petsense.agent.model.complete', return_value='【爱宠】汪！') as complete:
+        with patch('petsense.agent.model.respond', return_value=model_turn(allowed_stance('pet') + '【爱宠】汪！')) as respond:
             data = {'text': '你好', 'requestId': 'r1', 'target': 'pet'}
             first = self.client.post(self.path, json=data)
             second = self.client.post(self.path, json=data)
             self.assertEqual(first.status_code, 200)
             self.assertEqual(first.json, second.json)
-            self.assertEqual(complete.call_count, 1)
+            self.assertEqual(respond.call_count, 1)
+        turn = first.json['turn']
+        self.assertEqual(turn['status'], 'complete')
+        self.assertEqual(turn['reply'], '【爱宠】汪！')
+        self.assertEqual(turn['speaker'], 'pet')
+        self.assertEqual(turn['blocks'], [{'type': 'text', 'speaker': 'pet', 'text': '汪！'}])
         self.assertEqual(len(self.client.get(self.path).json['turns']), 1)
 
     def test_owner_scope_and_invalid_input(self):
@@ -44,10 +55,15 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(self.client.post(self.path, json={'text': 'hi'}).status_code, 400)
 
     def test_failure_preserves_owner_message(self):
-        with patch('petsense.agent.model.complete', side_effect=ValueError('missing key')):
+        with patch('petsense.agent.model.respond', side_effect=ValueError('missing key')):
             response = self.client.post(self.path, json={'text': '今天怎样', 'requestId': 'r2'})
         self.assertEqual(response.json['turn']['status'], 'failed')
         self.assertEqual(self.client.get(self.path).json['turns'][0]['text'], '今天怎样')
+        from petsense.db.models.agent import AgentRun
+        with db.session_scope() as s:
+            run = s.execute(select(AgentRun)).scalar_one()
+            self.assertEqual(run.status, 'failed')
+            self.assertIn('ValueError', run.error)
 
     def test_window_and_device_scope(self):
         end = db.utc_now().replace(second=0, microsecond=0)
@@ -62,15 +78,68 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(result['actionSeconds']['walking'], 15)
 
     def test_conflicting_request_key_and_scope_gate(self):
-        with patch('petsense.agent.model.complete', return_value='hello'):
+        with patch('petsense.agent.model.respond', return_value=model_turn(allowed_stance() + '你好')):
             self.client.post(self.path, json={'text': '你好', 'requestId': 'same'})
             result = self.client.post(self.path, json={'text': '另一句话', 'requestId': 'same'})
         self.assertEqual(result.status_code, 409)
-        with patch('petsense.agent.model.decide', return_value={'scope': 'out_of_scope', 'speaker': 'assistant'}), patch('petsense.agent.routes.query') as tool, patch('petsense.agent.model.complete') as complete:
+        refusal = model_turn('{"scope":"out_of_scope","intent":"read","speaker":"assistant"}\n'
+                             '【照料助手】这个请求超出我的服务范围。')
+        with patch('petsense.agent.model.respond', return_value=refusal) as respond, \
+                patch('petsense.agent.registry.observations_query') as tool:
             result = self.client.post(self.path, json={'text': '宠物商城代码', 'requestId': 'scope'})
         self.assertEqual(result.json['turn']['status'], 'complete')
+        self.assertEqual(result.json['turn']['sources'], [])
+        respond.assert_called_once()
         tool.assert_not_called()
-        complete.assert_not_called()
+        from petsense.db.models.agent import AgentRun
+        with db.session_scope() as s:
+            run = s.execute(select(AgentRun).order_by(AgentRun.id.desc())).scalars().first()
+            self.assertEqual(json.loads(run.conclusion)['scope'], 'out_of_scope')
+
+    def test_tool_round_with_stance_collects_source_and_blocks(self):
+        end = db.utc_now().replace(second=0, microsecond=0)
+        start = end - timedelta(minutes=2)
+        with db.session_scope() as s:
+            s.add(TelemetryMinute(owner_id=self.uid, device_id='esp32-001', minute=start,
+                                  metrics='{}', actions='{"走动": 40}', observed_seconds=30, frames=30))
+        args = json.dumps({'start': start.isoformat(), 'end': end.isoformat()})
+        calls = [{'name': 'query_observations', 'arguments': args, 'call_id': 'c1'}]
+        turns = [model_turn(allowed_stance(), calls),
+                 model_turn(allowed_stance() + '【照料助手】这15分钟它走动了40秒。')]
+        with patch('petsense.agent.model.respond', side_effect=turns):
+            result = self.client.post(self.path, json={'text': '它刚才走动多吗', 'requestId': 'tool'})
+        turn = result.json['turn']
+        self.assertEqual(turn['status'], 'complete')
+        self.assertEqual(len(turn['sources']), 1)
+        self.assertEqual(turn['blocks'][0]['speaker'], 'assistant')
+        self.assertIn('走动', turn['reply'])
+        from petsense.db.models.agent import AgentRun
+        with db.session_scope() as s:
+            run = s.execute(select(AgentRun).order_by(AgentRun.id.desc())).scalars().first()
+            summary = json.loads(run.tool_summary)
+            self.assertEqual(summary[0]['name'], 'query_observations')
+            self.assertTrue(summary[0]['allowed'])
+            self.assertEqual(json.loads(run.conclusion)['scope'], 'allowed')
+
+    def test_tool_call_without_stance_is_refused_then_allowed(self):
+        args = json.dumps({'start': '2026-01-01T00:00:00+08:00', 'end': '2026-01-02T00:00:00+08:00'})
+        calls = [{'name': 'query_observations', 'arguments': args, 'call_id': 'c1'}]
+        turns = [model_turn('', calls),
+                 model_turn(allowed_stance(), calls),
+                 model_turn(allowed_stance() + '【照料助手】查到了。')]
+        with patch('petsense.agent.model.respond', side_effect=turns), \
+                patch('petsense.agent.registry.observations_query', wraps=query) as tool:
+            result = self.client.post(self.path, json={'text': '它走了多久', 'requestId': 'stance'})
+        self.assertEqual(result.json['turn']['status'], 'complete')
+        self.assertEqual(tool.call_count, 1)
+        from petsense.db.models.agent import AgentRun
+        with db.session_scope() as s:
+            run = s.execute(select(AgentRun).order_by(AgentRun.id.desc())).scalars().first()
+            summary = json.loads(run.tool_summary)
+            self.assertEqual(len(summary), 2)
+            self.assertEqual(summary[0]['reason'], 'stance_missing')
+            self.assertFalse(summary[0]['allowed'])
+            self.assertIsNone(summary[1]['reason'])
 
     def test_pending_turn_recovers_as_interrupted(self):
         from petsense.db.models.agent import AgentTurn
@@ -122,7 +191,7 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(values[1]['validDays'], 7)
 
     def test_read_state_persists_and_is_owner_scoped(self):
-        with patch('petsense.agent.model.complete', return_value='hello'):
+        with patch('petsense.agent.model.respond', return_value=model_turn(allowed_stance() + '你好')):
             turn = self.client.post(self.path, json={'text': '你好', 'requestId': 'read'}).json['turn']
         url = f'/api/app/agent/pets/{self.pet}/read'
         first = self.client.post(url, json={'ids': [turn['id']]}).json['turns'][0]
@@ -132,10 +201,13 @@ class AgentTests(unittest.TestCase):
         with patch('petsense.agent.routes.require_app_user', return_value=({'id': self.uid+1}, None)):
             self.assertEqual(self.client.post(url, json={'ids': [turn['id']]}).status_code, 404)
 
-    def test_unavailable_actions_do_not_claim_execution(self):
-        for intent in ('observe', 'write', 'search'):
-            with patch('petsense.agent.model.decide', return_value={'scope': 'allowed', 'speaker': 'assistant', 'intent': intent}), patch('petsense.agent.model.complete') as complete:
-                response = self.client.post(self.path, json={'text': '请求', 'requestId': intent})
-            self.assertEqual(response.json['turn']['status'], 'complete')
-            self.assertEqual(response.json['turn']['sources'], [])
-            complete.assert_not_called()
+    def test_unavailable_capabilities_answered_without_tools(self):
+        """未开放能力（写入/联网/持续留意）由模型按注册表如实说明，不走固定文案分支。"""
+        with patch('petsense.agent.model.respond') as respond:
+            respond.return_value = model_turn(allowed_stance('assistant', 'write')
+                                               + '【照料助手】这条信息留在聊天里了，保存能力还在准备。')
+            response = self.client.post(self.path, json={'text': '记住它今天体重九斤', 'requestId': 'write'})
+        self.assertEqual(response.json['turn']['status'], 'complete')
+        self.assertEqual(response.json['turn']['sources'], [])
+        tools_offered = respond.call_args.kwargs.get('tools')
+        self.assertTrue(tools_offered and all(t['name'] == 'query_observations' for t in tools_offered))
