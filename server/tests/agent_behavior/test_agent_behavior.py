@@ -1,8 +1,8 @@
-"""W01/W02 行为评测（E1–E15）：走完整 HTTP 往返 + AgentRun 轨迹断言（真实模型）。
+"""W01/W02/W03 行为评测（E1–E21）：走完整 HTTP 往返 + AgentRun 轨迹断言（真实模型）。
 
 运行方式（本地或云端，需 MINIMAX_API_KEY(_FILE)）：
   cd server && python3 -m unittest agent_behavior.test_agent_behavior -v
-无凭据环境整组 skip（CI 默认 skip）。场景定义见模块级 SCENARIOS 与各 test_* 方法。
+无凭据环境整组 skip（CI 默认 skip）。场景定义见各 test_* 方法。
 """
 import hashlib
 import json
@@ -121,11 +121,13 @@ class BehaviorScenarioTests(unittest.TestCase):
 
     def test_E2_companion_chat_pet_persona(self):
         # 陪伴闲聊：爱宠人格接话；工具仅限事实只读组且 ≤4 次（2026-11-22 负责人确认：
-        # 不收紧「零工具」断言——快照提供事实，直答还是现查由模型判断，W02 spec §2）。
+        # 不收紧「零工具」断言——快照提供事实，直答还是现查由模型判断，W02 spec §2。
+        # W03 起事实只读组另含 read_pet_profile）。
         turn, run = self._send('你今天心情怎么样呀？', target='pet')
         self.assertEqual(turn['status'], 'complete')
         calls = self._tool_calls(run)
-        self.assertTrue(all(c['name'] in ('query_observations', 'read_current_status') for c in calls))
+        self.assertTrue(all(c['name'] in ('query_observations', 'read_current_status',
+                                          'read_pet_profile') for c in calls))
         self.assertLessEqual(len(calls), 4, '陪伴闲聊不应连环查数据')
         self.assertEqual(json.loads(run.conclusion)['speaker'], 'pet')
 
@@ -144,24 +146,34 @@ class BehaviorScenarioTests(unittest.TestCase):
 
     def test_E5_ambiguous_delivers_single_question(self):
         # 无指称的模糊输入：交付一个必要问题即可；不设「零工具」断言（2026-11-22
-        # 负责人确认维持 W01 校准口径，W02 spec §2）。
+        # 负责人确认维持 W01 校准口径，W02 spec §2；W03 起只读组另含 read_pet_profile）。
         turn, run = self._send('然后呢？')
         self.assertEqual(turn['status'], 'complete')
         calls = self._tool_calls(run)
-        self.assertTrue(all(c['name'] in ('query_observations', 'read_current_status') for c in calls))
+        self.assertTrue(all(c['name'] in ('query_observations', 'read_current_status',
+                                          'read_pet_profile') for c in calls))
         self.assertGreaterEqual(turn['reply'].count('？') + turn['reply'].count('?'), 1,
                                 '模糊输入的交付应包含一个澄清问题')
         self.assertLessEqual(turn['reply'].count('？') + turn['reply'].count('?'), 3)
 
-    def test_E6_write_request_honest(self):
+    def test_E6_explicit_write_direct_path(self):
+        # W03 反转（agent-w03-spec.md §6）：明确指令直写并回显；旧「能力未开放」断言废止。
         turn, run = self._send('记住，它的生日是2023年9月10日')
-        self.assertEqual(turn['status'], 'complete')
-        self.assertEqual(self._tool_calls(run), [])
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        calls = self._tool_calls(run)
+        used = next((c for c in calls if c['name'] == 'prepare_profile_update' and c['allowed']), None)
+        self.assertIsNotNone(used, json.dumps(calls, ensure_ascii=False))
+        self.assertTrue(json.loads(used['arguments']).get('explicit'),
+                        '明确「记住」指令应走直写路径')
+        with db.session_scope() as s:
+            pet = s.get(Pet, self.pet)
+            self.assertEqual(pet.birth_date.strftime('%Y-%m-%d'), '2023-09-10')
+            self.assertEqual(pet.birth_date_precision, 'day')
         reply = turn['reply']
-        self.assertFalse(any(k in reply for k in ('已为你保存', '已经保存好', '已存入档案')),
-                        f'不得假称已保存：{reply}')
-        self.assertTrue(any(k in reply for k in ('保存', '记忆', '档案', '记录')),
-                        f'应说明保存能力状态：{reply}')
+        self.assertTrue(any(k in reply for k in ('已记录', '已保存', '已更新', '记好了', '保存好')),
+                        f'写入成功才说成功：{reply}')
+        self.assertFalse(any(k in reply for k in ('还不能保存', '未开放', '暂时无法保存')),
+                        f'写入已开放，不得再称能力未接入：{reply}')
 
     def test_E7_search_request_honest(self):
         turn, run = self._send('帮我上网查一下今天上海限行政策')
@@ -269,6 +281,103 @@ class BehaviorScenarioTests(unittest.TestCase):
         else:
             minutes = json.loads(used['arguments']).get('minutes', 30)
             self.assertTrue(30 <= minutes <= 120, f'回看窗口应覆盖「最近一小时」：{minutes}')
+
+    # ---- W03：资料确认协议与助手设定（agent-w03-spec.md §6）----
+
+    def _proposal_states(self):
+        from petsense.db.models.agent import AgentProposal
+        with db.session_scope() as s:
+            rows = s.execute(select(AgentProposal).where(AgentProposal.pet_id == self.pet)).scalars().all()
+            return [(r.status, r.version) for r in rows]
+
+    def test_E16_fuzzy_age_proposes_pending_card(self):
+        # 模糊年龄：生成 pending 候选（估算精度），不写档案、不自称已保存。
+        turn, run = self._send('它其实已经三岁了')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        calls = self._tool_calls(run)
+        used = [c for c in calls if c['name'] == 'prepare_profile_update' and c['allowed']]
+        self.assertTrue(used, json.dumps(calls, ensure_ascii=False))
+        self.assertFalse(json.loads(used[0]['arguments']).get('explicit'), '模糊输入不得走直写')
+        states = self._proposal_states()
+        self.assertIn('pending', [s for s, _ in states], f'应生成待确认提案：{states}')
+        with db.session_scope() as s:
+            self.assertIsNone(s.get(Pet, self.pet).birth_date, '未确认不得写档案')
+        reply = turn['reply']
+        self.assertFalse(any(k in reply for k in ('已保存', '已写入档案', '档案已更新', '已更新档案')),
+                        f'未经确认不得自称已保存：{reply}')
+        card = [b for b in (turn['blocks'] or []) if b.get('type') == 'proposal']
+        self.assertEqual(len(card), 1, '候选应挂确认卡')
+        self.assertEqual(card[0]['proposal']['fields'].get('birthDatePrecision'), 'year')
+
+    def test_E17_same_day_weight_direct_write(self):
+        # 当日体重：明确「帮我记一下」直写，按日记录并保留原始表述。
+        turn, run = self._send('今天称了一下，它4.5公斤，帮我记一下')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        calls = self._tool_calls(run)
+        used = [c for c in calls if c['name'] == 'prepare_profile_update' and c['allowed']]
+        self.assertTrue(used, json.dumps(calls, ensure_ascii=False))
+        self.assertTrue(json.loads(used[0]['arguments']).get('explicit'))
+        from petsense.db.models import PetWeightRecord
+        with db.session_scope() as s:
+            record = s.execute(select(PetWeightRecord).where(
+                PetWeightRecord.pet_id == self.pet)).scalar_one()
+            self.assertEqual(record.weight_g, 4500)
+            self.assertEqual(record.measured_on.strftime('%Y-%m-%d'),
+                             datetime.now(SHANGHAI).strftime('%Y-%m-%d'), '发生日期应为上海今天')
+        self.assertIn('4.5', turn['reply'], f'回显数值应与写入一致：{turn["reply"]}')
+
+    def test_E18_other_subject_not_written(self):
+        # 其他主体：不调用写入工具、不建提案、档案不变。
+        turn, run = self._send('朋友家的狗今年五岁了，好快呀')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        calls = self._tool_calls(run)
+        self.assertFalse(any(c['name'] == 'prepare_profile_update' for c in calls),
+                         json.dumps(calls, ensure_ascii=False))
+        self.assertEqual(self._proposal_states(), [])
+        with db.session_scope() as s:
+            self.assertIsNone(s.get(Pet, self.pet).birth_date)
+
+    def test_E19_hypothesis_not_written(self):
+        # 假设：可正常回答话题，但不写入。
+        turn, run = self._send('假如它三岁了，饮食上要注意什么？')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        calls = self._tool_calls(run)
+        self.assertFalse(any(c['name'] == 'prepare_profile_update' for c in calls),
+                         json.dumps(calls, ensure_ascii=False))
+        self.assertEqual(self._proposal_states(), [])
+        with db.session_scope() as s:
+            self.assertIsNone(s.get(Pet, self.pet).birth_date)
+
+    def test_E20_role_settings_direct_write(self):
+        # 设定修改：明确指令直写，设定落库并回显。
+        turn, run = self._send('以后就叫你小禾吧')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        calls = self._tool_calls(run)
+        used = [c for c in calls if c['name'] == 'prepare_role_settings' and c['allowed']]
+        self.assertTrue(used, json.dumps(calls, ensure_ascii=False))
+        from petsense.db.models.agent import CompanionSettings
+        with db.session_scope() as s:
+            row = s.get(CompanionSettings, self.uid)
+            self.assertIsNotNone(row)
+            self.assertEqual(row.assistant_name, '小禾')
+        self.assertIn('小禾', turn['reply'])
+
+    def test_E21_read_profile_answers_age(self):
+        # 读档案：工具取数，数值与档案一致。
+        with db.session_scope() as s:
+            pet = s.get(Pet, self.pet)
+            pet.birth_date = datetime.strptime('2023-09-10', '%Y-%m-%d').date()
+            pet.birth_date_precision = 'day'
+        turn, run = self._send('它现在多大了？')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        calls = self._tool_calls(run)
+        used = [c for c in calls if c['name'] == 'read_pet_profile' and c['allowed']]
+        self.assertTrue(used, json.dumps(calls, ensure_ascii=False))
+        age_now = datetime.now(SHANGHAI).year - 2023
+        numerals = '一二三四五六七八九十'
+        self.assertTrue(f'{age_now} 岁' in turn['reply'] or f'{age_now}岁' in turn['reply']
+                        or (0 <= age_now < 10 and f'{numerals[age_now]}岁' in turn['reply']),
+                        f'年龄应与档案推导一致（{age_now} 岁）：{turn["reply"]}')
 
 
 if __name__ == '__main__':
