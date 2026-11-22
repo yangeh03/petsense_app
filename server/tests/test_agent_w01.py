@@ -76,7 +76,8 @@ class LoopProtocolTests(unittest.TestCase):
                 patch('petsense.agent.registry.observations_query') as tool:
             tool.return_value = {'observedSeconds': 0, 'source': {'type': 'observations'}}
             outcome = loop.run_dialogue({'pet_id': pet_id, 'user_id': self.uid, 'text': '问',
-                                         'pet': {'name': 'Max', 'species': '狗', 'breed': ''},
+                                         'snapshot': {'sections': {'current': {'action': None}},
+                                                      'meta': {'chars': 40, 'trimmed': [], 'degraded': []}},
                                          'target': 'auto', 'history': [], 'now_iso': '2026-11-22T00:00:00Z'})
         self.assertTrue(outcome['degraded'])
         self.assertIn('tool_rounds_exhausted', outcome['trace']['degraded'])
@@ -141,7 +142,7 @@ class RegistryMatrixTests(unittest.TestCase):
     def test_schemas_for_scope(self):
         self.assertEqual(registry.schemas_for('dialogue', 'out_of_scope'), [])
         names = [s['name'] for s in registry.schemas_for('dialogue', 'allowed')]
-        self.assertEqual(names, ['query_observations'])
+        self.assertEqual(names, ['query_observations', 'read_current_status'])
         self.assertEqual(registry.schemas_for('review', 'allowed'), [])
 
 

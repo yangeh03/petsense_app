@@ -23,7 +23,10 @@ class AgentTurn(Base):
 
 
 class AgentRun(Base):
-    """W01 运行轨迹：完整判断与工具路径，可回放可审计；不对 App 开放（P00 §3）。"""
+    """W01 运行轨迹：完整判断与工具路径，可回放可审计；不对 App 开放（P00 §3）。
+
+    W02 增加 snapshot：本次运行注入的常驻快照原文（数值溯源取证，agent-w02-spec.md §3.7）。
+    """
     __tablename__ = 'agent_runs'
     id = Column(Integer, primary_key=True)
     pet_id = Column(Integer, ForeignKey('pets.id'), nullable=False, index=True)
@@ -34,6 +37,7 @@ class AgentRun(Base):
     messages = Column(Text, nullable=False, default='[]')
     tool_summary = Column(Text, nullable=False, default='[]')
     budget = Column(Text, nullable=False, default='{}')
+    snapshot = Column(Text, nullable=True)
     error = Column(Text, nullable=True)
     created_at = Column(UTCDatetime, nullable=False)
 

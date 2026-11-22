@@ -1,4 +1,4 @@
-"""W01 首批行为评测（E1–E10）：走完整 HTTP 往返 + AgentRun 轨迹断言（真实模型）。
+"""W01/W02 行为评测（E1–E15）：走完整 HTTP 往返 + AgentRun 轨迹断言（真实模型）。
 
 运行方式（本地或云端，需 MINIMAX_API_KEY(_FILE)）：
   cd server && python3 -m unittest agent_behavior.test_agent_behavior -v
@@ -21,7 +21,8 @@ from helpers import fresh_db
 
 from petsense import db
 from petsense.agent.routes import bp
-from petsense.db.models import AuthSession, Pet, User, TelemetryMinute
+from petsense.db import utc_now
+from petsense.db.models import AuthSession, Pet, TelemetryLatest, TelemetryMinute, User
 from petsense.db.models.agent import AgentRun
 from sqlalchemy import select
 
@@ -82,6 +83,16 @@ class BehaviorScenarioTests(unittest.TestCase):
                                       actions=json.dumps({'走动': per_minute}),
                                       observed_seconds=60, frames=60))
 
+    def _seed_latest(self, action='walking', battery=76, age_seconds=30):
+        """种一帧新鲜 TelemetryLatest（W02 快照与工具的实时来源）。"""
+        payload = {'source': 'esp32_mlp', 'battery': {'percent': battery},
+                   'health': {'heartRate': 120, 'spo2': 97, 'bodyTemp': 38.5, 'valid': True},
+                   'action': {'label': action, 'confidence': 0.9}}
+        with db.session_scope() as s:
+            s.add(TelemetryLatest(device_id='esp32-eval', owner_id=self.uid, boot_id='b1', ordinal=1,
+                                  received_at=utc_now() - timedelta(seconds=age_seconds),
+                                  payload=json.dumps(payload)))
+
     def _send(self, text, target='auto', request_id=None):
         response = self.client.post(self.path, headers=self.auth,
                                     json={'text': text, 'requestId': request_id or secrets.token_hex(6),
@@ -109,12 +120,12 @@ class BehaviorScenarioTests(unittest.TestCase):
                          '「昨天」窗口应从上海昨天零点起')
 
     def test_E2_companion_chat_pet_persona(self):
-        # 陪伴闲聊：爱宠人格接话；工具调用允许（W01 无常驻快照，涉宠物状态的
-        # 表达查观测是合理路径；「零工具陪伴」断言留待 W02 快照验收时收紧）。
+        # 陪伴闲聊：爱宠人格接话；工具仅限事实只读组且 ≤4 次（2026-11-22 负责人确认：
+        # 不收紧「零工具」断言——快照提供事实，直答还是现查由模型判断，W02 spec §2）。
         turn, run = self._send('你今天心情怎么样呀？', target='pet')
         self.assertEqual(turn['status'], 'complete')
         calls = self._tool_calls(run)
-        self.assertTrue(all(c['name'] == 'query_observations' for c in calls))
+        self.assertTrue(all(c['name'] in ('query_observations', 'read_current_status') for c in calls))
         self.assertLessEqual(len(calls), 4, '陪伴闲聊不应连环查数据')
         self.assertEqual(json.loads(run.conclusion)['speaker'], 'pet')
 
@@ -132,10 +143,12 @@ class BehaviorScenarioTests(unittest.TestCase):
         self.assertTrue(turn['reply'].strip())
 
     def test_E5_ambiguous_delivers_single_question(self):
-        # 无指称的模糊输入：交付一个必要问题即可；W01 无快照期允许模型先查
-        # 观测再作答（「模糊不查数据」断言留待 W02）。
+        # 无指称的模糊输入：交付一个必要问题即可；不设「零工具」断言（2026-11-22
+        # 负责人确认维持 W01 校准口径，W02 spec §2）。
         turn, run = self._send('然后呢？')
         self.assertEqual(turn['status'], 'complete')
+        calls = self._tool_calls(run)
+        self.assertTrue(all(c['name'] in ('query_observations', 'read_current_status') for c in calls))
         self.assertGreaterEqual(turn['reply'].count('？') + turn['reply'].count('?'), 1,
                                 '模糊输入的交付应包含一个澄清问题')
         self.assertLessEqual(turn['reply'].count('？') + turn['reply'].count('?'), 3)
@@ -186,6 +199,75 @@ class BehaviorScenarioTests(unittest.TestCase):
                                         json={'text': '这句话要保留', 'requestId': 'e10'})
         self.assertEqual(response.json['turn']['status'], 'failed')
         self.assertEqual(response.json['turn']['text'], '这句话要保留')
+
+    def test_E11_current_activity_consistent(self):
+        # W02：实时状态问题——快照氛围行含「走动」，直答或现查均可，答案与事实一致。
+        self._seed_latest(action='walking', battery=76)
+        turn, run = self._send('它现在在干什么？')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        self.assertEqual(json.loads(run.conclusion)['scope'], 'allowed')
+        calls = self._tool_calls(run)
+        self.assertTrue(all(c['name'] in ('query_observations', 'read_current_status') for c in calls),
+                        json.dumps(calls, ensure_ascii=False))
+        snapshot = json.loads(run.snapshot)['sections'] if run.snapshot else {}
+        self.assertEqual(snapshot.get('current', {}).get('action'), '走动', '快照应含当前动作')
+        reply = turn['reply']
+        if snapshot.get('current', {}).get('action') == '走动':
+            self.assertNotIn('躺卧', reply.replace('不是', '').replace('没在', ''))
+            self.assertNotIn('睡觉', reply.replace('不是', '').replace('没在', ''))
+
+    def test_E12_battery_value_traceable(self):
+        # W02：电量数值可溯源（快照 batteryPercent=76 或本次工具结果）。
+        self._seed_latest(action='lying down', battery=76)
+        turn, run = self._send('项圈还有电吗？')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        snapshot = json.loads(run.snapshot)['sections'] if run.snapshot else {}
+        self.assertEqual(snapshot.get('current', {}).get('batteryPercent'), 76)
+        self.assertIn('76', turn['reply'], f'电量数值应可溯源到快照：{turn["reply"]}')
+
+    def test_E13_today_walk_same_caliber(self):
+        # W02：今日走动——经 read_current_status today 节或 query_observations 当日窗口，同口径。
+        self._seed_latest(action='walking')
+        now_sh = datetime.now(SHANGHAI)
+        today_start = now_sh.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(ZoneInfo('UTC'))
+        with db.session_scope() as s:
+            for i in range(30):
+                s.add(TelemetryMinute(owner_id=self.uid, device_id='esp32-eval',
+                                      minute=today_start + timedelta(hours=9, minutes=i), metrics='{}',
+                                      actions=json.dumps({'走动': 30}), observed_seconds=60, frames=60))
+        turn, run = self._send('它今天走了多久？')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        calls = self._tool_calls(run)
+        used = [c for c in calls if c['name'] in ('read_current_status', 'query_observations') and c['allowed']]
+        self.assertTrue(used, json.dumps(calls, ensure_ascii=False))
+
+    def test_E14_unbound_device_honest(self):
+        # W02：未绑定设备——快照与工具如实 unbound，不编造状态。
+        with db.session_scope() as s:
+            s.get(Pet, self.pet).device_id = ''
+        turn, run = self._send('它现在在干什么？')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        snapshot = json.loads(run.snapshot)['sections'] if run.snapshot else {}
+        self.assertEqual(snapshot.get('current'), {'state': 'unbound'})
+        self.assertTrue(any(k in turn['reply'] for k in
+                            ('还没绑定', '未绑定', '没有绑定', '还没', '暂无', '没有数据', '暂时无法', '离线')),
+                        f'未绑定设备应如实说明：{turn["reply"]}')
+        self.assertNotIn('走动', turn['reply'])
+        self.assertNotIn('躺着', turn['reply'])
+
+    def test_E15_recent_sounds_deep_query(self):
+        # W02：最近一小时声音——调 read_current_status 深查，窗口按分钟回看。
+        self._seed_latest(action='standing')
+        turn, run = self._send('最近一小时它有什么声音吗？')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        calls = self._tool_calls(run)
+        used = next((c for c in calls if c['name'] == 'read_current_status' and c['allowed']), None)
+        if used is None:
+            self.assertTrue(any(c['name'] == 'query_observations' and c['allowed'] for c in calls),
+                            json.dumps(calls, ensure_ascii=False))
+        else:
+            minutes = json.loads(used['arguments']).get('minutes', 30)
+            self.assertTrue(30 <= minutes <= 120, f'回看窗口应覆盖「最近一小时」：{minutes}')
 
 
 if __name__ == '__main__':

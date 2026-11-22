@@ -38,6 +38,10 @@ def main():
     conclusion = json.loads(row['conclusion'])
     print('\n== 结论 ==')
     print(json.dumps(conclusion, ensure_ascii=False, indent=2))
+    if 'snapshot' in row.keys() and row['snapshot']:
+        snap = json.loads(row['snapshot'])
+        print(f"\n== 实时快照（chars={snap.get('chars')} trimmed={snap.get('trimmed')}） ==")
+        print(json.dumps(snap.get('sections'), ensure_ascii=False))
     print('\n== 工具调用 ==')
     for call in json.loads(row['tool_summary']):
         print(json.dumps(call, ensure_ascii=False))

@@ -9,12 +9,16 @@ import json
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from petsense.agent.observations import query as observations_query
-from petsense.db import session_scope
-from petsense.db.models import Pet
+from petsense.common import shanghai_now
+from petsense.db import iso_z, session_scope, utc_now
+from petsense.db.models import Pet, TelemetryEvent, TelemetryLatest, TelemetryMinute
+from petsense.telemetry.status import latest_telemetry
+from petsense.uwb.service import service as uwb_service
+from sqlalchemy import func, select
 
 DIALOGUE = 'dialogue'
 FACT_READ = 'fact_read'
@@ -90,6 +94,116 @@ register(ToolSpec(
                         'description': 'minute=分钟汇总（默认）；summary=仅窗口总量'}},
         'required': ['start', 'end'], 'additionalProperties': False},
     group=FACT_READ, forms=(DIALOGUE,), execute=_execute_query_observations))
+
+
+def _bucket_actions(rows, start):
+    """窗口内分钟行按 5 分钟分桶（spec §3.5）：topAction + 各动作秒数 + 观测秒数。"""
+    buckets = {}
+    for row in rows:
+        index = int((row.minute - start).total_seconds() // 300)
+        bucket = buckets.setdefault(index, {'actions': {}, 'observedSeconds': 0})
+        bucket['observedSeconds'] += min(60, row.observed_seconds)
+        for key, value in json.loads(row.actions).items():
+            bucket['actions'][key] = bucket['actions'].get(key, 0) + value
+    result = []
+    for index in sorted(buckets)[:48]:
+        bucket = buckets[index]
+        top = max(bucket['actions'], key=bucket['actions'].get) if bucket['actions'] else None
+        result.append({'startAt': iso_z(start + timedelta(seconds=300 * index)),
+                       'topAction': top, 'actionSeconds': bucket['actions'],
+                       'observedSeconds': bucket['observedSeconds']})
+    return result
+
+
+def _today_summary(session, pet, end):
+    """今日统计（D2 同口径）：复用 observations.query，当日（上海零点起）现算。"""
+    start = shanghai_now(end).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    if end <= start:  # 恰逢上海零点：窗口为空，如实给零值
+        actions = {}
+        observed_seconds = 0
+        sound_count = 0
+    else:
+        summary = observations_query(session, pet, start, end)
+        actions = summary.get('actionSeconds') or {}
+        observed_seconds = summary.get('observedSeconds') or 0
+        sound_count = summary.get('soundEventCount') or 0
+    return {'windowStart': iso_z(start), 'walkSeconds': actions.get('走动', 0),
+            'actionSeconds': actions, 'observedMinutes': int(observed_seconds // 60),
+            'soundEventCount': sound_count}
+
+
+def _current_status(session, pet, start, end):
+    """窗口内 DB 节（动作序列/声音/室外定位/今日）；设备详情与室内定位由调用方在会话外补充——
+    session_scope 为线程级共享会话，latest_telemetry/uwb_service 各自开会话，嵌套会关闭外层事务。"""
+    window = {'startAt': iso_z(start), 'endAt': iso_z(end),
+              'minutes': int((end - start).total_seconds() // 60)}
+    source = {'type': 'current_status', 'deviceId': pet.device_id,
+              'startAt': iso_z(start), 'endAt': iso_z(end)}
+    if not pet.device_id:
+        return {'window': window, 'today': _today_summary(session, pet, end),
+                'actions': [], 'sounds': {'events': [], 'count': 0},
+                'location': {'indoor': None, 'outdoor': None}, 'source': source}
+    rows = session.execute(select(TelemetryMinute).where(
+        TelemetryMinute.owner_id == pet.user_id, TelemetryMinute.device_id == pet.device_id,
+        TelemetryMinute.minute >= start, TelemetryMinute.minute < end)
+        .order_by(TelemetryMinute.minute)).scalars().all()
+    episodes = session.execute(select(TelemetryEvent).where(
+        TelemetryEvent.owner_id == pet.user_id, TelemetryEvent.device_id == pet.device_id,
+        TelemetryEvent.started_at < end, TelemetryEvent.last_seen_at >= start)
+        .order_by(TelemetryEvent.started_at.desc()).limit(20)).scalars().all()
+    sound_count = session.execute(select(func.count()).select_from(TelemetryEvent).where(
+        TelemetryEvent.owner_id == pet.user_id, TelemetryEvent.device_id == pet.device_id,
+        TelemetryEvent.started_at < end, TelemetryEvent.last_seen_at >= start)).scalar_one()
+    latest_row = session.get(TelemetryLatest, pet.device_id)
+    outdoor = None
+    if latest_row is not None and latest_row.owner_id == pet.user_id:
+        try:
+            payload = json.loads(latest_row.payload)
+            if isinstance(payload.get('gps'), dict):
+                outdoor = payload['gps']
+        except (TypeError, ValueError):
+            outdoor = None
+    return {'window': window, 'actions': _bucket_actions(rows, start),
+            'sounds': {'count': sound_count,
+                       'events': [{'label': e.label, 'startedAt': iso_z(e.started_at),
+                                   'lastSeenAt': iso_z(e.last_seen_at),
+                                   'experimental': bool(e.experimental)} for e in episodes]},
+            'location': {'indoor': None, 'outdoor': outdoor},
+            'today': _today_summary(session, pet, end), 'source': source}
+
+
+def _execute_current_status(args, context):
+    raw = args.get('minutes')
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        minutes = 30
+    else:
+        minutes = min(240, max(1, raw))
+    end = utc_now()
+    start = end - timedelta(minutes=minutes)
+    with session_scope() as s:
+        pet = s.get(Pet, context['pet_id'])
+        if pet is None or pet.user_id != context['user_id']:
+            raise ValueError('宠物归属已变化')
+        device_id = pet.device_id
+        result = _current_status(s, pet, start, end)
+    result['device'] = (latest_telemetry(device_id) or {'state': 'no_data'}) if device_id else {'state': 'unbound'}
+    try:
+        result['location']['indoor'] = uwb_service.latest(device_id) if device_id else None
+    except Exception:
+        result['location']['indoor'] = None  # UWB 为内存态服务，异常时如实缺省，不阻断其余节
+    return result
+
+
+register(ToolSpec(
+    name='read_current_status',
+    description='获取本宠当前的实时状态明细：体征与设备详情、今日统计（当日零点起）、'
+                '最近一段时间的动作序列（5分钟分桶）、最近的声音事件、最新室内外定位（含坐标与质量）。'
+                '快照只有氛围一行，实时数值以本工具为准；窗口按分钟数回看，默认30、最大240。',
+    parameters={'type': 'object', 'properties': {
+        'minutes': {'type': 'integer', 'minimum': 1, 'maximum': 240,
+                    'description': '回看窗口（分钟），默认30'}},
+        'additionalProperties': False},
+    group=FACT_READ, forms=(DIALOGUE,), execute=_execute_current_status))
 
 
 def execute_tool(name, arguments, form, stance_scope, context):

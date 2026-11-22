@@ -212,4 +212,6 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(response.json['turn']['status'], 'complete')
         self.assertEqual(response.json['turn']['sources'], [])
         tools_offered = respond.call_args.kwargs.get('tools')
-        self.assertTrue(tools_offered and all(t['name'] == 'query_observations' for t in tools_offered))
+        # W02 起事实只读组含 query_observations 与 read_current_status；写入/联网/留意仍无工具
+        self.assertTrue(tools_offered and all(t['name'] in ('query_observations', 'read_current_status')
+                                              for t in tools_offered))

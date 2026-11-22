@@ -1,7 +1,7 @@
-"""Authenticated durable companion API（W01：统一运行循环，无前置路由）。
+"""Authenticated durable companion API（W01：统一运行循环，无前置路由；W02：氛围快照组装）。
 
-POST turns 组装初始包并触发 loop.run_dialogue；判断（范围/意图/角色）全部由
-模型在循环内完成（agent-w01-spec.md §3.7）。GET 保留为 WS 断线的降级轮询路径。
+POST turns 组装初始包（含 W02 常驻快照）并触发 loop.run_dialogue；判断（范围/意图/角色）
+全部由模型在循环内完成（agent-w01-spec.md §3.7）。GET 保留为 WS 断线的降级轮询路径。
 """
 import json
 import time
@@ -15,7 +15,7 @@ from petsense.db import session_scope, utc_now, iso_z
 from petsense.db.models import Pet
 from petsense.db.models.agent import AgentTurn
 from petsense.agent.observations import query
-from petsense.agent import loop, runs
+from petsense.agent import loop, runs, snapshot
 from petsense.agent import ws  # noqa: F401  import 即注册 /api/app/agent/ws 路由
 
 bp = Blueprint('agent', __name__, url_prefix='/api/app/agent')
@@ -103,9 +103,10 @@ def turns(pet_id):
             history_query = history_query.where((AgentTurn.topic_id == topic_id) | (AgentTurn.id == topic_id))
         history_rows = s.execute(history_query.order_by(AgentTurn.id.desc()).limit(12)).scalars().all()
         history = [{'text': row.text, 'reply': row.reply} for row in reversed(history_rows)]
-        pet_facts = {'name': pet.name, 'species': pet.species, 'breed': pet.breed}
-    context = {'pet_id': pet_id, 'user_id': user['id'], 'pet': pet_facts, 'text': text.strip(),
-               'target': target, 'history': history, 'now_iso': iso_z(utc_now())}
+        now = utc_now()
+        snap = snapshot.assemble(s, pet, now)
+    context = {'pet_id': pet_id, 'user_id': user['id'], 'text': text.strip(),
+               'target': target, 'history': history, 'snapshot': snap, 'now_iso': iso_z(now)}
     speaker = ['assistant']
     last_write = [0.0]
 
