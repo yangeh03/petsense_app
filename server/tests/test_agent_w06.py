@@ -235,6 +235,109 @@ class SearchParsingTests(unittest.TestCase):
     def test_mixed_output_has_function_calls_too(self):
         self.assertEqual([c['name'] for c in model._calls_of(FINAL_SEARCH)], ['query_observations'])
 
+    def test_citations_from_item_level_annotations(self):
+        # 供应商 annotations 可能在 message 项级而非 content 块级（2026-11-23 E35 归因）
+        final = {'output': [{'type': 'message', 'role': 'assistant', 'content': [
+            {'type': 'output_text', 'text': '正文', 'annotations': []}],
+            'annotations': [{'type': 'url_citation', 'url': 'https://item.example.com/',
+                             'title': '项级来源', 'content': '片段'}]}]}
+        citations = model._citations_of(final)
+        self.assertEqual([c['url'] for c in citations], ['https://item.example.com/'])
+        self.assertEqual(citations[0]['title'], '项级来源')
+
+
+class _FakeStreamResponse:
+    def __init__(self, lines):
+        self._lines = lines
+        self.status_code = 200
+
+    def iter_lines(self):
+        return iter(self._lines)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+def _sse_lines(events):
+    """events: [(event 或 None, data_dict)] → SSE 原始字节行（不含 [DONE] 即截断流）。"""
+    lines = []
+    for kind, data in events:
+        if kind:
+            lines.append(('event: ' + kind).encode('utf-8'))
+        lines.append(('data: ' + json.dumps(data, ensure_ascii=False)).encode('utf-8'))
+    return lines
+
+
+class RespondStreamTests(unittest.TestCase):
+    """respond() 流式搜索工件回收（2026-11-23 E35 归因：completed 不保证到达）。"""
+
+    def _respond(self, events):
+        env = {'MINIMAX_API_KEY': 'test-key'}
+        with patch.dict(os.environ, env), \
+                patch('requests.post', return_value=_FakeStreamResponse(_sse_lines(events))):
+            return model.respond([{'role': 'user', 'content': 'q'}], web_search=True)
+
+    def test_annotation_events_survive_truncated_stream(self):
+        # 流被截断（无 completed / [DONE]）：citation 从 annotation.added 事件兜底回收，
+        # web_search_call 按流事件 item_id 计数（query 不可得，如实留空）
+        events = [
+            ('response.created', {'type': 'response.created'}),
+            ('response.output_text.delta', {'type': 'response.output_text.delta', 'delta': '广州今天'}),
+            ('response.output_text.delta', {'type': 'response.output_text.delta', 'delta': '有雨。'}),
+            ('response.web_search_call.in_progress', {'type': 'response.web_search_call.in_progress',
+                                                      'item_id': 'call_a'}),
+            ('response.output_text.annotation.added', {'type': 'response.output_text.annotation.added',
+                                                       'annotation': {'type': 'url_citation',
+                                                                      'url': 'https://gd.example.com/',
+                                                                      'title': '广州天气',
+                                                                      'content': '小雨 17-23℃'}}),
+            ('response.output_item.added', {'type': 'response.output_item.added',
+                                            'item': {'type': 'web_search_call', 'id': 'call_b'}}),
+        ]
+        result = self._respond(events)
+        self.assertEqual(result['text'], '广州今天有雨。')
+        self.assertEqual([c['url'] for c in result['citations']], ['https://gd.example.com/'])
+        self.assertEqual(sorted(c['id'] for c in result['web_search_calls']), ['call_a', 'call_b'])
+        self.assertEqual(result['web_search_calls'][0]['query'], '', '流事件无 query，如实留空')
+
+    def test_incomplete_response_is_extracted_like_final(self):
+        # 长搜索流以 response.incomplete 结束（无 completed、无 [DONE]）：output 与 usage 照常提取
+        final = {'type': 'response.incomplete', 'response': {
+            'output': [{'type': 'web_search_call', 'id': 'ws_1', 'status': 'completed',
+                        'action': {'type': 'search', 'query': '广州 天气'}}],
+            'usage': {'output_tokens': 900}}}
+        result = self._respond([('response.created', {'type': 'response.created'}),
+                                ('response.incomplete', final)])
+        self.assertEqual(result['web_search_calls'][0]['query'], '广州 天气')
+        self.assertEqual(result['usage'], {'output_tokens': 900})
+
+    def test_final_and_stream_artifacts_merged_without_duplicates(self):
+        final = {'type': 'response.completed', 'response': {
+            'output': [{'type': 'web_search_call', 'id': 'call_a', 'status': 'completed',
+                        'action': {'type': 'search', 'query': '广州 天气'}},
+                       {'type': 'message', 'role': 'assistant', 'content': [
+                           {'type': 'output_text', 'text': '有雨。', 'annotations': [
+                               {'type': 'url_citation', 'url': 'https://gd.example.com/',
+                                'title': '广州天气', 'content': '官方'}]}]}],
+            'usage': {}}}
+        events = [('response.output_text.annotation.added', {
+            'type': 'response.output_text.annotation.added',
+            'annotation': {'type': 'url_citation', 'url': 'https://gd.example.com/',
+                           'title': '流式重复', 'content': '应被去重'}}),
+            ('response.output_text.annotation.added', {
+                'type': 'response.output_text.annotation.added',
+                'annotation': {'type': 'url_citation', 'url': 'https://other.example.com/',
+                               'title': '仅流式', 'content': 'x'}}),
+            ('response.completed', final)]
+        result = self._respond(events)
+        self.assertEqual(sorted(c['url'] for c in result['citations']),
+                         ['https://gd.example.com/', 'https://other.example.com/'])
+        self.assertEqual(result['citations'][0]['title'], '广州天气', 'final 提取优先于流事件')
+        self.assertEqual(len(result['web_search_calls']), 1, '流 id 已在 final 中，不重复计数')
+
 
 class LoopMountTests(unittest.TestCase):
     """loop 挂载策略与限次（monkeypatch 假模型，沿用 W01/W02 基建）。"""
@@ -254,6 +357,15 @@ class LoopMountTests(unittest.TestCase):
         return {'text': self.stance + text_suffix, 'function_calls': list(calls),
                 'web_search_calls': list(search), 'citations': list(citations), 'usage': {}}
 
+    def test_prompt_calibrates_stable_knowledge_and_round_hygiene(self):
+        # E36 修复锚点：稳定常识直答、不为「显得有依据」搜索、搜索轮不混排其他工具
+        prompt = loop.system_prompt(True)
+        self.assertIn('猫为什么爱纸箱', prompt)
+        self.assertIn('不为「显得有依据」而搜索', prompt)
+        self.assertIn('不要同时调用其他工具', prompt)
+        off = loop.system_prompt(False)
+        self.assertNotIn('猫为什么爱纸箱', off)
+
     def test_search_mounted_first_round(self):
         turn = self._turn('【照料助手】今天不错。')
         with patch('petsense.agent.model.respond', return_value=turn) as respond:
@@ -272,8 +384,8 @@ class LoopMountTests(unittest.TestCase):
         self.assertNotIn('read_web_page', [s['name'] for s in schemas])
         self.assertEqual([s for s in outcome['sources'] if s.get('type') == 'web'], [])
         self.assertIn('暂未开放', loop.system_prompt(False))
-        self.assertNotIn('联网搜索：', loop.system_prompt(False))
-        self.assertIn('联网搜索：', loop.system_prompt(True))
+        self.assertNotIn('联网搜索时机：', loop.system_prompt(False))
+        self.assertIn('联网搜索时机：', loop.system_prompt(True))
 
     def test_budget_detaches_after_two_calls(self):
         search = [{'id': 'ws_1', 'query': 'q1', 'status': 'completed', 'actionType': 'search', 'openPage': ''}]
@@ -322,6 +434,78 @@ class LoopMountTests(unittest.TestCase):
         self.assertEqual(entry['reason'], 'server_side')
         self.assertEqual(entry['citations'], 8, '轨迹条目按去重后计数')
         self.assertIn('q', entry['arguments'])
+
+    def test_read_web_page_success_becomes_web_source(self):
+        # E35 修复：抓取成功的页面是本运行真实核对过的来源（url/title 来自页面本身）
+        page = {'url': 'https://weather.example.com/gz', 'title': '广州天气网', 'text': '小雨。',
+                'truncated': False, 'bytes': 10}
+        call = {'name': 'read_web_page', 'arguments': '{"url":"https://weather.example.com/gz"}',
+                'call_id': 'c1'}
+        turns = [self._turn(calls=[call]), self._turn('【照料助手】读完了，有雨。')]
+        with patch('petsense.agent.model.respond', side_effect=turns), \
+                patch('petsense.agent.fetch.fetch_page', return_value=page):
+            outcome = loop.run_dialogue(dict(self.context))
+        web = [s for s in outcome['sources'] if s['type'] == 'web']
+        self.assertEqual(len(web), 1)
+        self.assertEqual(web[0]['url'], 'https://weather.example.com/gz')
+        self.assertEqual(web[0]['title'], '广州天气网')
+        self.assertEqual(web[0]['checkedAt'], self.context['now_iso'])
+
+    def test_citations_collected_from_round_without_search(self):
+        # E35 修复：annotations 可能出现在没有 web_search_call 的后续轮 message 上
+        search = [{'id': 'ws_1', 'query': '广州 天气', 'status': 'completed',
+                   'actionType': 'search', 'openPage': ''}]
+        query_call = {'name': 'query_observations',
+                      'arguments': '{"start":"2026-11-01T00:00:00+08:00","end":"2026-11-02T00:00:00+08:00"}',
+                      'call_id': 'c1'}
+        turns = [self._turn(calls=[query_call], search=search,
+                            citations=[{'title': '来源A', 'url': 'https://a.example.com/', 'snippet': 'x'}]),
+                 self._turn('【照料助手】好了。',
+                            citations=[{'title': '来源B', 'url': 'https://b.example.com/', 'snippet': 'y'}])]
+        with patch('petsense.agent.model.respond', side_effect=turns), \
+                patch('petsense.agent.registry.observations_query', return_value={'source': {'type': 'x'}}):
+            outcome = loop.run_dialogue(dict(self.context))
+        web_urls = [s['url'] for s in outcome['sources'] if s['type'] == 'web']
+        self.assertEqual(web_urls, ['https://a.example.com/', 'https://b.example.com/'],
+                         '无搜索轮的 citations 也必须并入来源')
+
+    def test_search_carryover_note_injected_with_citations(self):
+        search = [{'id': 'ws_1', 'query': '广州 天气', 'status': 'completed',
+                   'actionType': 'search', 'openPage': ''}]
+        query_call = {'name': 'query_observations',
+                      'arguments': '{"start":"2026-11-01T00:00:00+08:00","end":"2026-11-02T00:00:00+08:00"}',
+                      'call_id': 'c1'}
+        turns = [self._turn(calls=[query_call], search=search,
+                            citations=[{'title': '广州天气网', 'url': 'https://w.example.com/',
+                                        'snippet': '小雨 17-23℃'}]),
+                 self._turn('【照料助手】有雨。')]
+        with patch('petsense.agent.model.respond', side_effect=turns) as respond, \
+                patch('petsense.agent.registry.observations_query', return_value={'source': {'type': 'x'}}):
+            outcome = loop.run_dialogue(dict(self.context))
+        second_input = respond.call_args_list[1].args[0]
+        notes = [item['content'] for item in second_input
+                 if item.get('role') == 'user' and '联网搜索记录' in (item.get('content') or '')]
+        self.assertEqual(len(notes), 1, '搜索轮后下一轮输入应带回搜索记录')
+        self.assertIn('https://w.example.com/', notes[0])
+        self.assertIn('不要为同一问题重复搜索', notes[0])
+        self.assertTrue(any('search_carryover' in m for m in outcome['trace']['messages']))
+
+    def test_search_carryover_note_honest_when_results_missing(self):
+        # 「搜索+工具调用」同轮且结果未返回（E35 归因形状）：如实说明，不声称已引用
+        search = [{'id': 'call_a', 'query': '', 'status': '', 'actionType': '', 'openPage': ''}]
+        query_call = {'name': 'query_observations',
+                      'arguments': '{"start":"2026-11-01T00:00:00+08:00","end":"2026-11-02T00:00:00+08:00"}',
+                      'call_id': 'c1'}
+        turns = [self._turn(calls=[query_call], search=search),
+                 self._turn('【照料助手】我不能确认实时天气。')]
+        with patch('petsense.agent.model.respond', side_effect=turns), \
+                patch('petsense.agent.registry.observations_query', return_value={'source': {'type': 'x'}}):
+            outcome = loop.run_dialogue(dict(self.context))
+        web = [s for s in outcome['sources'] if s['type'] == 'web']
+        self.assertEqual(web, [], '无 citations、无成功抓取时不得编造网页来源')
+        entry = next(e for e in outcome['trace']['tool_summary'] if e['name'] == 'web_search')
+        self.assertEqual(entry['citations'], 0)
+        self.assertEqual(json.loads(entry['arguments'])['queries'], [], 'query 不可得时如实留空')
 
     def test_out_of_scope_with_search_is_audited(self):
         turn = {'text': '{"scope":"out_of_scope","intent":"write","speaker":"assistant"}\n【照料助手】这超出范围。',
