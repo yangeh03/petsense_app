@@ -13,6 +13,7 @@ import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
 import AgentImageViewer from '@/components/agent/agent-image-viewer';
 import { ProposalCard } from '@/components/agent/proposal-card';
+import { WebSourceCard } from '@/components/agent/web-source-card';
 import { ThemedText } from '@/components/themed-text';
 import { Shadows } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
@@ -21,7 +22,9 @@ import {
   fetchAgentObservation,
   type AgentImageMeta,
   type AgentObservation,
+  type AgentSource,
   type AgentTurn,
+  type AgentWindowSource,
 } from '@/services/agent';
 import { assistantDisplayName, useCompanionSettingsStore } from '@/stores/companion-settings';
 
@@ -33,7 +36,7 @@ type Props = {
   onRetry: (turn: AgentTurn) => void;
 };
 
-type AgentSource = AgentTurn['sources'][number];
+type DatedSource = AgentWindowSource & { startAt: string; endAt: string };
 
 /** 展开详情的窗口级缓存：同一窗口多次展开不重复请求。 */
 const observationCache = new Map<string, AgentObservation>();
@@ -84,7 +87,7 @@ function formatWindow(startAt: string, endAt: string): string {
 }
 
 /** 来源卡摘要：覆盖时长与声音事件；无覆盖如实说明（缺数据不伪装成正常）。 */
-function sourceSummary(source: AgentSource): string {
+function sourceSummary(source: DatedSource): string {
   if (source.observedSeconds == null && source.soundEventCount == null) return '';
   const sounds = source.soundEventCount ?? 0;
   const minutes = Math.round((source.observedSeconds ?? 0) / 60);
@@ -98,13 +101,22 @@ function sourceSummary(source: AgentSource): string {
   return sounds > 0 ? `覆盖 ${coverage} · 声音事件 ${sounds} 次` : `覆盖 ${coverage}`;
 }
 
-/** 相同窗口去重（模型常查重叠窗口）。 */
-function dedupeSources(sources: AgentSource[]): AgentSource[] {
-  return sources.filter(
-    (source, index, all) =>
-      all.findIndex((item) => item.startAt === source.startAt && item.endAt === source.endAt) ===
-      index,
+function isDatedSource(source: AgentSource): source is DatedSource {
+  return (
+    (source.type === 'observations' ||
+      source.type === 'current_status' ||
+      source.type === 'baseline') &&
+    typeof source.startAt === 'string' &&
+    typeof source.endAt === 'string' &&
+    Number.isFinite(Date.parse(source.startAt)) &&
+    Number.isFinite(Date.parse(source.endAt))
   );
+}
+
+function sourceKey(source: AgentSource) {
+  if (source.type === 'web') return `web:${source.url}`;
+  if (isDatedSource(source)) return `window:${source.startAt}:${source.endAt}`;
+  return `unavailable:${source.type}`;
 }
 
 function minutesOf(seconds: number | null | undefined): number {
@@ -112,7 +124,7 @@ function minutesOf(seconds: number | null | undefined): number {
 }
 
 /** 来源卡：点击就地展开这段窗口的关键数据；「记录页」降级为上探日/周趋势的次级入口。 */
-function SourceCard({ source, petId }: { source: AgentSource; petId: number | null }) {
+function SourceCard({ source, petId }: { source: DatedSource; petId: number | null }) {
   const theme = useTheme();
   const router = useRouter();
   const [expanded, setExpanded] = useState(false);
@@ -436,9 +448,19 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry }:
           <ProposalCard key={block.proposal.id} petId={petId} proposal={block.proposal} />
         ))}
         <View style={styles.replyFootnote}>
-          {dedupeSources(turn.sources).map((source) => (
-            <SourceCard key={`${source.startAt}-${source.endAt}`} source={source} petId={petId} />
-          ))}
+          {[...new Map((turn.sources ?? []).map((source) => [sourceKey(source), source]))].map(
+            ([key, source]) => {
+              if (source.type === 'web') return <WebSourceCard key={key} source={source} />;
+              if (isDatedSource(source)) {
+                return <SourceCard key={key} source={source} petId={petId} />;
+              }
+              return (
+                <ThemedText key={key} type="small" themeColor="textSecondary">
+                  {source.type === 'baseline' ? '个人基线暂无可比样本' : '暂不支持展示的来源'}
+                </ThemedText>
+              );
+            },
+          )}
           {turn.status !== 'pending' ? (
             <Pressable
               accessibilityRole="button"

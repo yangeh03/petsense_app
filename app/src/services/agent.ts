@@ -28,6 +28,18 @@ export type AgentProposal = {
   decidedAt: string | null;
 };
 
+export type AgentWindowSource = {
+  type: 'observations' | 'current_status' | 'baseline';
+  startAt: string | null;
+  endAt: string | null;
+  observedSeconds?: number | null;
+  soundEventCount?: number | null;
+};
+
+export type AgentWebSource = { type: 'web'; url: string; title: string; checkedAt: string };
+
+export type AgentSource = AgentWindowSource | AgentWebSource;
+
 export type AgentTurn = {
   id: number;
   requestId: string;
@@ -40,15 +52,7 @@ export type AgentTurn = {
   createdAt: string;
   topicId: number | null;
   replyTo: number | null;
-  sources: {
-    type: string;
-    startAt: string;
-    endAt: string;
-    deviceId?: string;
-    versions?: string[];
-    observedSeconds?: number | null;
-    soundEventCount?: number | null;
-  }[];
+  sources: AgentSource[];
   blocks:
     | (
         | { type: 'text'; speaker: 'pet' | 'assistant'; text: string }
