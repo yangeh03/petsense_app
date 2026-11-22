@@ -208,6 +208,8 @@ parameters: {assistantName?(1-20字), ownerTitle?(≤20字，空串=清除), ver
 
 2026-11-22，iPhone 17 Pro 模拟器连接隔离后端的 `petsense` 账号，通过腾讯云 MiniMax Responses API 问「它其实已经三岁了」。回合生成版本 1 的年精度候选，档案写入发生在点击「确认保存档案修改」后；决策端点返回 200，卡片显示「已写入档案」，数据库生日为 `2023-01-01`、精度为 `year`。生产资料写入验收仍以隔离账号操作为准。
 
+2026-11-23，集成核验（Zcode，云端隔离实例 + 真实凭据）：审计修复 `3c3191c` 后行为评测 W03 相关子集 E6/E16/E17/E20/E21 复跑 5/5 通过（E6 新断言：通用肯定语 + 精确生日回显；修复了旧运行严格措辞造成的假阴性）；其余场景与 W06/W07 场景一并在集成分支全量真实凭据评测中复跑（结果见本文件 §9 与集成记录）。
+
 ## 10. 合入与文档更新
 
 - 变更：本 spec、`server/alembic/versions/0013_*`、`server/petsense/db/models/`、`server/petsense/pets/`（profile 校验 + routes + weight-records）、`server/petsense/agent/`（proposals.py、settings.py、registry、loop、routes）、`server/tests/`（单测 + agent_behavior 场景）、App `services/agent.ts`、`services/api.ts`、`stores/`、`components/agent/`、`components/pets/`、`app/pet.tsx`、`app/assistant-settings.tsx`、`app/(tabs)/profile.tsx`、`app/_layout.tsx`。

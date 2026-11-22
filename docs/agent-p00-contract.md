@@ -42,7 +42,7 @@ Agent 以「运行（Run）」为最小调度单元：触发（消息/检查点/
 - **自主写**：主人讲述的生活经历、事件与变化主题、习惯候选、会话要点、委托回信归档、日/周汇总——Agent 判断值得记时经 `write_memory` 直接写入，带来源、时间与可回滚版本，写入动作进轨迹，可选轻量回显。主人明确要求忘掉时经 `forget_memory` 将条目置为 retired（保留可审计、幂等），后续不再引用。
 - **确认写**：宠物档案结构化字段（生日、体重、品种、名字等唯一真值）与长期偏好——经 `prepare_*` 提案与确认卡；明确且无歧义的「记住/更新」指令视同确认，直接写入并展示结果。
 
-假设、否定、其他主体和未知日期须保留原意不写入；判定由模型结构化提案，业务服务落库前复核。记忆检索为结构化条件 + summary 关键词（SQLite FTS5 trigram）；记忆新表以 SQLite 为唯一目标。记忆整理含认识卡蒸馏（晋升决策入轨迹）与 markdown 报告导出（DB 为真相、报告为视图）。确认提案应有稳定标识、主体、候选内容、版本与状态；确认、修改、拒绝须能应对重复提交。写入成功后再展示成功，并刷新资料页与共享上下文；失败保留候选。生日、模糊年龄、带日期体重、提案版本和 decision 端点见 [W03 spec](./agent-w03-spec.md)。W04 实现经历与习惯候选等自主写，并预留长期偏好的确认写接口。
+假设、否定、其他主体和未知日期须保留原意不写入；判定由模型结构化提案，业务服务落库前复核。记忆检索为结构化条件 + summary 关键词（SQLite FTS5 trigram）；记忆新表以 SQLite 为唯一目标。记忆整理含认识卡蒸馏（晋升决策入轨迹）与 markdown 报告导出（DB 为真相、报告为视图）。确认提案应有稳定标识、主体、候选内容、版本与状态；确认、修改、拒绝须能应对重复提交。写入成功后再展示成功，并刷新资料页与共享上下文；失败保留候选。生日、模糊年龄、带日期体重、提案版本和 decision 端点见 [W03 spec](./agent-w03-spec.md)。W04 实现经历与习惯候选等自主写，并预留长期偏好的确认写接口。助手设定属独立直写：`prepare_role_settings` 工具 + `GET/PATCH /api/app/agent/assistant-settings`（设定页读写，PATCH 白名单校验），语义见 [W03 spec §3.7](./agent-w03-spec.md)。
 
 ## 5. 基线、事件和委托
 
@@ -64,7 +64,7 @@ Agent 以「运行（Run）」为最小调度单元：触发（消息/检查点/
 | 能力 | 当前决定 | 已验证与待验证 |
 | --- | --- | --- |
 | 模型 | MiniMax；API key 后续提供 | 阶段1已验证国内端点、M3.1-Flash 文本、流式及工具往返；生产配置和额度管理仍按实施部署核对 |
-| 图片 | MiniMax Responses API 多模态输入 | [W07](./agent-w07-spec.md) 验证 JPEG 的 `input_image` data URL、与 Function Calling 共用及历史重放。owner 图片保存在回合的 `images`，助手 `blocks` 保持其回复语义 |
+| 图片 | MiniMax Responses API 多模态输入 | [W07](./agent-w07-spec.md) 验证 JPEG 的 `input_image` data URL、与 Function Calling 共用及历史重放。owner 图片经 `POST /api/app/agent/pets/<id>/images` 上传（内容寻址、按用户子目录隔离）、鉴权读取 `GET /api/app/agent/images/<image_id>`，保存在回合的 `images`，助手 `blocks` 保持其回复语义 |
 | 搜索 | 用户指定使用 MiniMax 自带搜索 | **W00 实测（2026-11-22）确定端点前提**：内建 `web_search` 仅挂在 **Responses API（`/v1/responses`）与 Anthropic Messages API**（Chat Completions 不支持，`web_search` 参数被忽略）；**W06 已接入（2026-11-23 集成合入）**：主对话按轮挂载内建 `web_search`（Responses API，与 function 工具混排），final `url_citation` 提供来源（title/url/content）；每运行累计 2 次后不再挂载（degraded `search_budget_detached`），挂搜索请求读超时 110s（实测延迟方差大 8.2–21.8s）。`usage` 无搜索计费字段，D6 计费待控制台核对（限次兜底）。URL 直接阅读不可依赖，`read_web_page` 为自建 fetcher（trafilatura + pin-IP SSRF 防护）。生产灰度两阶段开关 `PETSENSE_SEARCH_DISABLED`（W06 spec §6.3） |
 | 原生推送 | 用户指定 Expo；暂按 iOS 和 Android 规划，使用 Expo Notifications 和 Expo Push Service 作为实施方案 | [Expo SDK 58 文档](https://docs.expo.dev/versions/v58.0.0/sdk/notifications/)支持两平台及 Expo push token；需准备各平台推送凭据和原生构建，Android 远程推送不能依赖 Expo Go。账户、凭据及真实推送尚未验证，W13 分平台真机验收 |
 | 位置语义 | 定位同学后续提供文本标签 | 接口、时间有效性和版本尚未交付；区域能力单独验收，不阻塞动作/声音 |
