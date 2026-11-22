@@ -243,7 +243,7 @@ parameters={'type':'object','properties':{
   3. **日汇总文字的检索/报告复述泄露**（2026-11-22 集成核查发现并修复，Zcode）：上述「已知边界」原表述「靠检索只返 active + 提示词禁令约束」不成立——日汇总生成时把当日记忆条目**原文**编入提示词并写入 source_refs（`memory.memories_in_range` 按 generated_at 取当日条目），文字并非纯观测小结；episode 被遗忘/纠正后，含旧事实的 daily 条目仍 active、可被 `search_memories` 检索复述，报告日/周汇总节亦原样展示（认识卡污染检查未覆盖引用型汇总）。修复：污染判定推广到全部引用型条目（`memory.polluted_active_ids` 复用 `stale_citations`）——`search` 不再返回污染条目（totalActive 同步扣除），报告日/周汇总节以「（待更新：引用的部分记忆已被遗忘或纠正）」占位（与认识卡同口径）；条目不物理删除、文字不回溯改写，历史版本章节保持可审计。周汇总只喂结构化观测事实（无记忆文字）不受影响；快照 memory 节只用 `insight_line` 不受影响。单测：`LeakControlTests` 新增 2 条（遗忘后检索/报告不复述且归档可审计、失效认识卡退出检索）。
   4. **轨迹溯源补齐 §3.11**：summary/distill 由「先条目后轨迹」改为 spec 要求的「先轨迹后条目」——先 `runs.save` 取 run id，条目 `source_refs` 增加 `{type:'run', id}`，条目落库后 `runs.update_conclusion`（runs.py 新增）回填 memoryId/supersededInsightId/kept；daily/weekly 条目写入前在自身作用域复核 active 不存在（幂等）。
 - 本地验证（包执行者）：`PETSENSE_MQTT_DISABLED=1 python -m unittest discover -s server/tests` 303 通过、1 skip（行为评测无凭据自动 skip）；全量测试后 `git status` 干净，确认无 repo 运行时写入。W04 单测 36 个含新增 LeakControlTests 4 条（重建不回喂旧文、候选全失效退役、纠正触发重建、forget 后报告即时刷新）。
-- 待总协调者/后续：§9.3 行为评测 E27–E34 真实凭据跑通、§9.4 iOS 模拟器全链路（讲述→回显→找回→纠正→忘掉）、§9.5 回放抽查、§9.6 部署后报告落盘与 SQLite 版本核对。
+- §9.3 行为评测 E27–E34：2026-11-23 最终组合代码（2141cbf）云端真实凭据全量复跑全过（shard2 19/19，含此前一轮 E32 采样方差失败的隔离复跑核实）；E27 断言按真实轨迹校准（禁止确认卡语义措辞与提案块，不再禁普通动词「确认」）。待后续：§9.4 iOS 全链路终验、§9.5 回放抽查、§9.6 部署后报告落盘核对。
 
 ## 10. 合入与文档更新
 

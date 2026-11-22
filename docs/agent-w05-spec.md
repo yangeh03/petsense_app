@@ -176,9 +176,9 @@ read_baseline(feature?: 'actions'|'sounds', date?: 'YYYY-MM-DD')
 - `observations` 接口 `learning.state=ready`、`learningDimensions` 分维度状态与 active 标记正确。
 - iOS 模拟器（Expo Go + 独立 Metro 8084，`EXPO_PUBLIC_API_BASE_URL` 指隔离后端）登录后进入伙伴页：胶囊显示「**已认识**」，展开卡逐字为「慢慢认识它的日常 / 动作 已认识 · 声音 2/7 天 / 区域观察等待接入，个人日常参照仍在建立。」（AX 树取证）。对话往返需模型凭据，轨迹级验收并入生产阶段。
 
-### 9.3 待验收（合入部署后）
+### 9.3 验收进度
 
-- [ ] 行为评测 E22–E26（需 MINIMAX 凭据，`cd server && MINIMAX_API_KEY(_FILE)=… python3 -m unittest discover -s tests -p test_agent_behavior.py`，含既有 E1–E15 回归）。
+- [x] 行为评测 E22–E26：2026-11-23 最终组合代码（2141cbf）云端真实凭据全量复跑全过（shard2 19/19，含 E22–E26；W01/W02 基线 shard1 14/14、W06/W07 shard3 8/8 同轮通过）。
 - [ ] 模拟器接生产（账号 `petsense`）：就绪维度问「比平时」类问题，回答引用 `read_baseline` 结果（`agent_replay.py` 轨迹取证）。
 - [x] 回填核验工具在云端只读副本运行，见 §9.4。
 
