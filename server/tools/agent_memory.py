@@ -47,7 +47,7 @@ def cmd_backfill(args):
         memory_jobs._model_text = lambda system_prompt, user_prompt, max_tokens=500: None
     from datetime import date as date_cls, timedelta
     end_day = args.to or memory.day_text(utc_now() - timedelta(days=1))
-    start_day = args.from or end_day
+    start_day = getattr(args, 'from') or end_day  # from 是保留字，argparse dest 不能直接做属性访问
     results = []
     day = date_cls.fromisoformat(start_day)
     end = date_cls.fromisoformat(end_day)
