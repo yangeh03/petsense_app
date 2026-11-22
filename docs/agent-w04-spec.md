@@ -245,6 +245,15 @@ parameters={'type':'object','properties':{
 - 本地验证（包执行者）：`PETSENSE_MQTT_DISABLED=1 python -m unittest discover -s server/tests` 303 通过、1 skip（行为评测无凭据自动 skip）；全量测试后 `git status` 干净，确认无 repo 运行时写入。W04 单测 36 个含新增 LeakControlTests 4 条（重建不回喂旧文、候选全失效退役、纠正触发重建、forget 后报告即时刷新）。
 - §9.3 行为评测 E27–E34：2026-11-23 最终组合代码（2141cbf）云端真实凭据全量复跑全过（shard2 19/19，含此前一轮 E32 采样方差失败的隔离复跑核实）；E27 断言按真实轨迹校准（禁止确认卡语义措辞与提案块，不再禁普通动词「确认」）。待后续：§9.4 iOS 全链路终验、§9.5 回放抽查、§9.6 部署后报告落盘核对。
 
+### 9.2 模拟器原生验收与缺陷修复（2026-11-23）
+
+原生验收：合并版（3ef6f36）独立模拟器会话按 §9 全链路通过——讲述→回显→找回→纠正→忘掉→追问不复述、认识卡污染控制（强制重蒸馏、报告占位）、`agent_replay.py` 回放含 stance_missing 拒绝→一次性提醒→补声明重调全链路。完整记录收编为 `docs/agent-w03-w07-native-acceptance-20261123.md`（§1）。验收发现两例缺陷，同一 PR 内修复：
+
+1. **虚假写入回执（P2，模型行为方差）**：首轮 write_memory 被 `stance_missing` 拒绝后，模型只重发了读工具却回复「我把这件事记下了」（pet_memories 0 条佐证）。修复（`loop.py` 确定性兜底，同 stance/搜索提醒机制）：最终回复命中写入回执词表、本运行又没有任何 `write_memory` 保存成功、且本运行发起过写入调用时，注入一次性系统提醒（`write_receipt_reminder` 入轨迹），模型须真正补写或如实说明未保存；提醒后仍声称的落 `degraded:false_write_receipt` 供监控。收紧覆盖两种失败形态：**无执行**（调用被拒/漏重发）与**结构化未写入**（执行但 `saved=false`）。本运行从未发起写入调用的回显不拦截（早前回合写入的合规回显保留，只落 `write_receipt_audit` 轨迹标记）；否定句不算声称。
+2. **跨 kind supersedes（P3）**：`write_memory(kind=episode, supersedesId=11)` 曾把 active 认识卡替换成 episode（§3.3 校验只查同宠 active），版本链语义被破坏并持续误导模型措辞。修复（`memory.save_entry` 存储层约束）：supersede 目标必须与新条目**同 kind**；认识卡等系统条目由蒸馏 worker 维护（`insight_card→insight_card` 同类重建不受影响），模型写入路径白名单 + 同类约束双重封死系统条目替换入口。工具 schema 与提示词同步注明。
+
+回归：`tests/test_agent_w04.py` 新增 7 条确定性用例（跨 kind 拒绝且认识卡不被替换、worker 同类重建不受影响、系统类型白名单兜底；缺陷路径回放漏重发+虚假回执获一次性提醒、执行但 saved=false 同样拦截、无写入调用的合规回显不拦截只审计、真实写入直通、否定句不算声称）。修复后云端真实凭据 41 场景全量复跑 **41/41**（2026-11-23 三分片并行：s2 14/14、s3 13/13、s1 13/14 + E25 隔离复跑 3/3 稳定——失败轮为回答以「23 分 20 秒」表达、不含连续「分钟」二字的采样方差，数值与口径实质正确，同 E32 先例，与本修复无关）。
+
 ## 10. 合入与文档更新
 
 - 变更：本 spec、`server/petsense/agent/`（§3.1）、alembic `0012`、`server/tests/`、`server/tools/agent_memory.py`、P00 契约 §4（补 `forget_memory` 一句）、V11 §5.2 工具清单（同步）、AGENTS.md（W04 状态与记忆口径）。

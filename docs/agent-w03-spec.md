@@ -210,6 +210,8 @@ parameters: {assistantName?(1-20字), ownerTitle?(≤20字，空串=清除), ver
 
 2026-11-23，集成核验（Zcode，云端隔离实例 + 真实凭据）：审计修复 `3c3191c` 后行为评测 W03 相关子集 E6/E16/E17/E20/E21 复跑 5/5 通过（E6 新断言：通用肯定语 + 精确生日回显；修复了旧运行严格措辞造成的假阴性）；最终组合代码（2141cbf）全量复跑（2026-11-23，云端隔离三分片并行）：E16–E21 全过（shard2 19/19），W01/W02 基线 14/14、W06/W07 场景 8/8 同轮通过，合计 41/41。
 
+2026-11-23，模拟器原生验收（独立会话，合并版 3ef6f36）：§9 确认协议链路在新 bundle 下回归通过——档案修改建议卡「已写入档案·生日 约 2023 年」正确渲染（POST decision 200 既有留证 + 新 bundle 复验），聊天头像进档案/设定页入口正常；证据见 `docs/agent-w03-w07-native-acceptance-20261123.md` §4。
+
 ## 10. 合入与文档更新
 
 - 变更：本 spec、`server/alembic/versions/0013_*`、`server/petsense/db/models/`、`server/petsense/pets/`（profile 校验 + routes + weight-records）、`server/petsense/agent/`（proposals.py、settings.py、registry、loop、routes）、`server/tests/`（单测 + agent_behavior 场景）、App `services/agent.ts`、`services/api.ts`、`stores/`、`components/agent/`、`components/pets/`、`app/pet.tsx`、`app/assistant-settings.tsx`、`app/(tabs)/profile.tsx`、`app/_layout.tsx`。

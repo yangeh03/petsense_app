@@ -166,6 +166,7 @@ server/tools/minimax_vision_smoke.py        # §0 冒烟脚本（已入库）
 
 - iPhone 17 Pro 模拟器、Expo Go SDK 58、隔离后端 `petsense`。从相册选择测试照片，上传返回 201、鉴权读取返回 200。带图发出后模型识别图中狗与马，回合持久化 1 个图片引用，点击打开原生灯箱。MiniMax 凭据留在腾讯云。照片归属提示随后收紧，避免将照片中的动物直接等同本宠。
 - `react-native-image-viewing` 仅进入原生构建。Web 使用 Expo Image 和模态图片查看器，通过 Metro 静态导出。Web 浏览器交互、原生断网重试和生产环境待验收。
+- 2026-11-23 模拟器原生验收（合并版 3ef6f36 独立会话，新 bundle 回归）：图片消息网格 + 缩略图「查看图片」+ 双角色回复正常渲染，带图历史在后续多轮上下文中正常内联（run 回放可见 images history/inline scope）；既有留证（上传 201、鉴权回读 200、带图真实模型回合、灯箱）继续有效。测试媒体仅用模拟器预置公开示例图。证据见 `docs/agent-w03-w07-native-acceptance-20261123.md` §4。
 
 ## 11. 文档更新
 

@@ -260,3 +260,16 @@ W01/W02 的 E1–E6、E8–E15 全量保留通过（预算变化 90→120s 不�
 ### 10.3 集成终验（2026-11-23，集成分支 2141cbf）
 
 fb58f50 合入集成分支（合并提交 2141cbf，含 W03/W04/W05/W07 与修复后提示词组合）后：本地全量单测 389 过、App 四项门槛与 Web 构建过；云端隔离三分片并行真实凭据组合评测 **41/41**（W01/W02 基线 14/14、W03/04/05 场景 19/19、本包 E7/E35–E38 + W07 E39–E41 8/8）；E35/E36 在最终组合代码上另复跑 2 轮全过（连同 shard 内 1 轮共 3 轮稳定）。CI 抓出 `server/tools/agent_memory.py` 保留字语法错误已修（43ab813）。生产灰度 drop-in `PETSENSE_SEARCH_DISABLED=1` 已预置（50-search-rollout.conf，部署重启生效）；待 OTA 与兼容放行后再评估开启。§8 模拟器验收与 D6 计费核对仍为后续项。
+
+### 10.4 模拟器原生验收与生产灰度状态（2026-11-23）
+
+§8 模拟器验收在合并版（3ef6f36）独立原生会话完成（隔离实例默认开启搜索，模型走腾讯云凭据 relay），完整记录见 `docs/agent-w03-w07-native-acceptance-20261123.md` §3：
+
+- §8.1–§8.2：时效问题回复带核对口径（「截至今天 00:15 广州市气象台发布」），6 张 WebSourceCard 完整渲染（标题/域名/「11/23 01:02 核对」/safari 图标，url 去重上限 6）；点击卡片系统浏览器拉起并完整渲染原文（花城网 HTTPS 全文一致；气象局 HTTP 原地址打开，其内容空白为模拟器系统代理环境问题，不列产品问题——移交清单第 2 条）。
+- §8.3–§8.4：常识「猫为什么爱纸箱」`webSearchCalls=0`、sources=[] 直答；越权爬虫请求 scope=out_of_scope、0 工具 0 搜索、拒答含范围与版权双理由。
+- §8.5：旧 bundle 渲染历史回合场景在 CI 模式 Metro 下不可复现（旧 bundle 仅存于原会话内存），按 §6.3 两阶段发布设计与客户端单测覆盖，列为既知事项移交。
+- §8.6：`agent_replay.py` 回放 web_search 伪条目/queries/citations/budget 可读。
+
+**生产灰度事实（2026-11-23 核对）**：生产服务有效环境含 `PETSENSE_SEARCH_DISABLED=1`（`/etc/systemd/system/petsense.service.d/50-search-rollout.conf` drop-in 持久生效，`systemctl show` 确认）——生产搜索**默认关闭**，与 §6.3 两阶段发布一致；开启需移除该 drop-in + daemon-reload + restart，且以 D6 计费核对为前置。
+
+**待办收敛**：D6 计费核对、生产开启评估仍开放；其余 §8 项已验收。
