@@ -217,6 +217,23 @@ class CurrentStatusToolTests(unittest.TestCase):
         self.assertEqual(result['actions'], [])
         self.assertEqual(result['today']['soundEventCount'], 0)
 
+    def test_invalid_frame_device_degrades_without_placeholder_zeros(self):
+        # W02 复验 run14：无效帧 batteryPercent=0 被转述成「没电」——device 节必须降级、不给占位数值
+        from petsense.db.models import Device
+        seed_latest(self.uid, 'esp32-001',
+                    json.dumps({'source': 'esp32_mlp', 'battery': {},
+                                'health': {'heartRate': 0, 'spo2': 0, 'valid': False}}),
+                    age_seconds=3600)
+        with db.session_scope() as s:  # 认领时间早于帧
+            s.get(Device, 'esp32-001').claimed_at = utc_now() - timedelta(hours=2)
+        gate = registry.execute_tool('read_current_status', {}, 'dialogue', 'allowed', self.context)
+        device = gate['result']['device']
+        self.assertEqual(device['state'], 'stale_invalid')
+        self.assertFalse(device['valid'])
+        self.assertNotIn('batteryPercent', device)
+        self.assertIn('占位', device['note'])
+        self.assertTrue(device['receivedAt'])
+
     def test_matrix_gates(self):
         gate = registry.execute_tool('read_current_status', {}, 'dialogue', 'out_of_scope', self.context)
         self.assertEqual(gate['reason'], 'scope_not_allowed')
@@ -265,6 +282,30 @@ class LoopInjectionTests(unittest.TestCase):
         run_id = runs.save(self.pet_id, None, outcome['trace'], 'complete')
         summary = runs.by_id(run_id)
         self.assertEqual(summary['snapshot']['sections']['current']['action'], '躺着')
+
+    def test_stance_missing_injects_one_time_reminder(self):
+        # W02 复验 run16：被拒后模型自称「已重新发起」。机制：被拒轮后注入一次性系统提醒并进轨迹
+        snap = {'sections': {'current': {'action': None}}, 'meta': {'chars': 30, 'trimmed': [], 'degraded': []}}
+        call = {'name': 'query_observations',
+                'arguments': '{"start":"2026-01-01T00:00:00+08:00","end":"2026-01-02T00:00:00+08:00"}',
+                'call_id': 'c1'}
+        turns = [
+            {'text': '', 'function_calls': [call], 'usage': {}},  # 无 stance 首轮 → 被拒
+            {'text': '{"scope":"allowed","intent":"read","speaker":"assistant"}\n【照料助手】刚才没查成，本次查询未完成。',
+             'function_calls': [], 'usage': {}},
+        ]
+        with patch('petsense.agent.model.respond', side_effect=turns) as respond, \
+                patch('petsense.agent.registry.observations_query') as tool:
+            tool.return_value = {'observedSeconds': 0, 'source': {'type': 'observations'}}
+            outcome = loop.run_dialogue({'pet_id': self.pet_id, 'user_id': self.uid, 'text': '最近一小时声音',
+                                         'target': 'auto', 'history': [], 'snapshot': snap,
+                                         'now_iso': iso_z(utc_now())})
+        second_round_items = respond.call_args_list[1].args[0]
+        reminder = [item for item in second_round_items if item.get('role') == 'user' and '系统提醒' in str(item.get('content'))]
+        self.assertEqual(len(reminder), 1, '被拒轮后应注入恰好一条系统提醒')
+        self.assertIn('禁止声称已重新查询成功', reminder[0]['content'])
+        self.assertIn({'stance_retry_reminder': True}, outcome['trace']['messages'])
+        self.assertEqual(tool.call_count, 0, '无 stance 时工具不得执行')
 
 
 class RouteIntegrationTests(unittest.TestCase):

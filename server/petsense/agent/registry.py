@@ -187,6 +187,13 @@ def _execute_current_status(args, context):
         device_id = pet.device_id
         result = _current_status(s, pet, start, end)
     result['device'] = (latest_telemetry(device_id) or {'state': 'no_data'}) if device_id else {'state': 'unbound'}
+    if isinstance(result['device'], dict) and result['device'].get('valid') is False:
+        # 无效帧的 0 是占位不是读数（W02 复验 run14：离线帧 batteryPercent=0 被转述成「没电」）。
+        # 降级为陈旧无效状态，只保留时间与在线事实，不给占位数值。
+        stale = result['device']
+        result['device'] = {'state': 'stale_invalid', 'online': stale.get('online'),
+                            'receivedAt': stale.get('receivedAt'), 'valid': False,
+                            'note': '最后回传帧的读数无效：心率/血氧/电量等 0 值是占位，不能当作真实数值'}
     try:
         result['location']['indoor'] = uwb_service.latest(device_id) if device_id else None
     except Exception:
