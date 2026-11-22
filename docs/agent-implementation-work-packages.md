@@ -348,11 +348,10 @@ flowchart TD
 
 ## 7. 当前交付状态（2026-11-22）
 
-阶段 1（旧 P01–P06 首切片）已合入 main 并部署腾讯云，实施与验证边界见[实施记录](./agent-phase-one.md)。按 V11 架构归类：
+阶段 1（旧 P01–P06 首切片）已合入 main 并部署腾讯云，实施与验证边界见[实施记录](./agent-phase-one.md）。按 V11 架构归类：
 
-- **保留并演进**：MiniMax 适配层（→W01 循环执行器）、`agent_turns` 持久化与去重、观测统一查询（→工具）、版本化学习累计（→W05 证据）、App 伙伴会话与轮询。
-- **待删除**：`model.decide()` 独立路由调用与 `routes.py` 的 intent 固定文案分支（→W01）。
-- **待替换**：`routes.py` 的三字段共享上下文（→W02 常驻快照）。
-- **未开始**：W02 起的全部新能力包。
+- **已完成处置**：MiniMax 适配层已演进为 Responses API 循环执行器（W01）；`decide()` 与 intent 固定文案分支已删除（W01）；三字段共享上下文已替换为氛围快照 + `read_current_status` 工具（W02）。
+- **保留并演进**：`agent_turns` 持久化与去重、观测统一查询（已注册为工具）、版本化学习累计（→W05 证据）、App 伙伴会话（已迁 zustand + WS 直连）。
+- **未开始**：W03 起的新能力包。
 
-W00 已完成（2026-11-22，spec 见 [agent-w00-spec.md](./agent-w00-spec.md)：现状处置基线逐条核实、MiniMax 搜索实测——内建 `web_search` 可用但须走 Responses/Anthropic API（Chat Completions 不支持），W06 按此适配；契约/选型/映射此前已随 V11 重构入库）。W01 尚未启动；本文与 V11 设计稿构成下一轮 spec 的共同基线。
+W00 已完成（2026-11-22，spec 见 [agent-w00-spec.md](./agent-w00-spec.md)：现状处置基线逐条核实、MiniMax 搜索实测——内建 `web_search` 可用但须走 Responses/Anthropic API（Chat Completions 不支持），W06 按此适配；契约/选型/映射此前已随 V11 重构入库）。W01 已完成（统一循环/注册表矩阵/轨迹/WS 直连/前端栈迁移，行为评测 E1–E10 全过，见 [agent-w01-spec.md](./agent-w01-spec.md)）。W02 已完成（氛围快照 + read_current_status + 轨迹快照取证，行为评测 E1–E15 生产 15/15，见 [agent-w02-spec.md](./agent-w02-spec.md)）；下一步 W03。

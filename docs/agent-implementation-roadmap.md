@@ -136,4 +136,4 @@ Agent 消息另设类型和服务层，不把聊天格式塞入既有遥测解�
 
 ## 7. 本轮交付状态
 
-阶段 1 首切片（旧 P01–P06）已合入 main 并部署腾讯云；V11 重构的 W00 已完成（2026-11-22，见 [W00 spec](./agent-w00-spec.md)，含 MiniMax 搜索实测结论：`web_search` 须走 Responses/Anthropic API，Chat Completions 不支持）、W01 尚未启动。旧架构的 `decide` 路由与 intent 固定文案分支待 W01 删除。实现、检查及未验证范围见[实施记录](./agent-phase-one.md)，AGENTS.md 已同步开发入口。
+阶段 1 首切片（旧 P01–P06）已合入 main 并部署腾讯云；V11 重构的 W00、W01、W02 已完成（2026-11-22，分别见 [W00 spec](./agent-w00-spec.md)（MiniMax 搜索实测：`web_search` 须走 Responses/Anthropic API）、[W01 spec](./agent-w01-spec.md)（统一循环/注册表矩阵/轨迹/WS 直连，decide 路由已删除）、[W02 spec](./agent-w02-spec.md)（氛围快照 + read_current_status + 轨迹快照取证，行为评测 E1–E15 生产 15/15））。实现、检查及未验证范围见各 spec 验收记录，AGENTS.md 已同步开发入口。下一包：W03。
