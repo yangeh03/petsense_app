@@ -1,79 +1,75 @@
+/**
+ * 伙伴页（W01 重写为薄 UI）：状态在 zustand store，生命周期在 use-agent-chat，
+ * 渲染组件在 components/agent/。键盘协调用 react-native-keyboard-controller；
+ * 底部安全区沿用 NativeTabs 结论，只用一次（agent-w01-spec.md §4.2/§4.4）。
+ */
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  type ScrollViewInstance,
   Keyboard,
-  KeyboardAvoidingView,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
-  TextInput,
   View,
+  type ScrollViewInstance,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { SymbolView } from 'expo-symbols';
-import { useRouter, useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { AgentComposer } from '@/components/agent/agent-composer';
+import { AgentMessage } from '@/components/agent/agent-message';
 import { ThemedText } from '@/components/themed-text';
 import { Fonts, MaxContentWidth, Shadows } from '@/constants/theme';
+import { useAgentChat } from '@/hooks/use-agent-chat';
 import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
-import { fetchDashboard } from '@/services/api';
-import {
-  fetchAgentTurns,
-  sendAgentTurn,
-  fetchAgentObservation,
-  markAgentRead,
-  type AgentTurn,
-} from '@/services/agent';
+import { useAgentChatStore } from '@/stores/agent-chat';
+import type { AgentTurn } from '@/services/agent';
 
-type PendingRequest = {
-  text: string;
-  target: AgentTurn['target'];
-  pet: number;
-  key: string;
-  topic?: number;
-  replyTo?: number;
-};
-const drafts = new Map<
-  number,
-  {
-    text: string;
-    target: AgentTurn['target'];
-    topic?: number;
-    replyTo?: number;
-    turns?: AgentTurn[];
-    scrollY?: number;
-    pending?: PendingRequest;
-  }
->();
 export default function CompanionScreen() {
   const { user } = useAuth();
   return <CompanionContent key={user?.id ?? 'guest'} ownerId={user?.id ?? 0} />;
 }
+
 function CompanionContent({ ownerId }: { ownerId: number }) {
-  const cached = drafts.get(ownerId);
-  const scroll = useRef<ScrollViewInstance>(null);
-  const restored = useRef(false);
-  const restoreOffset = useRef(cached?.scrollY ?? 0);
-  const theme = useTheme();
   const { user } = useAuth();
+  const theme = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const pending = useRef<PendingRequest | null>(cached?.pending ?? null);
-  const [loadedFor, setLoadedFor] = useState<number | null>(cached ? ownerId : null);
-  const [pet, setPet] = useState<{ id: number; name: string } | null>(null);
-  const [turns, setTurns] = useState<AgentTurn[]>(cached?.turns ?? []);
-  const [topic, setTopic] = useState<number | undefined>(cached?.topic);
-  const [replyTo, setReplyTo] = useState<number | undefined>(cached?.replyTo);
-  const [draft, setDraft] = useState(cached?.text ?? '');
-  const [target, setTarget] = useState<AgentTurn['target']>(cached?.target ?? 'auto');
-  const [learningDays, setLearningDays] = useState<number | null>(null);
-  const [soundDays, setSoundDays] = useState(0);
+  const {
+    petId,
+    petName,
+    loadedFor,
+    turns,
+    topic,
+    draft,
+    target,
+    busy,
+    error,
+    setDraft,
+    setTarget,
+    setTopic,
+    setReplyTo,
+    setScrollY,
+  } = useAgentChatStore();
+  const {
+    learningDays,
+    soundDays,
+    followReply,
+    setFollowReply,
+    reload,
+    send,
+    loadOlder,
+    markRead,
+  } = useAgentChat(user);
   const [showLearning, setShowLearning] = useState(false);
-  const [showTargets, setShowTargets] = useState(false);
   const [keyboardOpen, setKeyboardOpen] = useState(() => Keyboard.isVisible());
-  const followReply = useRef(false);
+  const scroll = useRef<ScrollViewInstance>(null);
+  const restored = useRef(false);
+
   useEffect(() => {
     const show = Keyboard.addListener('keyboardWillShow', () => setKeyboardOpen(true));
     const hide = Keyboard.addListener('keyboardWillHide', () => setKeyboardOpen(false));
@@ -82,147 +78,27 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
       hide.remove();
     };
   }, []);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  useEffect(() => {
-    drafts.set(ownerId, {
-      ...drafts.get(ownerId),
-      text: draft,
-      target,
-      topic,
-      replyTo,
-      turns,
-      pending: pending.current ?? undefined,
-    });
-  }, [ownerId, draft, target, topic, replyTo, turns, busy]);
-  const reload = useCallback(async () => {
-    await Promise.resolve();
-    if (!user) {
-      setTurns([]);
-      setPet(null);
-      return;
-    }
-    try {
-      const data = await fetchDashboard();
-      setPet(data.pet);
-      if (data.pet) {
-        const latest = (await fetchAgentTurns(data.pet.id)).turns;
-        setTurns((current) => [
-          ...current.filter((turn) => latest.length > 0 && turn.id < latest[0].id),
-          ...latest,
-        ]);
-        const end = new Date();
-        const start = new Date(end.getTime() - 89 * 86400000);
-        const facts = await fetchAgentObservation(
-          data.pet.id,
-          start.toISOString(),
-          end.toISOString(),
-        );
-        setLearningDays(facts.learning.validDays);
-        setSoundDays(
-          facts.learningDimensions.find((value) => value.dimension === 'sounds')?.validDays ?? 0,
-        );
-      }
-      setLoadedFor(user.id);
-      setError('');
-    } catch {
-      setError('暂时没能取回我们的聊天，点这里重试');
-    }
-  }, [user]);
-  useEffect(() => {
-    void Promise.resolve().then(reload);
-  }, [reload]);
-  useEffect(() => {
-    if (!pet || !user || (!busy && !turns.some((turn) => turn.status === 'pending'))) return;
-    let active = true;
-    const timer = setInterval(() => {
-      void fetchAgentTurns(pet.id)
-        .then((data) => {
-          if (active) setTurns(data.turns);
-        })
-        .catch(() => {});
-    }, 800);
-    return () => {
-      active = false;
-      clearInterval(timer);
-    };
-  }, [pet, user, busy, turns]);
-  useFocusEffect(
-    useCallback(() => {
-      if (!pet || loadedFor !== ownerId) return;
-      const ids = turns
-        .filter(
-          (turn) =>
-            turn.status !== 'pending' &&
-            !turn.readAt &&
-            (topic === undefined || (turn.topicId ?? turn.id) === topic),
-        )
-        .slice(0, 40)
-        .map((turn) => turn.id);
-      if (!ids.length) return;
-      let active = true;
-      void markAgentRead(pet.id, ids)
-        .then((result) => {
-          if (active)
-            setTurns((current) =>
-              current.map((turn) => result.turns.find((read) => read.id === turn.id) ?? turn),
-            );
-        })
-        .catch(() => {});
-      return () => {
-        active = false;
-      };
-    }, [pet, loadedFor, ownerId, turns, topic]),
-  );
-  const send = async () => {
-    if (!pet || !draft.trim() || busy) return;
-    if (
-      !pending.current ||
-      pending.current.text !== draft.trim() ||
-      pending.current.target !== target ||
-      pending.current.pet !== pet.id ||
-      pending.current.topic !== topic ||
-      pending.current.replyTo !== replyTo
-    ) {
-      pending.current = {
-        text: draft.trim(),
-        target,
-        pet: pet.id,
-        topic,
-        replyTo,
-        key: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      };
-    }
-    followReply.current = true;
-    setShowTargets(false);
-    setBusy(true);
-    setError('');
-    try {
-      const result = await sendAgentTurn(
-        pet.id,
-        draft.trim(),
-        target,
-        pending.current.key,
-        topic,
-        replyTo,
-      );
-      setTurns((old) => [...old.filter((item) => item.id !== result.turn.id), result.turn]);
-      pending.current = null;
-      setDraft('');
-      setReplyTo(undefined);
-    } catch {
-      setError('暂时没能确认送达，原话已保留，可以重试');
-    } finally {
-      setBusy(false);
-    }
-  };
+
   const visible =
-    loadedFor === user?.id
+    loadedFor === (user?.id ?? -1)
       ? turns.filter((turn) => topic === undefined || (turn.topicId ?? turn.id) === topic)
       : [];
-  const canSend = Boolean(pet && draft.trim() && !busy);
-  const targetLabel =
-    target === 'pet' ? (pet?.name ?? '爱宠') : target === 'assistant' ? '照料助手' : '大家';
+  const canSend = Boolean(petId && draft.trim() && !busy);
+
+  useFocusEffect(
+    useCallback(() => {
+      void markRead();
+    }, [markRead]),
+  );
+
+  const onContinueTopic = (turn: AgentTurn) => {
+    setTopic(turn.topicId ?? turn.id);
+    setReplyTo(turn.id);
+  };
+  const onRetry = (turn: AgentTurn) => {
+    setDraft(turn.text);
+    setTarget(turn.target);
+  };
 
   return (
     <KeyboardAvoidingView
@@ -247,13 +123,13 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
         </View>
         <View style={styles.heading}>
           <ThemedText style={styles.title}>伙伴</ThemedText>
-          {pet ? (
+          {petId ? (
             <ThemedText type="small" themeColor="textSecondary">
-              你 · {pet.name} · 照料助手
+              你 · {petName ?? '爱宠'} · 照料助手
             </ThemedText>
           ) : null}
         </View>
-        {loadedFor === user?.id && learningDays !== null ? (
+        {loadedFor === (user?.id ?? -1) && learningDays !== null ? (
           <Pressable
             onPress={() => setShowLearning(!showLearning)}
             accessibilityRole="button"
@@ -280,10 +156,7 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
           style={[styles.topic, { backgroundColor: theme.tintBackground }]}
           accessibilityRole="button"
           accessibilityLabel="返回大家的聊天"
-          onPress={() => {
-            setTopic(undefined);
-            setReplyTo(undefined);
-          }}
+          onPress={() => setTopic(undefined)}
         >
           <ThemedText type="smallBold">正在说这件事</ThemedText>
           <SymbolView
@@ -299,41 +172,33 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
         keyboardDismissMode="interactive"
         scrollEventThrottle={100}
         onContentSizeChange={() => {
-          if (!restored.current && loadedFor === ownerId && turns.length && !followReply.current) {
-            scroll.current?.scrollTo({ y: restoreOffset.current, animated: false });
+          if (!restored.current && loadedFor === ownerId && turns.length && !followReply) {
+            scroll.current?.scrollTo({ y: useAgentChatStore.getState().scrollY, animated: false });
             restored.current = true;
-          } else if (followReply.current) {
+          } else if (followReply) {
             scroll.current?.scrollToEnd({ animated: false });
             restored.current = true;
-            if (!busy) followReply.current = false;
+            if (!busy) setFollowReply(false);
           }
         }}
-        onScrollBeginDrag={() => {
-          followReply.current = false;
-        }}
+        onScrollBeginDrag={() => setFollowReply(false)}
         onScroll={(event) => {
-          const entry = drafts.get(ownerId);
-          if (entry && restored.current)
-            drafts.set(ownerId, { ...entry, scrollY: event.nativeEvent.contentOffset.y });
+          if (restored.current) setScrollY(event.nativeEvent.contentOffset.y);
         }}
         contentContainerStyle={[styles.feed, !visible.length && styles.emptyFeed]}
       >
-        {pet && turns.length >= 40 ? (
+        {petId && turns.length >= 40 ? (
           <Pressable
             style={styles.center}
             accessibilityRole="button"
-            onPress={() => {
-              void fetchAgentTurns(pet.id, turns[0].id)
-                .then((data) => setTurns((current) => [...data.turns, ...current]))
-                .catch(() => setError('更早的聊天暂时没取回来'));
-            }}
+            onPress={() => void loadOlder()}
           >
             <ThemedText type="smallBold" themeColor="textSecondary">
               更早的聊天
             </ThemedText>
           </Pressable>
         ) : null}
-        {!visible.length && !busy && (!user || pet) ? (
+        {!visible.length && !busy && (!user || petId) ? (
           <View style={styles.welcome}>
             <View
               style={[
@@ -349,16 +214,16 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
               />
             </View>
             <ThemedText style={styles.welcomeTitle}>
-              {pet ? `今天想聊聊${pet.name}的什么？` : '和它聊聊今天'}
+              {petId ? '今天想聊聊它的什么？' : '和它聊聊今天'}
             </ThemedText>
             <ThemedText type="small" themeColor="textSecondary">
-              {pet
+              {petId
                 ? '和它打个招呼，或请照料助手看看最近的记录。'
                 : '登录后，就能和爱宠及照料助手聊天。'}
             </ThemedText>
-            {pet ? (
+            {petId ? (
               <View style={styles.suggestions}>
-                {['它昨天走动多吗？', '@爱宠 打个招呼'].map((idea, index) => (
+                {['它昨天走动多吗？', '打个招呼'].map((idea, index) => (
                   <Pressable
                     key={idea}
                     accessibilityRole="button"
@@ -374,9 +239,7 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
                       setDraft(index === 0 ? idea : '你好呀！');
                     }}
                   >
-                    <ThemedText type="smallBold">
-                      {index === 0 ? idea : `和${pet.name}打招呼`}
-                    </ThemedText>
+                    <ThemedText type="smallBold">{idea}</ThemedText>
                   </Pressable>
                 ))}
               </View>
@@ -392,98 +255,14 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
           </View>
         ) : null}
         {visible.map((turn) => (
-          <View key={turn.id} style={styles.exchange}>
-            <View style={[styles.ownerBubble, { backgroundColor: theme.tintBackground }]}>
-              <ThemedText>{turn.text}</ThemedText>
-            </View>
-            <View style={styles.replyRow}>
-              <View
-                style={[
-                  styles.avatar,
-                  {
-                    backgroundColor:
-                      turn.speaker === 'pet' ? theme.tintBackground : theme.backgroundSelected,
-                  },
-                ]}
-              >
-                {turn.speaker === 'pet' ? (
-                  <SymbolView
-                    name={{ ios: 'pawprint.fill', android: 'pets', web: 'pets' }}
-                    tintColor={theme.tint}
-                    size={17}
-                  />
-                ) : (
-                  <SymbolView
-                    name={{ ios: 'sparkles', android: 'auto_awesome', web: 'auto_awesome' }}
-                    tintColor={theme.text}
-                    size={17}
-                  />
-                )}
-              </View>
-              <View style={styles.replyBody}>
-                <ThemedText type="smallBold" themeColor="textSecondary">
-                  {turn.speaker === 'pet' ? (pet?.name ?? '爱宠') : '照料助手'}
-                </ThemedText>
-                <ThemedText>{turn.reply.replace(/^【[^】]+】/, '') || '正在接话…'}</ThemedText>
-                {turn.sources.map((source, index) => (
-                  <Pressable
-                    key={index}
-                    accessibilityRole="button"
-                    style={[
-                      styles.source,
-                      {
-                        backgroundColor: theme.backgroundElement,
-                        borderColor: theme.backgroundSelected,
-                      },
-                    ]}
-                    onPress={() =>
-                      router.push({
-                        pathname: '/records',
-                        params: { petId: pet?.id, start: source.startAt, end: source.endAt },
-                      })
-                    }
-                  >
-                    <SymbolView
-                      name={{ ios: 'chart.bar', android: 'bar_chart', web: 'bar_chart' }}
-                      tintColor={theme.tint}
-                      size={16}
-                    />
-                    <ThemedText type="smallBold" style={styles.heading}>
-                      查看这段记录
-                    </ThemedText>
-                    <SymbolView
-                      name={{
-                        ios: 'chevron.right',
-                        android: 'chevron_right',
-                        web: 'chevron_right',
-                      }}
-                      tintColor={theme.textSecondary}
-                      size={13}
-                    />
-                  </Pressable>
-                ))}
-                {turn.status !== 'pending' ? (
-                  <Pressable
-                    accessibilityRole="button"
-                    style={styles.replyAction}
-                    onPress={() => {
-                      if (turn.status === 'failed') {
-                        setDraft(turn.text);
-                        setTarget(turn.target);
-                      } else {
-                        setTopic(turn.topicId ?? turn.id);
-                        setReplyTo(turn.id);
-                      }
-                    }}
-                  >
-                    <ThemedText type="small" themeColor="textSecondary">
-                      {turn.status === 'failed' ? '再说一次' : '继续聊这件事'}
-                    </ThemedText>
-                  </Pressable>
-                ) : null}
-              </View>
-            </View>
-          </View>
+          <AgentMessage
+            key={turn.id}
+            turn={turn}
+            petId={petId}
+            petName={petName}
+            onContinueTopic={onContinueTopic}
+            onRetry={onRetry}
+          />
         ))}
         {busy && !visible.some((turn) => turn.status === 'pending') ? (
           <View style={styles.waiting}>
@@ -501,87 +280,21 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
           </ThemedText>
         </Pressable>
       ) : null}
-      {pet ? (
-        <View
-          style={[
-            styles.footer,
-            Platform.OS === 'ios' &&
-              !keyboardOpen && {
-                // NativeTabs supplies an inset that already includes the tab bar.
-                marginBottom: insets.bottom,
-              },
-          ]}
-        >
-          {showTargets ? (
-            <View style={styles.targets}>
-              {(['auto', 'pet', 'assistant'] as const).map((value) => (
-                <Pressable
-                  key={value}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: target === value }}
-                  style={[
-                    styles.pill,
-                    {
-                      backgroundColor:
-                        target === value ? theme.tintBackground : theme.backgroundSelected,
-                    },
-                  ]}
-                  onPress={() => {
-                    setTarget(value);
-                    setShowTargets(false);
-                  }}
-                >
-                  <ThemedText type="smallBold">
-                    {value === 'auto' ? '大家' : value === 'pet' ? pet.name : '照料助手'}
-                  </ThemedText>
-                </Pressable>
-              ))}
-            </View>
-          ) : null}
-          <View
-            style={[
-              styles.composer,
-              { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
-            ]}
-          >
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={`选择发言对象，当前${targetLabel}`}
-              accessibilityState={{ expanded: showTargets }}
-              style={[styles.targetButton, { backgroundColor: theme.backgroundSelected }]}
-              onPress={() => setShowTargets(!showTargets)}
-            >
-              <ThemedText type="smallBold">{target === 'auto' ? '@' : targetLabel}</ThemedText>
-            </Pressable>
-            <TextInput
-              value={draft}
-              onChangeText={setDraft}
-              multiline
-              maxLength={4000}
-              editable={!busy}
-              placeholder={topic !== undefined ? '继续说这件事…' : '说给伙伴听…'}
-              placeholderTextColor={theme.textSecondary}
-              style={[styles.input, { color: theme.text }]}
-              accessibilityLabel="给伙伴的消息"
-            />
-            <Pressable
-              disabled={!canSend}
-              onPress={() => void send()}
-              accessibilityRole="button"
-              accessibilityLabel="发送"
-              accessibilityState={{ disabled: !canSend }}
-              style={[
-                styles.send,
-                { backgroundColor: canSend ? theme.tint : theme.backgroundSelected },
-              ]}
-            >
-              <SymbolView
-                name={{ ios: 'arrow.up', android: 'arrow_upward', web: 'arrow_upward' }}
-                tintColor={canSend ? theme.background : theme.textSecondary}
-                size={20}
-              />
-            </Pressable>
-          </View>
+      {petId ? (
+        <View style={styles.footerWrap}>
+          <AgentComposer
+            draft={draft}
+            target={target}
+            petName={petName}
+            inTopic={topic !== undefined}
+            busy={busy}
+            canSend={canSend}
+            keyboardOpen={keyboardOpen && Platform.OS === 'ios'}
+            bottomInset={insets.bottom}
+            onDraft={setDraft}
+            onTarget={setTarget}
+            onSend={() => void send()}
+          />
         </View>
       ) : null}
     </KeyboardAvoidingView>
@@ -652,62 +365,11 @@ const styles = StyleSheet.create({
   },
   idea: { borderWidth: 1, borderRadius: 18, paddingHorizontal: 13, paddingVertical: 9 },
   center: { alignSelf: 'center', padding: 8 },
-  exchange: { gap: 16 },
-  ownerBubble: {
-    alignSelf: 'flex-end',
-    maxWidth: '85%',
-    paddingHorizontal: 15,
-    paddingVertical: 10,
-    borderRadius: 20,
-    borderBottomRightRadius: 6,
-  },
-  replyRow: { flexDirection: 'row', gap: 9, alignItems: 'flex-start' },
-  replyBody: { flex: 1, gap: 6, paddingTop: 2 },
-  source: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 9,
-    borderWidth: 1,
-    borderRadius: 12,
-    padding: 10,
-    marginTop: 4,
-  },
-  replyAction: { alignSelf: 'flex-start', paddingVertical: 4 },
   waiting: { flexDirection: 'row', gap: 9, alignItems: 'center' },
   error: { alignSelf: 'center', paddingHorizontal: 16, paddingVertical: 4 },
-  footer: {
+  footerWrap: {
     width: '100%',
     maxWidth: MaxContentWidth,
     alignSelf: 'center',
-    paddingHorizontal: 14,
-    paddingBottom: 5,
-    gap: 7,
   },
-  targets: { flexDirection: 'row', gap: 8, paddingLeft: 6 },
-  composer: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 8,
-    borderWidth: 1,
-    padding: 6,
-    borderRadius: 24,
-    boxShadow: Shadows.chip,
-  },
-  targetButton: {
-    minWidth: 40,
-    minHeight: 40,
-    borderRadius: 20,
-    paddingHorizontal: 9,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  input: {
-    flex: 1,
-    minHeight: 40,
-    maxHeight: 108,
-    paddingVertical: 9,
-    fontSize: 16,
-    lineHeight: 22,
-  },
-  send: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
 });

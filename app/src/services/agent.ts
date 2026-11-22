@@ -13,6 +13,7 @@ export type AgentTurn = {
   topicId: number | null;
   replyTo: number | null;
   sources: { type: string; startAt: string; endAt: string }[];
+  blocks: { type: 'text'; speaker: 'pet' | 'assistant'; text: string }[] | null;
 };
 export const fetchAgentTurns = (pet: number, before?: number) =>
   request<{ turns: AgentTurn[] }>(`/agent/pets/${pet}/turns${before ? `?before=${before}` : ''}`);
