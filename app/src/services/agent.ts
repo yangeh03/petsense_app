@@ -12,7 +12,15 @@ export type AgentTurn = {
   createdAt: string;
   topicId: number | null;
   replyTo: number | null;
-  sources: { type: string; startAt: string; endAt: string }[];
+  sources: {
+    type: string;
+    startAt: string;
+    endAt: string;
+    deviceId?: string;
+    versions?: string[];
+    observedSeconds?: number | null;
+    soundEventCount?: number | null;
+  }[];
   blocks: { type: 'text'; speaker: 'pet' | 'assistant'; text: string }[] | null;
 };
 export const fetchAgentTurns = (pet: number, before?: number) =>

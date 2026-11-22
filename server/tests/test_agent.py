@@ -111,6 +111,8 @@ class AgentTests(unittest.TestCase):
         turn = result.json['turn']
         self.assertEqual(turn['status'], 'complete')
         self.assertEqual(len(turn['sources']), 1)
+        self.assertEqual(turn['sources'][0]['observedSeconds'], 30)
+        self.assertIn('soundEventCount', turn['sources'][0])
         self.assertEqual(turn['blocks'][0]['speaker'], 'assistant')
         self.assertIn('走动', turn['reply'])
         from petsense.db.models.agent import AgentRun

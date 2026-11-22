@@ -226,8 +226,14 @@ def run_dialogue(context, on_progress=None):
             tool_summary.append({'name': name, 'allowed': gate['allowed'], 'reason': gate['reason'],
                                  'arguments': (call['arguments'] or '')[:300],
                                  'duration_ms': gate['duration_ms'], 'result_bytes': len(result_json)})
-            if gate['reason'] is None and isinstance(gate['result'], dict) and gate['result'].get('source'):
-                sources.append(gate['result']['source'])
+            if gate['reason'] is None and isinstance(gate['result'], dict) and gate['result']['source']:
+                # 来源卡摘要字段：覆盖时长与声音事件数随窗口一并交付（旧客户端忽略新字段，向后兼容）
+                source = dict(gate['result']['source'])
+                if gate['result'].get('observedSeconds') is not None:
+                    source['observedSeconds'] = gate['result']['observedSeconds']
+                if gate['result'].get('soundEventCount') is not None:
+                    source['soundEventCount'] = gate['result']['soundEventCount']
+                sources.append(source)
         messages_trace.append({'tool_round': rounds, 'calls': tool_summary[-len(calls):]})
 
     default_speaker = stance['speaker'] if stance else 'assistant'

@@ -20,6 +20,65 @@ type Props = {
   onRetry: (turn: AgentTurn) => void;
 };
 
+type AgentSource = AgentTurn['sources'][number];
+
+const SH_TZ = 'Asia/Shanghai';
+
+function windowParts(iso: string) {
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: SH_TZ,
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date(iso));
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? '';
+  return { month: get('month'), day: get('day'), hour: get('hour'), minute: get('minute') };
+}
+
+/** 来源卡窗口标签：全天/当日时段/跨天，按 Asia/Shanghai 展示（与记录页口径一致）。 */
+function formatWindow(startAt: string, endAt: string): string {
+  const start = windowParts(startAt);
+  const end = windowParts(endAt);
+  const sameDay = start.month === end.month && start.day === end.day;
+  const midnightStart = start.hour === '00' && start.minute === '00';
+  const midnightEnd = end.hour === '00' && end.minute === '00';
+  if (!sameDay && midnightStart && midnightEnd) {
+    return `${start.month}月${start.day}日 全天`;
+  }
+  if (sameDay) {
+    return `${start.month}月${start.day}日 ${start.hour}:${start.minute}–${end.hour}:${end.minute}`;
+  }
+  const startTime = midnightStart ? '' : ` ${start.hour}:${start.minute}`;
+  const endTime = midnightEnd ? '' : ` ${end.hour}:${end.minute}`;
+  return `${start.month}月${start.day}日${startTime} – ${end.month}月${end.day}日${endTime}`;
+}
+
+/** 来源卡摘要：覆盖时长与声音事件；无覆盖如实说明（缺数据不伪装成正常）。 */
+function sourceSummary(source: AgentSource): string {
+  if (source.observedSeconds == null && source.soundEventCount == null) return '';
+  const sounds = source.soundEventCount ?? 0;
+  const minutes = Math.round((source.observedSeconds ?? 0) / 60);
+  if (minutes === 0) {
+    return sounds > 0 ? `无姿态记录 · 声音事件 ${sounds} 次` : '这段时间没有观测数据';
+  }
+  const coverage =
+    minutes >= 60
+      ? `${Math.floor(minutes / 60)} 小时${minutes % 60 ? ` ${minutes % 60} 分` : ''}`
+      : `${minutes} 分钟`;
+  return sounds > 0 ? `覆盖 ${coverage} · 声音事件 ${sounds} 次` : `覆盖 ${coverage}`;
+}
+
+/** 相同窗口去重（模型常查重叠窗口）。 */
+function dedupeSources(sources: AgentSource[]): AgentSource[] {
+  return sources.filter(
+    (source, index, all) =>
+      all.findIndex((item) => item.startAt === source.startAt && item.endAt === source.endAt) ===
+      index,
+  );
+}
+
 export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry }: Props) {
   const theme = useTheme();
   const router = useRouter();
@@ -72,39 +131,57 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry }:
           </View>
         ))}
         <View style={styles.replyFootnote}>
-          {turn.sources.map((source, index) => (
-            <Pressable
-              key={index}
-              accessibilityRole="button"
-              style={[
-                styles.source,
-                {
-                  backgroundColor: theme.backgroundElement,
-                  borderColor: theme.backgroundSelected,
-                },
-              ]}
-              onPress={() =>
-                router.push({
-                  pathname: '/records',
-                  params: { petId: petId ?? undefined, start: source.startAt, end: source.endAt },
-                })
-              }
-            >
-              <SymbolView
-                name={{ ios: 'chart.bar', android: 'bar_chart', web: 'bar_chart' }}
-                tintColor={theme.tint}
-                size={16}
-              />
-              <ThemedText type="smallBold" style={styles.sourceText}>
-                查看这段记录
-              </ThemedText>
-              <SymbolView
-                name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }}
-                tintColor={theme.textSecondary}
-                size={13}
-              />
-            </Pressable>
-          ))}
+          {dedupeSources(turn.sources).map((source) => {
+            const label = formatWindow(source.startAt, source.endAt);
+            const summary = sourceSummary(source);
+            return (
+              <Pressable
+                key={`${source.startAt}-${source.endAt}`}
+                accessibilityRole="button"
+                accessibilityLabel={`${label}${summary ? `，${summary}` : ''}，查看这段记录`}
+                style={[
+                  styles.source,
+                  {
+                    backgroundColor: theme.backgroundElement,
+                    borderColor: theme.backgroundSelected,
+                  },
+                ]}
+                onPress={() =>
+                  router.push({
+                    pathname: '/records',
+                    params: { petId: petId ?? undefined, start: source.startAt, end: source.endAt },
+                  })
+                }
+              >
+                <SymbolView
+                  name={{ ios: 'chart.bar', android: 'bar_chart', web: 'bar_chart' }}
+                  tintColor={theme.tint}
+                  size={16}
+                />
+                <View style={styles.sourceBody}>
+                  <View style={styles.sourceHead}>
+                    <ThemedText type="smallBold" style={styles.sourceText}>
+                      {label}
+                    </ThemedText>
+                    <SymbolView
+                      name={{
+                        ios: 'chevron.right',
+                        android: 'chevron_right',
+                        web: 'chevron_right',
+                      }}
+                      tintColor={theme.textSecondary}
+                      size={13}
+                    />
+                  </View>
+                  {summary ? (
+                    <ThemedText type="small" themeColor="textSecondary">
+                      {summary}
+                    </ThemedText>
+                  ) : null}
+                </View>
+              </Pressable>
+            );
+          })}
           {turn.status !== 'pending' ? (
             <Pressable
               accessibilityRole="button"
@@ -145,7 +222,7 @@ const styles = StyleSheet.create({
   },
   source: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 9,
     borderWidth: 1,
     borderRadius: 12,
@@ -153,6 +230,8 @@ const styles = StyleSheet.create({
     marginTop: 4,
     boxShadow: Shadows.chip,
   },
+  sourceBody: { flex: 1, gap: 2 },
+  sourceHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   sourceText: { flex: 1 },
   replyAction: { alignSelf: 'flex-start', paddingVertical: 4 },
 });
