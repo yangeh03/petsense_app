@@ -17,6 +17,7 @@ class AgentTurn(Base):
     read_at = Column(UTCDatetime, nullable=True)
     reply = Column(Text, nullable=False, default='')
     blocks = Column(Text, nullable=True)
+    images = Column(Text, nullable=True)  # W07 owner 附件引用 JSON：[{id,width,height,bytes}]
     status = Column(String(16), nullable=False)
     created_at = Column(UTCDatetime, nullable=False)
     __table_args__ = (UniqueConstraint('pet_id', 'request_id'),)
@@ -52,3 +53,57 @@ class AgentLearningDay(Base):
     seconds = Column(Float, nullable=False, default=0)
     last_seen_at = Column(UTCDatetime, nullable=False)
     slots = Column(Text, nullable=False, default='[]')
+
+
+class PetBaseline(Base):
+    """W05 个人基线物化行（agent-w05-spec.md §3.2）：一行一个 (宠物, 维度, 模型版本)。
+
+    证据仍在 agent_learning_days 与分钟明细，本行是可复算的确定性快照；
+    重算原地更新并 revision+1，比较结果引用 version+revision+窗口即可溯源。
+    """
+    __tablename__ = 'pet_baselines'
+    pet_id = Column(Integer, ForeignKey('pets.id'), primary_key=True)
+    feature = Column(String(16), primary_key=True)
+    version = Column(String(80), primary_key=True)
+    state = Column(String(16), nullable=False, default='learning')
+    valid_days = Column(Integer, nullable=False, default=0)
+    window_last_day = Column(String(10), nullable=False, default='')
+    sample_days = Column(Text, nullable=False, default='[]')
+    day_values = Column(Text, nullable=False, default='{}')
+    day_stats = Column(Text, nullable=False, default='{}')
+    slot_stats = Column(Text, nullable=False, default='[]')
+    revision = Column(Integer, nullable=False, default=0)
+    computed_at = Column(UTCDatetime, nullable=False)
+
+
+class CompanionSettings(Base):
+    """W03 助手设定：只影响表达、不改变话题与工具（V11 §13.4）；proactivity 由 W09 消费。
+
+    助手属于主人（一人一助手），行按 user_id 懒创建，无行时按 DEFAULTS 渲染。
+    """
+    __tablename__ = 'companion_settings'
+    user_id = Column(Integer, ForeignKey('users.id'), primary_key=True)
+    assistant_name = Column(String(20), nullable=False, default='照料助手')
+    owner_title = Column(String(20), nullable=True)
+    verbosity = Column(String(8), nullable=False, default='concise')
+    proactivity = Column(Integer, nullable=False, default=1)
+    updated_at = Column(UTCDatetime, nullable=False)
+
+
+class AgentProposal(Base):
+    """W03 确认提案：确认门服务的持久对象（agent-w03-spec.md §3.3），W08 计划/W10 设备控制复用。
+
+    status: pending / confirmed / rejected / superseded；同宠物同 kind 的新 pending 提案
+    自动把旧 pending 置 superseded（superseded_by 指向新提案）。payload 为归一化候选字段 JSON。
+    """
+    __tablename__ = 'agent_proposals'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    pet_id = Column(Integer, ForeignKey('pets.id'), nullable=False, index=True)
+    turn_id = Column(Integer, nullable=True)
+    kind = Column(String(24), nullable=False)
+    payload = Column(Text, nullable=False, default='{}')
+    version = Column(Integer, nullable=False, default=1)
+    status = Column(String(16), nullable=False, default='pending')
+    superseded_by = Column(Integer, nullable=True)
+    created_at = Column(UTCDatetime, nullable=False)
+    decided_at = Column(UTCDatetime, nullable=True)

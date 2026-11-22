@@ -119,9 +119,14 @@ jobs:
 
   ota-update:
     name: EAS Update (OTA)
-    needs: [check]
-    # 仅 main 直推且 app/ 有变更时发布 OTA；PR 不发布
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.check.outputs.app == 'true'
+    needs: [check, server, deploy]
+    # 混合变更须先让服务端迁移和新接口生效；纯客户端变更可跳过部署。
+    if: >-
+      ${{ !cancelled() && github.ref == 'refs/heads/main' && github.event_name == 'push'
+      && needs.check.result == 'success' && needs.check.outputs.app == 'true'
+      && needs.server.result == 'success'
+      && (needs.deploy.result == 'success'
+          || (needs.deploy.result == 'skipped' && needs.server.outputs.changed == 'false')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

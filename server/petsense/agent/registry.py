@@ -1,4 +1,4 @@
-"""工具注册表与权限矩阵（W01，agent-w01-spec.md §3.4）。
+"""工具注册表与权限矩阵（W01，agent-w01-spec.md §3.4；W06 read_web_page/EXTERNAL_READ）。
 
 声明与执行分离注册；权限校验先于执行（存在性 → 运行形态 → stance 范围），
 越权调用返回结构化拒绝作为工具结果，模型据此如实表达，拒绝事件由调用方入轨迹。
@@ -6,13 +6,19 @@
 新增工具须先改 P00 契约再注册（roadmap §4.2）。
 """
 import json
+import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from petsense.agent import baseline as baseline_service
+from petsense.agent import fetch
+from petsense.agent import memory as pet_memory
 from petsense.agent.observations import query as observations_query
+from petsense.agent import proposals as proposal_service
+from petsense.agent import settings as settings_service
 from petsense.common import shanghai_now
 from petsense.db import iso_z, session_scope, utc_now
 from petsense.db.models import Pet, TelemetryEvent, TelemetryLatest, TelemetryMinute
@@ -22,19 +28,24 @@ from sqlalchemy import func, select
 
 DIALOGUE = 'dialogue'
 FACT_READ = 'fact_read'
+MEMORY = 'memory'
+PROFILE = 'profile'      # 确认门组（W03）：明确指令直写 / 候选确认卡，两路径在执行器内（agent-w03-spec.md §3.4）
+SETTINGS = 'settings'    # 直写组（W03）：助手设定，明确指令即改即回显
+EXTERNAL_READ = 'external_read'  # W06：公网网页深读（联网知识组）
 TOOL_TIMEOUT_S = 15.0
 
 _TOOLS = {}
 
 
 class ToolSpec:
-    def __init__(self, name, description, parameters, group, forms, execute):
+    def __init__(self, name, description, parameters, group, forms, execute, timeout_s=TOOL_TIMEOUT_S):
         self.name = name
         self.description = description
         self.parameters = parameters
         self.group = group
         self.forms = tuple(forms)
         self.execute = execute
+        self.timeout_s = timeout_s
 
     def schema(self):
         return {'type': 'function', 'name': self.name,
@@ -45,11 +56,14 @@ def register(spec):
     _TOOLS[spec.name] = spec
 
 
-def schemas_for(form, stance_scope):
-    """渲染该运行形态与范围下可用的工具 schema。out_of_scope 下业务与网络工具全部不可用（V11 §12.1）。"""
+def schemas_for(form, stance_scope, search_enabled=True):
+    """渲染该运行形态与范围下可用的工具 schema。out_of_scope 下业务与网络工具全部不可用（V11 §12.1）。
+    search_enabled=False（PETSENSE_SEARCH_DISABLED 灰度开关）时 EXTERNAL_READ 组不进 schemas，
+    能力描述与真实可用性保持一致（W06 spec §4.5）。"""
     if stance_scope == 'out_of_scope':
         return []
-    return [spec.schema() for spec in _TOOLS.values() if form in spec.forms]
+    return [spec.schema() for spec in _TOOLS.values()
+            if form in spec.forms and (search_enabled or spec.group != EXTERNAL_READ)]
 
 
 def _parse_time(value):
@@ -94,6 +108,36 @@ register(ToolSpec(
                         'description': 'minute=分钟汇总（默认）；summary=仅窗口总量'}},
         'required': ['start', 'end'], 'additionalProperties': False},
     group=FACT_READ, forms=(DIALOGUE,), execute=_execute_query_observations))
+
+
+def _execute_read_baseline(args, context):
+    feature = args.get('feature')
+    features = [feature] if feature in ('actions', 'sounds') else None
+    date = args.get('date')
+    date = date.strip() if isinstance(date, str) else None
+    with session_scope() as s:
+        pet = s.get(Pet, context['pet_id'])
+        if pet is None or pet.user_id != context['user_id']:
+            raise ValueError('宠物归属已变化')
+        try:
+            return baseline_service.read_baseline(s, pet, features=features, date_str=date)
+        except ValueError as exc:
+            return {'error': f'{exc}。请修正参数后重试（date 为上海日期 YYYY-MM-DD，不晚于今天）。'}
+
+
+register(ToolSpec(
+    name='read_baseline',
+    description='查询本宠的个人基线与认识进度：认识中（不足7个有效日）只有进度、没有个人参照范围，'
+                '不得说「比平时」；已就绪时给出全天与四个时段（夜间/上午/下午/晚间）的个人参照范围'
+                '（p10–p90 与中位数）以及当天（或指定日期）实际值、覆盖与能否比较。'
+                'feature 缺省查动作与声音两个维度；date 缺省今天（上海日期 YYYY-MM-DD，不晚于今天）。'
+                '参照范围与当日数值只能来自本工具结果，覆盖不足的时段不能当作活动减少或增加。',
+    parameters={'type': 'object', 'properties': {
+        'feature': {'type': 'string', 'enum': ['actions', 'sounds'],
+                    'description': '维度：actions=动作（走动），sounds=声音（叫声等事件）'},
+        'date': {'type': 'string', 'description': '对比日期，上海日期 YYYY-MM-DD，缺省今天'}},
+        'additionalProperties': False},
+    group=FACT_READ, forms=(DIALOGUE,), execute=_execute_read_baseline))
 
 
 def _bucket_actions(rows, start):
@@ -213,6 +257,234 @@ register(ToolSpec(
     group=FACT_READ, forms=(DIALOGUE,), execute=_execute_current_status))
 
 
+def _pet_of(session, context):
+    pet = session.get(Pet, context['pet_id'])
+    if pet is None or pet.user_id != context['user_id']:
+        raise ValueError('宠物归属已变化')
+    return pet
+
+
+def _execute_write_memory(args, context):
+    with session_scope() as s:
+        pet = _pet_of(s, context)
+        entry, error = pet_memory.save_model_write(s, pet.id, args, context)
+        if error:
+            return {'saved': False, 'error': error}
+        return {'saved': True, 'memoryId': entry.id, 'kind': entry.kind,
+                'subject': entry.subject, 'version': entry.version,
+                'summary': entry.summary, 'certainty': entry.certainty,
+                'note': '写入成功后可向主人轻量回显（如「这个我记下了」）'}
+
+
+register(ToolSpec(
+    name='write_memory',
+    description='把值得跨天记住的内容写入长期记忆（自主写）。允许：主人讲述的真实经历或事件'
+                '（episode=宠物的经历 / owner_event=主人自己的事）、反复出现的规律'
+                '（habit_candidate，不确定时标 tentative=true）、本轮明确的照顾安排类要点'
+                '（session_takeaway，默认不记）。禁止：假设（假如/如果）、否定句式的转述、'
+                '其他主体（朋友家的宠物）、长期偏好（喜欢/不喜欢某物，属确认写、尚未接入）、'
+                '爱宠人格的拟人表达。发生时间未知就不传时间参数，不要用当前时间冒充。'
+                '纠正旧记忆时传 supersedesId=旧记忆id。写入成功才可对主人回显「记下了」。',
+    parameters={'type': 'object', 'properties': {
+        'kind': {'type': 'string', 'enum': ['episode', 'owner_event', 'habit_candidate', 'session_takeaway']},
+        'summary': {'type': 'string', 'description': '一句话人类可读表达（≤300字），是检索与认识卡蒸馏的原料'},
+        'subject': {'type': 'string', 'enum': ['pet', 'owner'], 'description': '这段经历属于谁，默认 pet'},
+        'startAt': {'type': 'string', 'description': '发生开始时间（ISO，带时区），未知不传'},
+        'endAt': {'type': 'string', 'description': '发生结束时间（ISO，带时区），可选'},
+        'facts': {'type': 'object', 'description': '可选结构化字段（地点/对象/事件名等）'},
+        'tentative': {'type': 'boolean', 'description': '是否为不确定的规律候选，仅 habit_candidate 可为 true'},
+        'supersedesId': {'type': 'integer', 'description': '纠正旧记忆时被替换条目的 id'}},
+        'required': ['kind', 'summary'], 'additionalProperties': False},
+    group=MEMORY, forms=(DIALOGUE,), execute=_execute_write_memory))
+
+
+def _execute_search_memories(args, context):
+    kinds = args.get('kinds')
+    if kinds is not None and (not isinstance(kinds, list)
+                              or not all(isinstance(k, str) for k in kinds)):
+        return {'error': 'kinds 应为字符串数组', 'memories': []}
+    from_dt = pet_memory.parse_time(args.get('from'))
+    to_dt = pet_memory.parse_time(args.get('to'))
+    if args.get('from') and from_dt is None:
+        return {'error': 'from 不是合法的 ISO 时间', 'memories': []}
+    if args.get('to') and to_dt is None:
+        return {'error': 'to 不是合法的 ISO 时间', 'memories': []}
+    raw_limit = args.get('limit')
+    limit = raw_limit if isinstance(raw_limit, int) and not isinstance(raw_limit, bool) else 10
+    with session_scope() as s:
+        pet = _pet_of(s, context)
+        return pet_memory.search(s, pet.id, kinds=kinds, from_dt=from_dt, to_dt=to_dt,
+                                 keyword=args.get('keyword'), limit=limit)
+
+
+register(ToolSpec(
+    name='search_memories',
+    description='检索本宠的长期记忆（主人讲述过的经历、规律候选、会话要点、日/周汇总）。'
+                '支持按类型（kinds）与发生时间窗口（from/to，含起点、不含终点）过滤，'
+                'keyword 按原文子串匹配 summary（用主人原话里的关键词，如「公园」「叫声」，'
+                '3 个字以上效果最好）。主人问「上次/之前说过的事」必须先用本工具查证，'
+                '检索不到就如实说没有记录，不得编造记忆。',
+    parameters={'type': 'object', 'properties': {
+        'kinds': {'type': 'array', 'items': {'type': 'string',
+                  'enum': list(pet_memory.KINDS)}, 'description': '类型过滤，可选'},
+        'from': {'type': 'string', 'description': '发生时间下界（ISO，带时区）'},
+        'to': {'type': 'string', 'description': '发生时间上界（ISO，带时区）'},
+        'keyword': {'type': 'string', 'description': '关键词（主人原话的关键词）'},
+        'limit': {'type': 'integer', 'minimum': 1, 'maximum': 30, 'description': '默认10'}},
+        'additionalProperties': False},
+    group=MEMORY, forms=(DIALOGUE,), execute=_execute_search_memories))
+
+
+def _execute_forget_memory(args, context):
+    memory_id = args.get('memoryId')
+    if not isinstance(memory_id, int) or isinstance(memory_id, bool):
+        return {'forgotten': False, 'error': '请提供要忘掉的记忆 id（memoryId，整数）'}
+    with session_scope() as s:
+        pet = _pet_of(s, context)
+        row, error = pet_memory.forget(s, pet.id, memory_id)
+        if error:
+            return {'forgotten': False, 'error': error}
+        try:
+            pet_memory.write_report(s, pet)  # 导出即时一致；写失败由 worker 下个 tick 补写
+        except OSError:
+            logging.getLogger(__name__).warning('memory report rewrite failed for pet %s', pet.id)
+        return {'forgotten': True, 'memoryId': row.id, 'status': row.status,
+                'note': '条目保留可审计；后续不得再引用这条记忆回答主人'}
+
+
+register(ToolSpec(
+    name='forget_memory',
+    description='忘掉一条长期记忆（仅在主人明确要求「忘掉/删掉刚才记的/别记这个」时使用）。'
+                'memoryId 来自 search_memories 的结果或本回合刚写入的返回。忘掉后如实确认，'
+                '之后不再引用该条记忆。',
+    parameters={'type': 'object', 'properties': {
+        'memoryId': {'type': 'integer', 'description': '要忘掉的记忆条目 id'}},
+        'required': ['memoryId'], 'additionalProperties': False},
+    group=MEMORY, forms=(DIALOGUE,), execute=_execute_forget_memory))
+
+
+def _execute_read_pet_profile(args, context):
+    with session_scope() as s:
+        pet = s.get(Pet, context['pet_id'])
+        if pet is None or pet.user_id != context['user_id']:
+            raise ValueError('宠物归属已变化')
+        return proposal_service.profile_payload(s, pet)
+
+
+register(ToolSpec(
+    name='read_pet_profile',
+    description='读取本宠的完整档案：名字、物种、品种、生日（带精度：精确日期或按年/月估算）与推导年龄、'
+                '最新体重与最近体重记录。档案未填写的字段返回 null，如实说明「档案里还没有」，不得猜测。',
+    parameters={'type': 'object', 'properties': {}, 'additionalProperties': False},
+    group=FACT_READ, forms=(DIALOGUE,), execute=_execute_read_pet_profile))
+
+
+def _execute_prepare_profile_update(args, context):
+    fields, explicit = args.get('fields'), bool(args.get('explicit'))
+    if not isinstance(fields, dict):
+        return {'error': 'fields 需为对象，包含要保存的档案字段'}
+    try:
+        with session_scope() as s:
+            pet = s.get(Pet, context['pet_id'])
+            if pet is None or pet.user_id != context['user_id']:
+                raise ValueError('宠物归属已变化')
+            row, updated, refreshed = proposal_service.create(
+                s, pet, context.get('turn_id'), fields, explicit)
+    except proposal_service.ProposalError as exc:
+        return {'error': exc.message, 'validationErrors': exc.errors,
+                'guidance': '候选未通过校验，未保存。请向主人如实说明原因；主人补充后可重新发起。'}
+    # 旧 pending 卡随 supersede 翻态的回合 id：routes 提交后推 turn 帧刷新（§3.5）
+    refreshed_ids = [tid for tid in refreshed if tid != context.get('turn_id')]
+    if explicit:
+        return {'written': True, 'proposal': proposal_service.public(row),
+                'updatedFields': updated, 'refreshedTurnIds': refreshed_ids,
+                'guidance': '已写入档案。请如实回显保存结果，与 updatedFields 一致。'}
+    return {'written': False, 'proposal': proposal_service.public(row),
+            'refreshedTurnIds': refreshed_ids,
+            'guidance': '已生成待确认候选（确认卡会出现在回复中）。未经主人确认不得声称已保存；'
+                        '主人要修改候选时，按新内容重新调用本工具生成新版本。'}
+
+
+register(ToolSpec(
+    name='prepare_profile_update',
+    description='保存本宠档案事实（生日、体重、名字、品种）。两条生效路径：主人明确指令'
+                '（「记住/更新为…」且主体、内容、时间清楚）传 explicit=true 直接写入并回显；'
+                '信息不完全确定（如只说「它三岁了」）传 explicit=false 生成待确认候选卡，'
+                '由主人在卡片上确认。生日给具体日期用 birthDate（YYYY-MM-DD 或 YYYY-MM 或 YYYY），'
+                '只有年龄/大致年份用 birthYear；体重换算为公斤传 weightKg（如「九斤」传 4.5），'
+                '并在 weightRawText 保留原始表述。其他主体（朋友家的宠物）、假设（「假如」）、'
+                '否定表述不得调用本工具。',
+    parameters={'type': 'object', 'properties': {
+        'fields': {'type': 'object', 'properties': {
+            'name': {'type': 'string', 'description': '宠物名字（1—20 字）'},
+            'breed': {'type': 'string', 'description': '品种（≤40 字）'},
+            'birthDate': {'type': 'string', 'description': '生日：2023-09-10 / 2023-09 / 2023'},
+            'birthDatePrecision': {'type': 'string', 'enum': ['day', 'month', 'year'],
+                                   'description': '生日精度；缺省按日期格式推导，只允许降档'},
+            'birthYear': {'type': 'integer', 'description': '年龄/大致年份估算（如三岁→约 2023），与 birthDate 二选一'},
+            'weightKg': {'type': 'number', 'description': '体重（公斤，0.1–100）'},
+            'weightMeasuredOn': {'type': 'string', 'description': '体重发生日期 YYYY-MM-DD，缺省今天'},
+            'weightRawText': {'type': 'string', 'description': '主人的原始表述（如「九斤」），≤40 字'}},
+            'additionalProperties': False},
+        'explicit': {'type': 'boolean', 'description': '主人是否明确指令保存'},
+        'note': {'type': 'string', 'description': '提案理由（入运行轨迹）'}},
+        'required': ['fields', 'explicit'], 'additionalProperties': False},
+    group=PROFILE, forms=(DIALOGUE,), execute=_execute_prepare_profile_update))
+
+
+def _execute_prepare_role_settings(args, context):
+    try:
+        patch = settings_service.validate_patch(args)
+    except ValueError as exc:
+        return {'error': str(exc), 'guidance': '设定未通过校验，未修改。请如实说明原因。'}
+    with session_scope() as s:
+        row = settings_service.persist(s, context['user_id'], patch)
+        return {'updated': True, 'settings': settings_service.public(row),
+                'guidance': '设定已生效并从下一轮对话开始按新设定表达；请向主人回显修改结果。'}
+
+
+register(ToolSpec(
+    name='prepare_role_settings',
+    description='修改照料助手设定（名字、对主人的称呼、回答详略、主动程度）。仅在主人明确表达'
+                '修改意图时调用并直接生效；商量或疑问（「你能叫小禾吗？」）先向主人确认再调用。'
+                '主动程度 0=安静、1=标准、2=多提醒。清空称呼传空字符串。',
+    parameters={'type': 'object', 'properties': {
+        'assistantName': {'type': 'string', 'description': '助手名字（1—20 字）'},
+        'ownerTitle': {'type': 'string', 'description': '对主人的称呼（≤20 字，空串=清除）'},
+        'verbosity': {'type': 'string', 'enum': ['concise', 'detailed'], 'description': '简洁 / 详细'},
+        'proactivity': {'type': 'integer', 'enum': [0, 1, 2], 'description': '主动程度三档'}},
+        'additionalProperties': False},
+    group=SETTINGS, forms=(DIALOGUE,), execute=_execute_prepare_role_settings))
+
+
+def _execute_read_web_page(args, context):
+    url = args.get('url')
+    if not isinstance(url, str) or not url.strip():
+        return {'error': '请提供要读取的网页地址（http/https 绝对地址）。'}
+    try:
+        page = fetch.fetch_page(url.strip())
+    except fetch.FetchError as exc:
+        # 失败语义（W06 spec §4.4）：明确原因回给模型，运行继续；不得当作「来源不存在」
+        return {'error': f'网页读取失败：{exc}。请换一个来源或基于已有摘要如实回答，'
+                         '不得当作来源不存在，也不得声称已读取本页内容。'}
+    return {'url': page['url'], 'title': page['title'], 'text': page['text'],
+            'truncated': page['truncated'],
+            'note': '正文已提取，超过限制会被截断；truncated=true 时内容不完整，引用时如实说明'}
+
+
+register(ToolSpec(
+    name='read_web_page',
+    description='深读一个公网网页的正文：用于 web_search 来源摘要不足、需要细节或原文口径时，'
+                '或主人明确给出链接时；浅层信息优先用搜索摘要，不要为常识问题逐页阅读。'
+                '仅支持 http/https 公网页面（80/443 端口），内网地址与代理一律拒绝，页面最大 2MB、'
+                '正文截断 4000 字符。失败会返回明确原因（不存在/超时/非网页/超限等），不得当作来源不存在。',
+    parameters={'type': 'object', 'properties': {
+        'url': {'type': 'string', 'description': '要读取的网页地址（http/https 绝对地址）'}},
+        'required': ['url'], 'additionalProperties': False},
+    group=EXTERNAL_READ, forms=(DIALOGUE,), execute=_execute_read_web_page, timeout_s=20.0))
+
+
+
 def execute_tool(name, arguments, form, stance_scope, context):
     """权限矩阵先于执行：存在性 → 形态 → 范围；通过后带超时执行。
 
@@ -241,10 +513,10 @@ def execute_tool(name, arguments, form, stance_scope, context):
                 'result': {'error': '工具参数不是合法 JSON 对象，请修正后重试。'}}
     try:
         with ThreadPoolExecutor(max_workers=1) as pool:
-            result = pool.submit(spec.execute, arguments, context).result(timeout=TOOL_TIMEOUT_S)
+            result = pool.submit(spec.execute, arguments, context).result(timeout=spec.timeout_s)
     except FutureTimeout:
         return {'allowed': True, 'reason': 'timeout', 'duration_ms': int((time.monotonic() - started) * 1000),
-                'result': {'error': f'工具执行超时（>{TOOL_TIMEOUT_S:.0f}s）。请如实向主人说明未能查到，不得当作没有记录。'}}
+                'result': {'error': f'工具执行超时（>{spec.timeout_s:.0f}s）。请如实向主人说明未能查到，不得当作没有记录。'}}
     except Exception as exc:
         return {'allowed': True, 'reason': 'error', 'duration_ms': int((time.monotonic() - started) * 1000),
                 'result': {'error': f'工具执行失败（{type(exc).__name__}）。请如实向主人说明查询失败，不得当作没有记录。'}}

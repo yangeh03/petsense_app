@@ -1,17 +1,32 @@
 /**
- * 伙伴会话单条交换（W01 自建渲染层）：主人气泡 + 1–2 段人格回复。
+ * 伙伴会话单条交换（W01 自建渲染层；W07 图片消息）：主人气泡（可含图片网格）+ 1–2 段人格回复。
  * 优先消费服务端 blocks（按发言人拆好的内容块），旧数据无 blocks 时回退
- * 到单发言人 + 标记剥离，保证历史回合展示不劣化。
+ * 到单发言人 + 标记剥离，保证历史回合展示不劣化。图片点击进灯箱。
+ * W03：blocks 另含确认提案卡（type=proposal）；点击角色头像进入成员详情
+ * （宠物 → 档案页，照料助手 → 助手设定页）；助手显示名从设定读取。
  */
 
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
+import { Image } from 'expo-image';
 import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
+import AgentImageViewer from '@/components/agent/agent-image-viewer';
+import { ProposalCard } from '@/components/agent/proposal-card';
+import { WebSourceCard } from '@/components/agent/web-source-card';
 import { ThemedText } from '@/components/themed-text';
 import { Shadows } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
-import { fetchAgentObservation, type AgentObservation, type AgentTurn } from '@/services/agent';
+import {
+  agentImageSource,
+  fetchAgentObservation,
+  type AgentImageMeta,
+  type AgentObservation,
+  type AgentSource,
+  type AgentTurn,
+  type AgentWindowSource,
+} from '@/services/agent';
+import { assistantDisplayName, useCompanionSettingsStore } from '@/stores/companion-settings';
 
 type Props = {
   turn: AgentTurn;
@@ -21,7 +36,7 @@ type Props = {
   onRetry: (turn: AgentTurn) => void;
 };
 
-type AgentSource = AgentTurn['sources'][number];
+type DatedSource = AgentWindowSource & { startAt: string; endAt: string };
 
 /** 展开详情的窗口级缓存：同一窗口多次展开不重复请求。 */
 const observationCache = new Map<string, AgentObservation>();
@@ -72,7 +87,7 @@ function formatWindow(startAt: string, endAt: string): string {
 }
 
 /** 来源卡摘要：覆盖时长与声音事件；无覆盖如实说明（缺数据不伪装成正常）。 */
-function sourceSummary(source: AgentSource): string {
+function sourceSummary(source: DatedSource): string {
   if (source.observedSeconds == null && source.soundEventCount == null) return '';
   const sounds = source.soundEventCount ?? 0;
   const minutes = Math.round((source.observedSeconds ?? 0) / 60);
@@ -86,13 +101,22 @@ function sourceSummary(source: AgentSource): string {
   return sounds > 0 ? `覆盖 ${coverage} · 声音事件 ${sounds} 次` : `覆盖 ${coverage}`;
 }
 
-/** 相同窗口去重（模型常查重叠窗口）。 */
-function dedupeSources(sources: AgentSource[]): AgentSource[] {
-  return sources.filter(
-    (source, index, all) =>
-      all.findIndex((item) => item.startAt === source.startAt && item.endAt === source.endAt) ===
-      index,
+function isDatedSource(source: AgentSource): source is DatedSource {
+  return (
+    (source.type === 'observations' ||
+      source.type === 'current_status' ||
+      source.type === 'baseline') &&
+    typeof source.startAt === 'string' &&
+    typeof source.endAt === 'string' &&
+    Number.isFinite(Date.parse(source.startAt)) &&
+    Number.isFinite(Date.parse(source.endAt))
   );
+}
+
+function sourceKey(source: AgentSource) {
+  if (source.type === 'web') return `web:${source.url}`;
+  if (isDatedSource(source)) return `window:${source.startAt}:${source.endAt}`;
+  return `unavailable:${source.type}`;
 }
 
 function minutesOf(seconds: number | null | undefined): number {
@@ -100,7 +124,7 @@ function minutesOf(seconds: number | null | undefined): number {
 }
 
 /** 来源卡：点击就地展开这段窗口的关键数据；「记录页」降级为上探日/周趋势的次级入口。 */
-function SourceCard({ source, petId }: { source: AgentSource; petId: number | null }) {
+function SourceCard({ source, petId }: { source: DatedSource; petId: number | null }) {
   const theme = useTheme();
   const router = useRouter();
   const [expanded, setExpanded] = useState(false);
@@ -246,9 +270,102 @@ function SourceCard({ source, petId }: { source: AgentSource; petId: number | nu
   );
 }
 
+/** 单张主人图片：加载失败（网络/文件清理）显示占位与「图片不可用」，不影响文本渲染（spec §4.3） */
+function OwnerImage({
+  meta,
+  style,
+  label,
+  onOpen,
+}: {
+  meta: AgentImageMeta;
+  style: { width: number; height: number };
+  label: string;
+  onOpen: () => void;
+}) {
+  const theme = useTheme();
+  const [failed, setFailed] = useState(false);
+  return (
+    <Pressable
+      accessibilityRole="imagebutton"
+      accessibilityLabel={failed ? '图片不可用' : label}
+      onPress={onOpen}
+      style={[styles.ownerImage, style]}
+    >
+      {failed ? (
+        <View
+          style={[
+            StyleSheet.absoluteFill,
+            styles.ownerImageUnavailable,
+            { backgroundColor: theme.backgroundSelected },
+          ]}
+        >
+          <SymbolView
+            name={{ ios: 'photo', android: 'image', web: 'image' }}
+            tintColor={theme.textSecondary}
+            size={20}
+          />
+          <ThemedText type="small" themeColor="textSecondary">
+            图片不可用
+          </ThemedText>
+        </View>
+      ) : (
+        <Image
+          source={agentImageSource(meta.id)}
+          style={StyleSheet.absoluteFill}
+          contentFit="cover"
+          transition={120}
+          onError={() => setFailed(true)}
+        />
+      )}
+    </Pressable>
+  );
+}
+
+/** 主人气泡图片：1 张按宽高比自适应，2–3 张两列方格（W07 §4.3） */
+function OwnerImages({
+  images,
+  onOpen,
+}: {
+  images: AgentImageMeta[];
+  onOpen: (index: number) => void;
+}) {
+  if (images.length === 1) {
+    const meta = images[0];
+    const ratio = meta.width && meta.height ? meta.width / meta.height : 1.25;
+    const width = 232;
+    const height = Math.max(96, Math.min(320, Math.round(width / ratio)));
+    return (
+      <OwnerImage meta={meta} style={{ width, height }} label="查看图片" onOpen={() => onOpen(0)} />
+    );
+  }
+  return (
+    <View style={styles.ownerGrid}>
+      {images.map((meta, index) => (
+        <OwnerImage
+          key={meta.id}
+          meta={meta}
+          style={{ width: 104, height: 104 }}
+          label={`查看第 ${index + 1} 张图片`}
+          onOpen={() => onOpen(index)}
+        />
+      ))}
+    </View>
+  );
+}
+
 export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry }: Props) {
   const theme = useTheme();
-  const segments = turn.blocks?.length
+  const router = useRouter();
+  const settings = useCompanionSettingsStore((state) => state.settings);
+  const assistantName = assistantDisplayName(settings);
+  const [viewerIndex, setViewerIndex] = useState(0);
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const images = turn.images ?? [];
+  const openViewer = useCallback((index: number) => {
+    setViewerIndex(index);
+    setViewerOpen(true);
+  }, []);
+  const blocks = turn.blocks?.length
     ? turn.blocks
     : [
         {
@@ -257,15 +374,39 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry }:
           text: turn.reply.replace(/^【[^】]+】/, ''),
         },
       ];
+  const textSegments = blocks.filter((block) => block.type === 'text');
+  const proposals = blocks.filter((block) => block.type === 'proposal');
+  const hasUnknownBlocks = blocks.length > textSegments.length + proposals.length;
+
+  const openMember = (speaker: 'pet' | 'assistant') =>
+    router.push(speaker === 'pet' ? '/pet' : '/assistant-settings');
+
   return (
     <View style={styles.exchange}>
       <View style={[styles.ownerBubble, { backgroundColor: theme.tintBackground }]}>
-        <ThemedText>{turn.text}</ThemedText>
+        {images.length ? <OwnerImages images={images} onOpen={openViewer} /> : null}
+        {turn.text ? <ThemedText>{turn.text}</ThemedText> : null}
       </View>
+      {images.length ? (
+        <AgentImageViewer
+          images={images.map((meta) => agentImageSource(meta.id))}
+          imageIndex={viewerIndex}
+          visible={viewerOpen}
+          onRequestClose={() => setViewerOpen(false)}
+          onImageIndexChange={setViewerIndex}
+        />
+      ) : null}
       <View style={styles.replyColumn}>
-        {segments.map((segment, index) => (
+        {textSegments.map((segment, index) => (
           <View key={index} style={styles.replyRow}>
-            <View
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={
+                segment.speaker === 'pet'
+                  ? `查看${petName ?? '爱宠'}的档案`
+                  : `查看${assistantName}的设定`
+              }
+              onPress={() => openMember(segment.speaker)}
               style={[
                 styles.avatar,
                 {
@@ -287,19 +428,39 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry }:
                   size={17}
                 />
               )}
-            </View>
+            </Pressable>
             <View style={styles.replyBody}>
-              <ThemedText type="smallBold" themeColor="textSecondary">
-                {segment.speaker === 'pet' ? (petName ?? '爱宠') : '照料助手'}
-              </ThemedText>
+              <Pressable accessibilityRole="button" onPress={() => openMember(segment.speaker)}>
+                <ThemedText type="smallBold" themeColor="textSecondary">
+                  {segment.speaker === 'pet' ? (petName ?? '爱宠') : assistantName}
+                </ThemedText>
+              </Pressable>
               <ThemedText>{segment.text || '正在接话…'}</ThemedText>
             </View>
           </View>
         ))}
+        {hasUnknownBlocks ? (
+          <ThemedText type="small" themeColor="textSecondary">
+            这条消息里有暂不支持的内容。
+          </ThemedText>
+        ) : null}
+        {proposals.map((block) => (
+          <ProposalCard key={block.proposal.id} petId={petId} proposal={block.proposal} />
+        ))}
         <View style={styles.replyFootnote}>
-          {dedupeSources(turn.sources).map((source) => (
-            <SourceCard key={`${source.startAt}-${source.endAt}`} source={source} petId={petId} />
-          ))}
+          {[...new Map((turn.sources ?? []).map((source) => [sourceKey(source), source]))].map(
+            ([key, source]) => {
+              if (source.type === 'web') return <WebSourceCard key={key} source={source} />;
+              if (isDatedSource(source)) {
+                return <SourceCard key={key} source={source} petId={petId} />;
+              }
+              return (
+                <ThemedText key={key} type="small" themeColor="textSecondary">
+                  {source.type === 'baseline' ? '个人基线暂无可比样本' : '暂不支持展示的来源'}
+                </ThemedText>
+              );
+            },
+          )}
           {turn.status !== 'pending' ? (
             <Pressable
               accessibilityRole="button"
@@ -326,7 +487,11 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 20,
     borderBottomRightRadius: 6,
+    gap: 8,
   },
+  ownerImage: { borderRadius: 12, overflow: 'hidden' },
+  ownerImageUnavailable: { alignItems: 'center', justifyContent: 'center', gap: 6 },
+  ownerGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 4 },
   replyColumn: { gap: 10 },
   replyRow: { flexDirection: 'row', gap: 9, alignItems: 'flex-start' },
   replyBody: { flex: 1, gap: 6, paddingTop: 2 },

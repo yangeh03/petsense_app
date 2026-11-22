@@ -12,6 +12,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  TextInput,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -23,8 +24,18 @@ import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { usePetChanges } from '@/hooks/use-pet-changes';
 import { useTheme } from '@/hooks/use-theme';
-import { absoluteUrl, fetchPets, updatePet } from '@/services/api';
 import {
+  absoluteUrl,
+  addWeightRecord,
+  deleteWeightRecord,
+  fetchPets,
+  fetchWeightRecords,
+  updatePet,
+  type WeightRecord,
+} from '@/services/api';
+import {
+  ageLabel,
+  birthLabel,
   buildPetUpdate,
   createPetDraft,
   isPetDraftDirty,
@@ -53,6 +64,17 @@ export default function PetScreen() {
   const [picking, setPicking] = useState(false);
   const [discardOpen, setDiscardOpen] = useState(false);
   const [pendingAction, setPendingAction] = useState<NavigationAction | null>(null);
+  // W03 体重记录（编辑态）：按日追加、可删；同日再记覆盖当日（agent-w03-spec.md §4.3）
+  const [weightRecords, setWeightRecords] = useState<WeightRecord[]>([]);
+  const [weightKg, setWeightKg] = useState('');
+  const [weightDate, setWeightDate] = useState(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
+      now.getDate(),
+    ).padStart(2, '0')}`;
+  });
+  const [weightBusy, setWeightBusy] = useState(false);
+  const [weightError, setWeightError] = useState('');
   const sequence = useRef(0);
   const savingRequest = useRef(false);
   const pet = resource?.userId === user?.id ? resource?.pet : null;
@@ -110,6 +132,55 @@ export default function PetScreen() {
       setError('');
     }
   };
+  const loadWeights = useCallback(async (petId: number) => {
+    try {
+      const data = await fetchWeightRecords(petId);
+      setWeightRecords(data.records);
+    } catch {
+      setWeightRecords([]);
+    }
+  }, []);
+
+  const addWeight = async () => {
+    if (!pet || weightBusy) return;
+    const kg = Number(weightKg.trim());
+    if (!Number.isFinite(kg) || kg < 0.1 || kg > 100) {
+      setWeightError('体重请输入 0.1—100 之间的公斤数');
+      return;
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(weightDate.trim())) {
+      setWeightError('日期格式：2026-11-22');
+      return;
+    }
+    setWeightBusy(true);
+    setWeightError('');
+    try {
+      await addWeightRecord(pet.id, { weightKg: kg, measuredOn: weightDate.trim() });
+      setWeightKg('');
+      await loadWeights(pet.id);
+      await load(); // 刷新 pet.latestWeight
+    } catch (exc) {
+      setWeightError(exc instanceof Error ? exc.message : '保存失败，请稍后再试');
+    } finally {
+      setWeightBusy(false);
+    }
+  };
+
+  const removeWeight = async (recordId: number) => {
+    if (!pet || weightBusy) return;
+    setWeightBusy(true);
+    setWeightError('');
+    try {
+      await deleteWeightRecord(pet.id, recordId);
+      await loadWeights(pet.id);
+      await load();
+    } catch (exc) {
+      setWeightError(exc instanceof Error ? exc.message : '删除失败，请稍后再试');
+    } finally {
+      setWeightBusy(false);
+    }
+  };
+
   const pickPhoto = async () => {
     setPicking(true);
     setError('');
@@ -201,6 +272,7 @@ export default function PetScreen() {
               setDraft(createPetDraft(pet));
               setSuccess('');
               setError('');
+              void loadWeights(pet.id);
             }}
             style={styles.headerAction}
           >
@@ -265,6 +337,100 @@ export default function PetScreen() {
                     }}
                     onPickPhoto={() => void pickPhoto()}
                   />
+                  <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
+                    <ThemedText type="smallBold">体重记录</ThemedText>
+                    <View style={styles.weightInputs}>
+                      <TextInput
+                        value={weightKg}
+                        onChangeText={setWeightKg}
+                        editable={!weightBusy}
+                        accessibilityLabel="体重公斤数"
+                        placeholder="公斤，如 4.5"
+                        placeholderTextColor={theme.textSecondary}
+                        keyboardType="decimal-pad"
+                        returnKeyType="done"
+                        style={[
+                          styles.weightInput,
+                          {
+                            color: theme.text,
+                            backgroundColor: theme.background,
+                            borderColor: theme.backgroundSelected,
+                          },
+                        ]}
+                      />
+                      <TextInput
+                        value={weightDate}
+                        onChangeText={setWeightDate}
+                        editable={!weightBusy}
+                        accessibilityLabel="称重日期"
+                        placeholder="2026-11-22"
+                        placeholderTextColor={theme.textSecondary}
+                        returnKeyType="done"
+                        style={[
+                          styles.weightInput,
+                          styles.weightDateInput,
+                          {
+                            color: theme.text,
+                            backgroundColor: theme.background,
+                            borderColor: theme.backgroundSelected,
+                          },
+                        ]}
+                      />
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="添加体重记录"
+                        disabled={weightBusy || !weightKg.trim()}
+                        onPress={() => void addWeight()}
+                        style={[
+                          styles.weightAdd,
+                          {
+                            backgroundColor:
+                              weightBusy || !weightKg.trim()
+                                ? theme.backgroundSelected
+                                : theme.tint,
+                          },
+                        ]}
+                      >
+                        {weightBusy ? (
+                          <ActivityIndicator size="small" color={theme.backgroundElement} />
+                        ) : (
+                          <ThemedText type="smallBold" style={{ color: theme.backgroundElement }}>
+                            记一笔
+                          </ThemedText>
+                        )}
+                      </Pressable>
+                    </View>
+                    {!!weightError && (
+                      <ThemedText type="small" style={{ color: theme.danger }}>
+                        {weightError}
+                      </ThemedText>
+                    )}
+                    {weightRecords.length ? (
+                      weightRecords.slice(0, 10).map((record) => (
+                        <View key={record.id} style={styles.detail}>
+                          <ThemedText type="small" style={{ flex: 1 }}>
+                            {record.measuredOn} · {record.weightKg} kg
+                            {record.rawText ? `（${record.rawText}）` : ''}
+                          </ThemedText>
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel={`删除 ${record.measuredOn} 的体重记录`}
+                            disabled={weightBusy}
+                            onPress={() => void removeWeight(record.id)}
+                            style={styles.weightDelete}
+                          >
+                            <ThemedText type="small" style={{ color: theme.danger }}>
+                              删除
+                            </ThemedText>
+                          </Pressable>
+                        </View>
+                      ))
+                    ) : (
+                      <ThemedText type="small" themeColor="textSecondary">
+                        还没有体重记录；同一天再记会覆盖当天的数值。
+                      </ThemedText>
+                    )}
+                  </View>
                   {draft.species === 'dog' && (
                     <AvatarTemplatePicker
                       selectedId={draft.avatarTemplateId}
@@ -350,6 +516,22 @@ export default function PetScreen() {
                     <Detail label="名字" value={pet.name} />
                     <Detail label="物种" value={speciesLabel(pet.species)} />
                     <Detail label="品种" value={pet.breed || '未填写'} />
+                    <Detail
+                      label="生日"
+                      value={
+                        pet.birthDate
+                          ? `${birthLabel(pet)}${ageLabel(pet) ? ` · ${ageLabel(pet)}` : ''}`
+                          : '未填写'
+                      }
+                    />
+                    <Detail
+                      label="体重"
+                      value={
+                        pet.latestWeight
+                          ? `${pet.latestWeight.weightKg} kg · ${pet.latestWeight.measuredOn}`
+                          : '未记录'
+                      }
+                    />
                   </View>
                   <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
                     <ThemedText type="smallBold">守护它的项圈</ThemedText>
@@ -508,6 +690,24 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   detailValue: { flex: 1, textAlign: 'right' },
+  weightInputs: { flexDirection: 'row', gap: Spacing.two, alignItems: 'center' },
+  weightInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: Spacing.two,
+    fontSize: 16,
+    minHeight: 48,
+  },
+  weightDateInput: { flex: 1.2 },
+  weightAdd: {
+    minHeight: 48,
+    borderRadius: 14,
+    paddingHorizontal: Spacing.three,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  weightDelete: { paddingVertical: 6, paddingLeft: Spacing.two },
   primary: {
     minHeight: 52,
     borderRadius: 16,

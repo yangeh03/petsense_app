@@ -23,6 +23,20 @@ def save(pet_id, turn_id, trace, status, error=None):
         return run.id
 
 
+def update_conclusion(run_id, patch):
+    """运行落库后回填结论字段（W04 §3.11：条目落库后回填 memoryId，双向可溯源）。
+
+    run 不存在时静默跳过；只合并 patch 的键，不动其余结论。
+    """
+    with session_scope() as s:
+        row = s.get(AgentRun, run_id)
+        if row is None:
+            return
+        conclusion = json.loads(row.conclusion or '{}')
+        conclusion.update(patch)
+        row.conclusion = json.dumps(conclusion, ensure_ascii=False)
+
+
 def summarize(run):
     """回放视图：完整结论与消息序列。"""
     return {'id': run.id, 'petId': run.pet_id, 'turnId': run.turn_id, 'form': run.form,

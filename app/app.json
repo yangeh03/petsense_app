@@ -60,6 +60,12 @@
         }
       ],
       [
+        "expo-image-picker",
+        {
+          "cameraPermission": "允许 PetSense 拍摄照片发给伙伴。"
+        }
+      ],
+      [
         "expo-media-library",
         {
           "savePhotosPermission": "允许 PetSense 将运动日记保存到相册。",

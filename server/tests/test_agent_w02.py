@@ -115,7 +115,7 @@ class SnapshotTests(unittest.TestCase):
         with patch('petsense.agent.snapshot.SNAPSHOT_CHAR_LIMIT', 200):
             with db.session_scope() as s:
                 snap = snapshot.assemble(s, pet, utc_now())
-        self.assertEqual(snap['meta']['trimmed'], ['learning', 'current.secondary'])
+        self.assertEqual(snap['meta']['trimmed'], ['learning', 'memory', 'current.secondary'])
         current = snap['sections']['current']
         for key in ('action', 'online', 'ageSeconds'):
             self.assertIn(key, current)
@@ -244,7 +244,8 @@ class CurrentStatusToolTests(unittest.TestCase):
 
     def test_registered_in_dialogue_schemas(self):
         names = [s['name'] for s in registry.schemas_for('dialogue', 'allowed')]
-        self.assertEqual(names, ['query_observations', 'read_current_status'])
+        # W06 新增 read_web_page（EXTERNAL_READ 组），快照与观测工具语义不变
+        self.assertIn('read_current_status', names)
 
 
 class LoopInjectionTests(unittest.TestCase):

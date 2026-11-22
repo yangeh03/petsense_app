@@ -27,6 +27,7 @@ import { useAgentChat } from '@/hooks/use-agent-chat';
 import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
 import { useAgentChatStore } from '@/stores/agent-chat';
+import { assistantDisplayName, useCompanionSettingsStore } from '@/stores/companion-settings';
 import type { AgentTurn } from '@/services/agent';
 
 export default function CompanionScreen() {
@@ -47,6 +48,7 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
     topic,
     draft,
     target,
+    attachments,
     busy,
     error,
     setDraft,
@@ -58,17 +60,31 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
   const {
     learningDays,
     soundDays,
+    learningState,
+    soundState,
     followReply,
     setFollowReply,
     reload,
     send,
+    pickImages,
+    retryAttachment,
+    removeAttachment,
     loadOlder,
     markRead,
   } = useAgentChat(user);
+  const settings = useCompanionSettingsStore((state) => state.settings);
+  const refreshSettings = useCompanionSettingsStore((state) => state.refresh);
+  const assistantName = assistantDisplayName(settings); // W03：页头副标题随设定更新
   const [showLearning, setShowLearning] = useState(false);
   const [keyboardOpen, setKeyboardOpen] = useState(() => Keyboard.isVisible());
   const scroll = useRef<ScrollViewInstance>(null);
   const restored = useRef(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refreshSettings(); // W03：回到伙伴页拉齐助手设定（改名即时生效）
+    }, [refreshSettings]),
+  );
 
   useEffect(() => {
     const show = Keyboard.addListener('keyboardWillShow', () => setKeyboardOpen(true));
@@ -83,7 +99,14 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
     loadedFor === (user?.id ?? -1)
       ? turns.filter((turn) => topic === undefined || (turn.topicId ?? turn.id) === topic)
       : [];
-  const canSend = Boolean(petId && draft.trim() && !busy);
+  // W07（spec §4.1）：有图未全完成（上传中或失败）不可发；纯图（无文字）可发；失败重试入口与草稿同源
+  const uploading = attachments.some((item) => item.status === 'uploading');
+  const hasFailed = attachments.some((item) => item.status === 'failed');
+  const readyImages = attachments.filter((item) => item.status === 'done' && item.imageId);
+  const canSend = Boolean(
+    petId && !busy && !uploading && !hasFailed && (draft.trim() || readyImages.length),
+  );
+  const canAttach = Boolean(petId && !busy && attachments.length < 3);
 
   useFocusEffect(
     useCallback(() => {
@@ -98,6 +121,20 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
   const onRetry = (turn: AgentTurn) => {
     setDraft(turn.text);
     setTarget(turn.target);
+    // 失败回合的图片已在服务端，按完成态放回输入区（失败不丢图，重试免重传）
+    if (turn.images?.length) {
+      useAgentChatStore.getState().clearAttachments();
+      useAgentChatStore.getState().addAttachments(
+        turn.images.map((meta) => ({
+          key: `restore-${meta.id}`,
+          localUri: null,
+          width: meta.width ?? 0,
+          height: meta.height ?? 0,
+          imageId: meta.id,
+          status: 'done' as const,
+        })),
+      );
+    }
   };
 
   return (
@@ -125,7 +162,7 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
           <ThemedText style={styles.title}>伙伴</ThemedText>
           {petId ? (
             <ThemedText type="small" themeColor="textSecondary">
-              你 · {petName ?? '爱宠'} · 照料助手
+              你 · {petName ?? '爱宠'} · {assistantName}
             </ThemedText>
           ) : null}
         </View>
@@ -136,18 +173,27 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
             accessibilityState={{ expanded: showLearning }}
             style={[styles.pill, { backgroundColor: theme.backgroundSelected }]}
           >
-            <ThemedText type="smallBold">认识中 {Math.min(7, learningDays)}/7</ThemedText>
+            <ThemedText type="smallBold">
+              {learningState === 'ready' ? '已认识' : `认识中 ${Math.min(7, learningDays)}/7`}
+            </ThemedText>
           </Pressable>
         ) : null}
       </View>
       {showLearning && learningDays !== null ? (
         <View style={[styles.learning, { backgroundColor: theme.backgroundElement }]}>
-          <ThemedText type="smallBold">慢慢认识它的日常</ThemedText>
-          <ThemedText type="small" themeColor="textSecondary">
-            动作 {Math.min(7, learningDays)}/7 天 · 声音 {Math.min(7, soundDays)}/7 天
+          <ThemedText type="smallBold">
+            {learningState === 'ready' && soundState === 'ready'
+              ? '已经认识它的日常'
+              : '慢慢认识它的日常'}
           </ThemedText>
           <ThemedText type="small" themeColor="textSecondary">
-            区域观察等待接入，个人日常参照仍在建立。
+            {learningState === 'ready' ? '动作 已认识' : `动作 ${Math.min(7, learningDays)}/7 天`} ·{' '}
+            {soundState === 'ready' ? '声音 已认识' : `声音 ${Math.min(7, soundDays)}/7 天`}
+          </ThemedText>
+          <ThemedText type="small" themeColor="textSecondary">
+            {learningState === 'ready' && soundState === 'ready'
+              ? '动作与声音的个人日常参照已建立。'
+              : '区域观察等待接入，个人日常参照仍在建立。'}
           </ThemedText>
         </View>
       ) : null}
@@ -291,9 +337,14 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
             canSend={canSend}
             keyboardOpen={keyboardOpen && Platform.OS === 'ios'}
             bottomInset={insets.bottom}
+            attachments={attachments}
+            canAttach={canAttach}
             onDraft={setDraft}
             onTarget={setTarget}
             onSend={() => void send()}
+            onPick={(source) => void pickImages(source)}
+            onRetryAttachment={retryAttachment}
+            onRemoveAttachment={removeAttachment}
           />
         </View>
       ) : null}

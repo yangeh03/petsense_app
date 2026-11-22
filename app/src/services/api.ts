@@ -37,6 +37,7 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly payload?: unknown,
   ) {
     super(message);
   }
@@ -137,7 +138,7 @@ async function parseApiResponse<T>(status: number, body: string): Promise<T> {
       payload && typeof payload === 'object' && 'message' in payload
         ? String((payload as { message: unknown }).message)
         : `请求失败（${status}）`;
-    throw new ApiError(message, status);
+    throw new ApiError(message, status, payload ?? undefined);
   }
   if (
     payload &&
@@ -154,7 +155,7 @@ async function parseApiResponse<T>(status: number, body: string): Promise<T> {
  * 带文件的上传：Web 走 fetch + FormData（Blob），原生走 XHR multipart。
  * 两种路径字段与文件一致，服务端按同一套 multipart 解析。
  */
-async function uploadRequest<T>(
+export async function uploadRequest<T>(
   path: string,
   init: { method?: string; fields: Record<string, string>; files: UploadFile[] },
 ): Promise<T> {
@@ -243,6 +244,48 @@ export async function updatePet(petId: number, input: PetUpdate): Promise<{ pet:
     fields: Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, value ?? ''])),
     files: [{ field: 'photo', ...photo }],
   });
+}
+
+// ─── W03：体重记录与助手设定（agent-w03-spec.md §3.7） ───
+
+export interface WeightRecord {
+  id: number;
+  measuredOn: string;
+  weightKg: number;
+  rawText: string | null;
+  source: 'owner' | 'agent';
+}
+
+export function fetchWeightRecords(petId: number): Promise<{ records: WeightRecord[] }> {
+  return request(`/pets/${petId}/weight-records`);
+}
+
+export function addWeightRecord(
+  petId: number,
+  input: { weightKg: number; measuredOn?: string },
+): Promise<{ record: WeightRecord }> {
+  return request(`/pets/${petId}/weight-records`, { method: 'POST', body: input });
+}
+
+export function deleteWeightRecord(petId: number, recordId: number): Promise<{ success: boolean }> {
+  return request(`/pets/${petId}/weight-records/${recordId}`, { method: 'DELETE' });
+}
+
+export interface CompanionSettings {
+  assistantName: string;
+  ownerTitle: string | null;
+  verbosity: 'concise' | 'detailed';
+  proactivity: 0 | 1 | 2;
+}
+
+export function fetchAssistantSettings(): Promise<{ settings: CompanionSettings }> {
+  return request('/agent/assistant-settings');
+}
+
+export function updateAssistantSettings(
+  input: Partial<CompanionSettings>,
+): Promise<{ settings: CompanionSettings }> {
+  return request('/agent/assistant-settings', { method: 'PATCH', body: input });
 }
 
 // ─── 设备（一人一设备，认领即绑定宠物） ───

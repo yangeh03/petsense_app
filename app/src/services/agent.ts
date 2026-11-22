@@ -1,4 +1,47 @@
-import { request } from '@/services/api';
+import { absoluteUrl, getToken, request, uploadRequest } from '@/services/api';
+import type { UploadImage } from '@/services/normalize-image';
+
+/** W07 聊天图片引用（服务端 public() 的 images 项） */
+export type AgentImageMeta = {
+  id: string;
+  width: number | null;
+  height: number | null;
+  bytes: number | null;
+};
+
+/** W03 确认提案卡（agent-w03-spec.md §3.5）：fields 为归一化候选，状态由决策端点翻转。 */
+export type AgentProposal = {
+  id: number;
+  kind: string;
+  status: 'pending' | 'confirmed' | 'rejected' | 'superseded';
+  version: number;
+  fields: {
+    name?: string;
+    breed?: string;
+    birthDate?: string;
+    birthDatePrecision?: 'day' | 'month' | 'year';
+    weightKg?: number;
+    weightMeasuredOn?: string;
+    weightRawText?: string;
+  };
+  createdAt: string;
+  decidedAt: string | null;
+};
+
+export type AgentWindowSource = {
+  type: 'observations' | 'current_status' | 'baseline';
+  startAt: string | null;
+  endAt: string | null;
+  observedSeconds?: number | null;
+  soundEventCount?: number | null;
+};
+
+/** 网页来源（W06 服务端 sources 并入）：title/checkedAt 由服务端写入，未知 type 由 UI 安全降级。 */
+export type AgentWebSource = { type: 'web'; url: string; title: string; checkedAt: string };
+
+export type AgentSource = AgentWindowSource | AgentWebSource;
+
+export const isWebSource = (source: AgentSource): source is AgentWebSource => source.type === 'web';
 
 export type AgentTurn = {
   id: number;
@@ -12,16 +55,14 @@ export type AgentTurn = {
   createdAt: string;
   topicId: number | null;
   replyTo: number | null;
-  sources: {
-    type: string;
-    startAt: string;
-    endAt: string;
-    deviceId?: string;
-    versions?: string[];
-    observedSeconds?: number | null;
-    soundEventCount?: number | null;
-  }[];
-  blocks: { type: 'text'; speaker: 'pet' | 'assistant'; text: string }[] | null;
+  sources: AgentSource[];
+  blocks:
+    | (
+        | { type: 'text'; speaker: 'pet' | 'assistant'; text: string }
+        | { type: 'proposal'; proposal: AgentProposal }
+      )[]
+    | null;
+  images: AgentImageMeta[];
 };
 export const fetchAgentTurns = (pet: number, before?: number) =>
   request<{ turns: AgentTurn[] }>(`/agent/pets/${pet}/turns${before ? `?before=${before}` : ''}`);
@@ -32,11 +73,40 @@ export const sendAgentTurn = (
   requestId: string,
   topicId?: number,
   replyTo?: number,
+  images?: string[],
 ) =>
   request<{ turn: AgentTurn }>(`/agent/pets/${pet}/turns`, {
     method: 'POST',
-    body: { text, target, requestId, topicId, replyTo },
+    body: { text, target, requestId, topicId, replyTo, ...(images?.length ? { images } : {}) },
   });
+
+/** 确认卡决策：幂等；响应带刷新后的 turn（按 id 覆盖本地回合）。 */
+export const decideAgentProposal = (
+  pet: number,
+  proposalId: number,
+  action: 'confirm' | 'reject',
+) =>
+  request<{ proposal: AgentProposal; turn: AgentTurn | null }>(
+    `/agent/pets/${pet}/proposals/${proposalId}/decision`,
+    { method: 'POST', body: { action } },
+  );
+
+/** W07：上传聊天图片（先传后发；返回内容寻址 id 与尺寸）。method 必须显式 POST：Web 路径走 request()，缺省是 GET。 */
+export const uploadAgentImage = (pet: number, file: UploadImage) =>
+  uploadRequest<AgentImageMeta>(`/agent/pets/${pet}/images`, {
+    method: 'POST',
+    fields: {},
+    files: [{ field: 'image', uri: file.uri, name: file.name, type: file.type }],
+  });
+
+/** W07：鉴权图源（仅本人可读，区别于公开 /uploads/） */
+export function agentImageSource(imageId: string) {
+  const token = getToken();
+  return {
+    uri: absoluteUrl(`/api/app/agent/images/${imageId}`),
+    ...(token ? { headers: { 'X-Petsense-Session': token } } : {}),
+  };
+}
 
 export type AgentObservation = {
   startAt: string;
@@ -55,6 +125,8 @@ export type AgentObservation = {
     version: string;
     validDays: number;
     observedSeconds: number;
+    state: string;
+    active: boolean;
   }[];
   learning: { validDays: number; requiredDays: number; state: string };
 };

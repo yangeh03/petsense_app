@@ -142,7 +142,11 @@ class RegistryMatrixTests(unittest.TestCase):
     def test_schemas_for_scope(self):
         self.assertEqual(registry.schemas_for('dialogue', 'out_of_scope'), [])
         names = [s['name'] for s in registry.schemas_for('dialogue', 'allowed')]
-        self.assertEqual(names, ['query_observations', 'read_current_status'])
+        # W06 新增 read_web_page（EXTERNAL_READ 组）；开关关闭时不进 schemas（见 test_agent_w06）
+        self.assertEqual(set(names), {'query_observations', 'read_baseline', 'read_current_status',
+                                      'write_memory', 'search_memories', 'forget_memory',
+                                      'read_pet_profile', 'prepare_profile_update', 'prepare_role_settings',
+                                      'read_web_page'})
         self.assertEqual(registry.schemas_for('review', 'allowed'), [])
 
 
