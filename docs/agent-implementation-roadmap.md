@@ -136,4 +136,6 @@ Agent 消息另设类型和服务层，不把聊天格式塞入既有遥测解�
 
 ## 7. 本轮交付状态
 
-阶段 1 首切片（旧 P01–P06）已合入 main 并部署腾讯云；V11 重构的 W00、W01、W02 已完成（2026-11-22，分别见 [W00 spec](./agent-w00-spec.md)（MiniMax 搜索实测：`web_search` 须走 Responses/Anthropic API）、[W01 spec](./agent-w01-spec.md)（统一循环/注册表矩阵/轨迹/WS 直连，decide 路由已删除）、[W02 spec](./agent-w02-spec.md)（氛围快照 + read_current_status + 轨迹快照取证，行为评测 E1–E15 生产 15/15））。实现、检查及未验证范围见各 spec 验收记录，AGENTS.md 已同步开发入口。下一包：W03。
+阶段 1 首切片（旧 P01–P06）已合入 main 并部署腾讯云。V11 重构的 W00、W01 已完成，分别见 [W00 spec](./agent-w00-spec.md) 和 [W01 spec](./agent-w01-spec.md)。
+
+W02 已实现并部署。2026-11-22 独立补验打通了 iOS 发送、收包和轨迹回放，行为评测复跑 14/15。离线电量误判、查询被拒后的无依据转述和真项圈在线场景仍待闭环。见 [W02 spec](./agent-w02-spec.md)。后续工作包为 W03，先确认 spec。

@@ -354,4 +354,4 @@ flowchart TD
 - **保留并演进**：`agent_turns` 持久化与去重、观测统一查询（已注册为工具）、版本化学习累计（→W05 证据）、App 伙伴会话（已迁 zustand + WS 直连）。
 - **未开始**：W03 起的新能力包。
 
-W00 已完成（2026-11-22，spec 见 [agent-w00-spec.md](./agent-w00-spec.md)：现状处置基线逐条核实、MiniMax 搜索实测——内建 `web_search` 可用但须走 Responses/Anthropic API（Chat Completions 不支持），W06 按此适配；契约/选型/映射此前已随 V11 重构入库）。W01 已完成（统一循环/注册表矩阵/轨迹/WS 直连/前端栈迁移，行为评测 E1–E10 全过，见 [agent-w01-spec.md](./agent-w01-spec.md)）。W02 已完成（氛围快照 + read_current_status + 轨迹快照取证，行为评测 E1–E15 生产 15/15，见 [agent-w02-spec.md](./agent-w02-spec.md)）；下一步 W03。
+W00 已完成（2026-11-22，spec 见 [agent-w00-spec.md](./agent-w00-spec.md)：现状处置基线逐条核实、MiniMax 搜索实测——内建 `web_search` 可用但须走 Responses/Anthropic API（Chat Completions 不支持），W06 按此适配；契约/选型/映射此前已随 V11 重构入库）。W01 已完成（统一循环/注册表矩阵/轨迹/WS 直连/前端栈迁移，行为评测 E1–E10 全过，见 [agent-w01-spec.md](./agent-w01-spec.md)）。W02 已实现并部署，iOS 发送与收包已补验。复验 E1–E15 为 14/15，生产离线问答复现电量误判和无依据转述，真项圈在线场景待测。详见 [W02 独立复验](./agent-w02-spec.md#92-独立复验2026-11-22上海时间)。后续工作包为 W03，开发前先定稿 spec。
