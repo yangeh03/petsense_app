@@ -70,12 +70,12 @@ server/tools/minimax_vision_smoke.py        # §0 冒烟脚本（已入库）
 ### 3.2 上传与读取
 
 - `POST /api/app/agent/pets/<pet_id>/images`：`require_app_user` + pet 归属校验；multipart 字段 `image` 单文件；§2 校验链 + 服务端强制封顶（客户端压缩不可信）；响应 `{'id','width','height','bytes'}`；用户超 2000 张 → 400 `storage_full`。幂等：同内容同 id（hash 命中直接返回现文件元数据）。
-- `GET /api/app/agent/images/<image_id>`：`require_app_user`；`image_id` 必须形如 hex64，文件必须位于 `agent_media/<当前uid>/`（路径归属即鉴权，无遍历面）；`send_file` + `Cache-Control: immutable`（内容寻址，永不变化）；不存在 404。**不经公开 `/uploads/`**（D3：聊天图隐私等级高于头像）。
+- `GET /api/app/agent/images/<image_id>`：`require_app_user`；`image_id` 必须形如 hex64，文件必须位于 `agent_media/<当前uid>/`（路径归属即鉴权，无遍历面）；`send_file` + `Cache-Control: private, max-age=31536000, immutable`（内容寻址永不变化；private 防鉴权资源进共享缓存，2026-11-22 收尾核实）；不存在 404。**不经公开 `/uploads/`**（D3：聊天图隐私等级高于头像）。
 - 目录进入 `config.py`（`AGENT_MEDIA_DIR`），不注册 web 静态路由。
 
 ### 3.3 消息协议与模型输入
 
-- POST turns 请求体新增 `images?: [hex64]`（≤3，去重；每个 id 必须已上传且属于当前用户，否则 400）。落库 `AgentTurn.images = json.dumps([{id,width,height,bytes}])`；`public()` 返回解析后的数组（无图片为 `[]`）。
+- POST turns 请求体新增 `images?: [hex64]`（≤3，去重；格式非法/重复 → 400；格式合法但未上传、已失效或不属于本人 → **404「图片不存在，请重新上传」**，2026-11-22 收尾按实现记录口径，与「文件缺失 404」一致）。落库 `AgentTurn.images = json.dumps([{id,width,height,bytes}])`；`public()` 返回解析后的数组（无图片为 `[]`）。
 - `loop.py` 构造模型输入时（`routes.py` 历史查询带出 images 列）：
   - **窗口内**（本轮 + 最近 1 条含图主人消息，D1）：`content = [{'type':'input_text','text':text}] + [{'type':'input_image','image_url':'data:image/jpeg;base64,...'}]`；`text` 为空则省略 `input_text` 块。读文件在 loop 组装期同步完成（本地磁盘，毫秒级）。
   - **窗口外**：`content` 保持字符串，文本尾追加 `（附 N 张图片，已省略）`。

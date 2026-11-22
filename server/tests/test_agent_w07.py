@@ -134,7 +134,11 @@ class ServeTests(W07Base):
         response = self.client.get(f'/api/app/agent/images/{meta["id"]}')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.mimetype, 'image/jpeg')
-        self.assertIn('immutable', response.headers['Cache-Control'])
+        # private：鉴权资源不进共享缓存；内容寻址仍 immutable
+        cache_control = response.headers['Cache-Control']
+        self.assertIn('immutable', cache_control)
+        self.assertIn('private', cache_control)
+        self.assertNotIn('public', cache_control)
 
     def test_other_user_cannot_read(self):
         meta = self._upload_ok()
@@ -176,8 +180,15 @@ class TurnImagesTests(W07Base):
     def test_image_validation(self):
         self.assertEqual(self.client.post(self.path, json={
             'text': 'hi', 'requestId': 'a', 'images': ['not-hex']}).status_code, 400)
+        # 合法格式但未上传（或已失效）：404 引导重新上传（与 test_send_with_deleted_image_reference_404 同口径）
         self.assertEqual(self.client.post(self.path, json={
             'text': 'hi', 'requestId': 'b', 'images': ['a' * 64]}).status_code, 404)
+        # 非字符串元素不可哈希：必须结构化 400，不能 500（去重 set 之前先查类型）
+        for bad in ({'id': 'x'}, ['nested'], None, True, 123):
+            response = self.client.post(self.path, json={
+                'text': 'hi', 'requestId': 'v-bad', 'images': [bad]})
+            self.assertEqual(response.status_code, 400, repr(bad))
+            self.assertEqual(response.json['message'], '图片引用无效')
         ids = [self._upload_ok(payload=image_bytes(color=(i, 0, 0)))['id'] for i in range(4)]
         self.assertEqual(self.client.post(self.path, json={
             'text': 'hi', 'requestId': 'c', 'images': ids}).status_code, 400)

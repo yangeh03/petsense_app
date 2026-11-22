@@ -87,10 +87,13 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
     loadedFor === (user?.id ?? -1)
       ? turns.filter((turn) => topic === undefined || (turn.topicId ?? turn.id) === topic)
       : [];
-  // W07：有上传中的图不可发；纯图（无文字）可发；失败重试入口与草稿同源
+  // W07（spec §4.1）：有图未全完成（上传中或失败）不可发；纯图（无文字）可发；失败重试入口与草稿同源
   const uploading = attachments.some((item) => item.status === 'uploading');
+  const hasFailed = attachments.some((item) => item.status === 'failed');
   const readyImages = attachments.filter((item) => item.status === 'done' && item.imageId);
-  const canSend = Boolean(petId && !busy && !uploading && (draft.trim() || readyImages.length));
+  const canSend = Boolean(
+    petId && !busy && !uploading && !hasFailed && (draft.trim() || readyImages.length),
+  );
   const canAttach = Boolean(petId && !busy && attachments.length < 3);
 
   useFocusEffect(

@@ -117,6 +117,8 @@ export function AgentComposer({
   const theme = useTheme();
   const [showTargets, setShowTargets] = useState(false);
   const [showPickSource, setShowPickSource] = useState(false);
+  const uploading = attachments.some((item) => item.status === 'uploading');
+  const firstFailed = attachments.find((item) => item.status === 'failed');
   const targetLabel =
     target === 'pet' ? (petName ?? '爱宠') : target === 'assistant' ? '照料助手' : '大家';
   return (
@@ -132,6 +134,18 @@ export function AgentComposer({
             />
           ))}
         </View>
+      ) : null}
+      {/* 上传状态提示（spec §4.1/§5）：上传中说明为何不可发；失败透出服务端原因（含超配额清理提示） */}
+      {uploading ? (
+        <ThemedText type="small" themeColor="textSecondary" style={styles.uploadHint}>
+          图片上传中…
+        </ThemedText>
+      ) : firstFailed ? (
+        <ThemedText type="small" themeColor="danger" style={styles.uploadHint}>
+          {firstFailed.failReason
+            ? `${firstFailed.failReason}，可点图片重试或移除`
+            : '有图片未上传成功，可点图片重试或移除后再发送'}
+        </ThemedText>
       ) : null}
       {showTargets ? (
         <View style={styles.targets}>
@@ -260,6 +274,7 @@ const styles = StyleSheet.create({
   },
   targets: { flexDirection: 'row', gap: 8, paddingLeft: 6 },
   thumbs: { flexDirection: 'row', gap: 8, paddingLeft: 6 },
+  uploadHint: { paddingLeft: 6 },
   thumb: {
     width: 56,
     height: 56,

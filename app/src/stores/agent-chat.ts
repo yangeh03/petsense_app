@@ -29,6 +29,8 @@ export type AgentAttachment = {
   height: number;
   imageId: string | null;
   status: 'uploading' | 'done' | 'failed';
+  /** 上传失败原因（服务端结构化消息，如超配额提示清理）；仅 failed 态有意义 */
+  failReason?: string;
 };
 
 export type AgentChatState = {

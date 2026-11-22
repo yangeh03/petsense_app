@@ -49,9 +49,10 @@ export const sendAgentTurn = (
     body: { text, target, requestId, topicId, replyTo, ...(images?.length ? { images } : {}) },
   });
 
-/** W07：上传聊天图片（先传后发；返回内容寻址 id 与尺寸） */
+/** W07：上传聊天图片（先传后发；返回内容寻址 id 与尺寸）。method 必须显式 POST：Web 路径走 request()，缺省是 GET。 */
 export const uploadAgentImage = (pet: number, file: UploadImage) =>
   uploadRequest<AgentImageMeta>(`/agent/pets/${pet}/images`, {
+    method: 'POST',
     fields: {},
     files: [{ field: 'image', uri: file.uri, name: file.name, type: file.type }],
   });
