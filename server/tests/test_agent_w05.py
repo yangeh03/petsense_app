@@ -1,9 +1,12 @@
 """W05 单元测试：基线计算、水位重算、read_baseline、快照/observations 共用结果（agent-w05-spec.md）。"""
 import hashlib
+import importlib.util
 import json
 import secrets
+import sqlite3
 import unittest
 from datetime import datetime, timedelta
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from flask import Flask
@@ -12,6 +15,7 @@ from test_pets import seed_user_with_pet
 
 from petsense import db
 from petsense.agent import baseline, registry, snapshot
+from petsense.agent.learning import record_interval
 from petsense.agent.observations import query as observations_query
 from petsense.agent.routes import bp
 from petsense.common import shanghai_now
@@ -392,6 +396,85 @@ class ObservationsStateTests(BaselineTestBase):
         dim = next(d for d in payload['dimensions'] if d['feature'] == 'actions')
         self.assertEqual(dim['validDays'], 0)
         self.assertEqual(dim['state'], 'learning')
+
+
+class RebuildToolTests(BaselineTestBase):
+    """回填核验工具（spec §3.8）：重建逻辑、版本归属、跨日/跨时段切分与线上累计一致。"""
+
+    def _rebuild(self):
+        path = Path(__file__).resolve().parents[1] / 'tools' / 'agent_baseline_rebuild.py'
+        spec = importlib.util.spec_from_file_location('agent_baseline_rebuild', path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        connection = sqlite3.connect(db.engine().url.database)
+        try:
+            return module.rebuild(connection)
+        finally:
+            connection.close()
+
+    def _seed_online(self, day, hour, count, walk=30, versions=('v1',)):
+        """按线上真实路径造数据：分钟行先落库（无标注），record_interval 逐间隔记账并打标。"""
+        with db.session_scope() as s:
+            start = sh_local(day, hour)
+            for i in range(count):
+                moment = start + timedelta(minutes=i)
+                s.add(TelemetryMinute(owner_id=self.uid, device_id=self.device,
+                                      minute=moment.replace(second=0, microsecond=0), metrics='{}',
+                                      actions=json.dumps({'走动': walk}), observed_seconds=60,
+                                      sound_observed_seconds=0, source_versions='[]'))
+                for version in versions:
+                    record_interval(s, self.uid, self.device, 'actions', version, moment, 60)
+
+    def _stored(self):
+        with db.session_scope() as s:
+            return {(row.feature, row.version, row.day): (row.seconds, sorted(json.loads(row.slots)))
+                    for row in s.execute(select(AgentLearningDay)).scalars()}
+
+    def _key(self, version, day):
+        return (self.uid, self.device, 'actions', version, day)
+
+    def test_rebuild_matches_online_accumulation(self):
+        self._seed_online(sh_day(-2), 8, 180)          # 上午 3 小时
+        self._seed_online(sh_day(-2), 12, 180)         # 下午 3 小时：合计 21600s、两个时段 → 有效日
+        rebuilt, untagged = self._rebuild()
+        stored = self._stored()
+        self.assertEqual(untagged, 0)
+        self.assertEqual(len(rebuilt), 1)
+        key = self._key('v1', sh_day(-2))
+        self.assertIn(key, rebuilt)
+        self.assertEqual(rebuilt[key]['seconds'], 21600)
+        self.assertEqual(sorted(rebuilt[key]['slots']), [1, 2])
+        self.assertEqual(stored[('actions', 'v1', sh_day(-2))], (21600.0, [1, 2]))  # 与线上累计逐日一致
+
+    def test_version_attribution_and_untagged(self):
+        self._seed_online(sh_day(-1), 8, 30, versions=('v1',))
+        self._seed_online(sh_day(-1), 14, 30, versions=('v2',))
+        with db.session_scope() as s:  # 无标注历史分钟：单列计数、不归集任何版本
+            start = sh_local(sh_day(-1), 20)
+            for i in range(5):
+                s.add(TelemetryMinute(owner_id=self.uid, device_id=self.device,
+                                      minute=start + timedelta(minutes=i), metrics='{}',
+                                      actions='{}', observed_seconds=60, sound_observed_seconds=0,
+                                      source_versions='[]'))
+        rebuilt, untagged = self._rebuild()
+        self.assertEqual(untagged, 5)
+        self.assertEqual(rebuilt[self._key('v1', sh_day(-1))]['seconds'], 1800)
+        self.assertEqual(rebuilt[self._key('v2', sh_day(-1))]['seconds'], 1800)
+        stored = self._stored()
+        self.assertEqual(stored[('actions', 'v1', sh_day(-1))][0], 1800.0)
+        self.assertEqual(stored[('actions', 'v2', sh_day(-1))][0], 1800.0)
+
+    def test_cross_day_and_slot_split(self):
+        self._seed_online(sh_day(-1), 23, 70)  # 23:00–00:10：跨上海日界与时段边界
+        rebuilt, _ = self._rebuild()
+        self.assertEqual(sorted(rebuilt), [self._key('v1', sh_day(-1)), self._key('v1', sh_day(0))])
+        self.assertEqual(rebuilt[self._key('v1', sh_day(-1))]['seconds'], 3600)
+        self.assertEqual(sorted(rebuilt[self._key('v1', sh_day(-1))]['slots']), [3])
+        self.assertEqual(rebuilt[self._key('v1', sh_day(0))]['seconds'], 600)
+        self.assertEqual(sorted(rebuilt[self._key('v1', sh_day(0))]['slots']), [0])
+        stored = self._stored()
+        self.assertEqual(stored[('actions', 'v1', sh_day(-1))], (3600.0, [3]))
+        self.assertEqual(stored[('actions', 'v1', sh_day(0))], (600.0, [0]))
 
 
 if __name__ == '__main__':
