@@ -110,7 +110,7 @@ flowchart TD
 - **工具注册表与权限矩阵**：工具声明（名称/描述/schema/权限级别/适用运行形态）与执行分离注册；权限校验先于执行；越权调用返回结构化拒绝并入轨迹。`query_observations` 注册为首个工具。
 - **运行轨迹**：`AgentRun` 表 + 完整轨迹（消息序列、工具调用与结果摘要、判断结论与理由、预算消耗）；最小回放调试手段（脚本级即可）。
 - **WS 直连读取通道**：面向 App 的 WebSocket 通道（按用户+宠物推送回合与流式增量，鉴权沿用 agent API 凭据），复用 `realtime.py` 的 flask-sock 基建与连接管理模式，替代轮询读取；断线以服务端已保存结果为准，保留轮询降级路径；写入沿用 turns POST + 稳定请求键。
-- **客户端栈迁移**（V11 §18）：伙伴页会话容器迁移到 `@kesha-antonov/react-native-chat`（双人格气泡与卡片走 render 覆盖点），状态抽入 zustand store，键盘换 `react-native-keyboard-controller`，草稿/主题/滚动位置 AsyncStorage 持久化；既有交互行为不劣化。
+- **客户端栈迁移**（V11 §18）：**先行 spike**——在 Expo Go（SDK 58/RN 0.88）跑通 expo-ai-elements 基础对话流（流式 markdown + renderItem 三人格），作为 go/no-go 门槛，不通过回退自建方案。通过后：组件 vendor 进 `components/agent/ai-kit/`（Uniwind/Reusables 前置引入，token 从 theme.ts 派生、图标替换 expo-symbols），消息列表与输入区容器自建，状态抽入 zustand store，键盘换 `react-native-keyboard-controller`，草稿/主题/滚动位置 AsyncStorage 持久化；既有交互行为不劣化。
 - **双人格内嵌**：发言人格由模型在循环中选择（【爱宠】/【照料助手】标注沿用现结构）；一轮最多两位、不互答等约束进入人格指令与输出结构。
 - 既有对话场景回归：数据问答、明确指向、范围拒绝（拒答改由模型生成）、失败保留原话、同键去重；沉淀首批行为评测场景。
 
