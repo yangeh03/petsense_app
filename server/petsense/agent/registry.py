@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from petsense.agent import baseline as baseline_service
+from petsense.agent import memory as pet_memory
 from petsense.agent.observations import query as observations_query
 from petsense.common import shanghai_now
 from petsense.db import iso_z, session_scope, utc_now
@@ -23,6 +24,7 @@ from sqlalchemy import func, select
 
 DIALOGUE = 'dialogue'
 FACT_READ = 'fact_read'
+MEMORY = 'memory'
 TOOL_TIMEOUT_S = 15.0
 
 _TOOLS = {}
@@ -242,6 +244,108 @@ register(ToolSpec(
                     'description': '回看窗口（分钟），默认30'}},
         'additionalProperties': False},
     group=FACT_READ, forms=(DIALOGUE,), execute=_execute_current_status))
+
+
+def _pet_of(session, context):
+    pet = session.get(Pet, context['pet_id'])
+    if pet is None or pet.user_id != context['user_id']:
+        raise ValueError('宠物归属已变化')
+    return pet
+
+
+def _execute_write_memory(args, context):
+    with session_scope() as s:
+        pet = _pet_of(s, context)
+        entry, error = pet_memory.save_model_write(s, pet.id, args, context)
+        if error:
+            return {'saved': False, 'error': error}
+        return {'saved': True, 'memoryId': entry.id, 'kind': entry.kind,
+                'subject': entry.subject, 'version': entry.version,
+                'summary': entry.summary, 'certainty': entry.certainty,
+                'note': '写入成功后可向主人轻量回显（如「这个我记下了」）'}
+
+
+register(ToolSpec(
+    name='write_memory',
+    description='把值得跨天记住的内容写入长期记忆（自主写）。允许：主人讲述的真实经历或事件'
+                '（episode=宠物的经历 / owner_event=主人自己的事）、反复出现的规律'
+                '（habit_candidate，不确定时标 tentative=true）、本轮明确的照顾安排类要点'
+                '（session_takeaway，默认不记）。禁止：假设（假如/如果）、否定句式的转述、'
+                '其他主体（朋友家的宠物）、长期偏好（喜欢/不喜欢某物，属确认写、尚未接入）、'
+                '爱宠人格的拟人表达。发生时间未知就不传时间参数，不要用当前时间冒充。'
+                '纠正旧记忆时传 supersedesId=旧记忆id。写入成功才可对主人回显「记下了」。',
+    parameters={'type': 'object', 'properties': {
+        'kind': {'type': 'string', 'enum': ['episode', 'owner_event', 'habit_candidate', 'session_takeaway']},
+        'summary': {'type': 'string', 'description': '一句话人类可读表达（≤300字），是检索与认识卡蒸馏的原料'},
+        'subject': {'type': 'string', 'enum': ['pet', 'owner'], 'description': '这段经历属于谁，默认 pet'},
+        'startAt': {'type': 'string', 'description': '发生开始时间（ISO，带时区），未知不传'},
+        'endAt': {'type': 'string', 'description': '发生结束时间（ISO，带时区），可选'},
+        'facts': {'type': 'object', 'description': '可选结构化字段（地点/对象/事件名等）'},
+        'tentative': {'type': 'boolean', 'description': '是否为不确定的规律候选，仅 habit_candidate 可为 true'},
+        'supersedesId': {'type': 'integer', 'description': '纠正旧记忆时被替换条目的 id'}},
+        'required': ['kind', 'summary'], 'additionalProperties': False},
+    group=MEMORY, forms=(DIALOGUE,), execute=_execute_write_memory))
+
+
+def _execute_search_memories(args, context):
+    kinds = args.get('kinds')
+    if kinds is not None and (not isinstance(kinds, list)
+                              or not all(isinstance(k, str) for k in kinds)):
+        return {'error': 'kinds 应为字符串数组', 'memories': []}
+    from_dt = pet_memory.parse_time(args.get('from'))
+    to_dt = pet_memory.parse_time(args.get('to'))
+    if args.get('from') and from_dt is None:
+        return {'error': 'from 不是合法的 ISO 时间', 'memories': []}
+    if args.get('to') and to_dt is None:
+        return {'error': 'to 不是合法的 ISO 时间', 'memories': []}
+    raw_limit = args.get('limit')
+    limit = raw_limit if isinstance(raw_limit, int) and not isinstance(raw_limit, bool) else 10
+    with session_scope() as s:
+        pet = _pet_of(s, context)
+        return pet_memory.search(s, pet.id, kinds=kinds, from_dt=from_dt, to_dt=to_dt,
+                                 keyword=args.get('keyword'), limit=limit)
+
+
+register(ToolSpec(
+    name='search_memories',
+    description='检索本宠的长期记忆（主人讲述过的经历、规律候选、会话要点、日/周汇总）。'
+                '支持按类型（kinds）与发生时间窗口（from/to，含起点、不含终点）过滤，'
+                'keyword 按原文子串匹配 summary（用主人原话里的关键词，如「公园」「叫声」，'
+                '3 个字以上效果最好）。主人问「上次/之前说过的事」必须先用本工具查证，'
+                '检索不到就如实说没有记录，不得编造记忆。',
+    parameters={'type': 'object', 'properties': {
+        'kinds': {'type': 'array', 'items': {'type': 'string',
+                  'enum': list(pet_memory.KINDS)}, 'description': '类型过滤，可选'},
+        'from': {'type': 'string', 'description': '发生时间下界（ISO，带时区）'},
+        'to': {'type': 'string', 'description': '发生时间上界（ISO，带时区）'},
+        'keyword': {'type': 'string', 'description': '关键词（主人原话的关键词）'},
+        'limit': {'type': 'integer', 'minimum': 1, 'maximum': 30, 'description': '默认10'}},
+        'additionalProperties': False},
+    group=MEMORY, forms=(DIALOGUE,), execute=_execute_search_memories))
+
+
+def _execute_forget_memory(args, context):
+    memory_id = args.get('memoryId')
+    if not isinstance(memory_id, int) or isinstance(memory_id, bool):
+        return {'forgotten': False, 'error': '请提供要忘掉的记忆 id（memoryId，整数）'}
+    with session_scope() as s:
+        pet = _pet_of(s, context)
+        row, error = pet_memory.forget(s, pet.id, memory_id)
+        if error:
+            return {'forgotten': False, 'error': error}
+        return {'forgotten': True, 'memoryId': row.id, 'status': row.status,
+                'note': '条目保留可审计；后续不得再引用这条记忆回答主人'}
+
+
+register(ToolSpec(
+    name='forget_memory',
+    description='忘掉一条长期记忆（仅在主人明确要求「忘掉/删掉刚才记的/别记这个」时使用）。'
+                'memoryId 来自 search_memories 的结果或本回合刚写入的返回。忘掉后如实确认，'
+                '之后不再引用该条记忆。',
+    parameters={'type': 'object', 'properties': {
+        'memoryId': {'type': 'integer', 'description': '要忘掉的记忆条目 id'}},
+        'required': ['memoryId'], 'additionalProperties': False},
+    group=MEMORY, forms=(DIALOGUE,), execute=_execute_forget_memory))
 
 
 def execute_tool(name, arguments, form, stance_scope, context):

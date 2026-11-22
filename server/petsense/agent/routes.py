@@ -124,7 +124,8 @@ def turns(pet_id):
         now = utc_now()
         snap = snapshot.assemble(s, pet, now)
     context = {'pet_id': pet_id, 'user_id': user['id'], 'text': text.strip(),
-               'target': target, 'history': history, 'snapshot': snap, 'now_iso': iso_z(now)}
+               'target': target, 'history': history, 'snapshot': snap, 'now_iso': iso_z(now),
+               'turn_id': turn_id}  # turn_id 供 write_memory 落来源引用（W04 spec §3.11）
     speaker = ['assistant']
     last_write = [0.0]
 
