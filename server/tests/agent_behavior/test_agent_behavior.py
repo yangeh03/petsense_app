@@ -252,8 +252,9 @@ class BehaviorScenarioTests(unittest.TestCase):
         self.assertTrue(any(k in turn['reply'] for k in
                             ('还没绑定', '未绑定', '没有绑定', '还没', '暂无', '没有数据', '暂时无法', '离线')),
                         f'未绑定设备应如实说明：{turn["reply"]}')
-        self.assertNotIn('走动', turn['reply'])
-        self.assertNotIn('躺着', turn['reply'])
+        # 不得「宣称」当前姿态（枚举「无法判断走动还是躺卧」这类如实表达不算）
+        for claim in ('正在走动', '正在散步', '正在睡觉', '正在躺着', '正在趴着', '在跑步'):
+            self.assertNotIn(claim, turn['reply'], f'未绑定设备不得编造姿态：{claim}')
 
     def test_E15_recent_sounds_deep_query(self):
         # W02：最近一小时声音——调 read_current_status 深查，窗口按分钟回看。
