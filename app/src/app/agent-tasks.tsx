@@ -6,16 +6,36 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
-import { SymbolView } from 'expo-symbols';
+import { SymbolView, type AndroidSymbol, type SFSymbol } from 'expo-symbols';
 import { router } from 'expo-router';
 
 import { ThemedText } from '@/components/themed-text';
-import { MaxContentWidth } from '@/constants/theme';
+import { MaxContentWidth, Shadows } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
 import { fetchDashboard } from '@/services/api';
 import { agentTaskOp, fetchAgentTasks, type AgentTask } from '@/services/agent';
 import { useAgentChatStore } from '@/stores/agent-chat';
+
+type MultiPlatformIcon = { ios: SFSymbol; android: AndroidSymbol; web: AndroidSymbol };
+
+const KIND_ICONS: Record<AgentTask['kind'], MultiPlatformIcon> = {
+  fact_watch: { ios: 'eye', android: 'visibility', web: 'visibility' },
+  comparison: { ios: 'chart.bar', android: 'bar_chart', web: 'bar_chart' },
+  scheduled_review: { ios: 'clock', android: 'schedule', web: 'schedule' },
+};
+
+const CLOCK_ICON: MultiPlatformIcon = {
+  ios: 'clock.arrow.circlepath',
+  android: 'schedule',
+  web: 'schedule',
+};
+
+const CHEVRON_ICON: MultiPlatformIcon = {
+  ios: 'chevron.right',
+  android: 'chevron_right',
+  web: 'chevron_right',
+};
 
 function formatWhen(iso: string): string {
   return new Intl.DateTimeFormat('zh-CN', {
@@ -40,10 +60,15 @@ function conditionText(task: AgentTask): string | null {
   return `${scope}${task.featureLabel ?? ''} ${direction} ${value} ${unit} 时提醒`;
 }
 
-function statusColor(task: AgentTask, theme: ReturnType<typeof useTheme>): string {
-  if (task.status === 'observing') return theme.online;
-  if (task.status === 'completed') return theme.tint;
-  return theme.textSecondary;
+/** 状态胶囊配色：进行中绿、已交付珊瑚橙、等待基线琥珀、暂停/取消中性 */
+function statusPill(
+  status: AgentTask['status'],
+  theme: ReturnType<typeof useTheme>,
+): { fg: string; bg: string } {
+  if (status === 'observing') return { fg: theme.online, bg: theme.onlineBackground };
+  if (status === 'completed') return { fg: theme.tint, bg: theme.tintBackground };
+  if (status === 'waiting_baseline') return { fg: theme.warning, bg: theme.warningBackground };
+  return { fg: theme.textSecondary, bg: theme.backgroundSelected };
 }
 
 function TaskRow({
@@ -58,6 +83,8 @@ function TaskRow({
   const theme = useTheme();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // 截止判断只在首渲染取一次当前时间，避免 render 里反复调用不纯函数
+  const [now] = useState(() => Date.now());
 
   const run = async (op: 'pause' | 'resume' | 'cancel') => {
     if (busy) return;
@@ -74,6 +101,10 @@ function TaskRow({
     }
   };
 
+  const pill = statusPill(task.status, theme);
+  const overdue = task.status === 'observing' && now > new Date(task.deadlineAt).getTime();
+  const deadlineColor = overdue ? theme.warning : theme.textSecondary;
+
   return (
     <View
       style={[
@@ -82,26 +113,37 @@ function TaskRow({
       ]}
     >
       <View style={styles.taskHead}>
-        <View style={styles.taskTitleRow}>
-          <ThemedText type="smallBold" style={styles.taskTitle}>
-            {task.title}
-          </ThemedText>
-          <ThemedText type="small" style={{ color: statusColor(task, theme) }}>
+        <SymbolView name={KIND_ICONS[task.kind] ?? CLOCK_ICON} tintColor={theme.tint} size={16} />
+        <ThemedText type="default" style={styles.taskTitle}>
+          {task.title}
+        </ThemedText>
+        <View style={[styles.statusPill, { backgroundColor: pill.bg }]}>
+          <ThemedText type="small" style={{ color: pill.fg }}>
             {task.statusLabel}
           </ThemedText>
         </View>
+      </View>
+      <View style={styles.metaRow}>
         <ThemedText type="small" themeColor="textSecondary">
           {task.kindLabel}
-          {task.featureLabel ? ` · ${task.featureLabel}` : ''} · 截止 {formatWhen(task.deadlineAt)}
+          {task.featureLabel ? ` · ${task.featureLabel}` : ''}
         </ThemedText>
+        <View style={styles.deadline}>
+          <SymbolView name={CLOCK_ICON} tintColor={deadlineColor} size={11} />
+          <ThemedText type="small" style={{ color: deadlineColor }}>
+            {overdue ? '已过截止 ' : '截止 '}
+            {formatWhen(task.deadlineAt)}
+          </ThemedText>
+        </View>
       </View>
-      <ThemedText type="small">{task.question}</ThemedText>
+      <ThemedText type="default">{task.question}</ThemedText>
       {conditionText(task) ? (
         <ThemedText type="small" themeColor="textSecondary">
           {conditionText(task)}
         </ThemedText>
       ) : null}
-      <View style={styles.metaRow}>
+      <View style={[styles.divider, { backgroundColor: theme.backgroundSelected }]} />
+      <View style={styles.footerRow}>
         <ThemedText type="small" themeColor="textSecondary">
           提醒 {task.reminders} · 回信 {task.letters}
           {task.currentVersion > 1 ? ` · 第 ${task.currentVersion} 版` : ''}
@@ -118,6 +160,7 @@ function TaskRow({
             <ThemedText type="small" style={{ color: theme.tint }}>
               回到原会话
             </ThemedText>
+            <SymbolView name={CHEVRON_ICON} tintColor={theme.tint} size={11} />
           </Pressable>
         ) : null}
       </View>
@@ -128,7 +171,11 @@ function TaskRow({
               accessibilityRole="button"
               disabled={busy}
               onPress={() => void run('resume')}
-              style={[styles.op, { borderColor: theme.tint }]}
+              style={[
+                styles.op,
+                styles.opPrimary,
+                { borderColor: theme.tint, backgroundColor: theme.tintBackground },
+              ]}
             >
               <ThemedText type="smallBold" style={{ color: theme.tint }}>
                 恢复观察
@@ -218,6 +265,7 @@ export default function AgentTasksScreen() {
     <ScrollView
       style={{ backgroundColor: theme.background }}
       contentContainerStyle={[styles.container, !tasks?.length && styles.center]}
+      contentInsetAdjustmentBehavior="automatic"
     >
       {error ? (
         <Pressable accessibilityRole="button" onPress={() => void reload()} style={styles.error}>
@@ -263,12 +311,25 @@ const styles = StyleSheet.create({
   center: { justifyContent: 'center' },
   error: { alignSelf: 'center', paddingVertical: 4 },
   empty: { alignItems: 'center', gap: 10, paddingBottom: 24 },
-  task: { borderWidth: 1, borderRadius: 14, padding: 12, gap: 8 },
-  taskHead: { gap: 2 },
-  taskTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  taskTitle: { flex: 1 },
-  metaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  topicLink: { paddingVertical: 2 },
+  task: {
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 14,
+    gap: 10,
+    boxShadow: Shadows.card,
+  },
+  taskHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  taskTitle: { flex: 1, fontWeight: '600' },
+  statusPill: {
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  deadline: { flexDirection: 'row', alignItems: 'center', gap: 3, marginLeft: 'auto' },
+  divider: { height: StyleSheet.hairlineWidth },
+  footerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  topicLink: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingVertical: 2 },
   ops: { flexDirection: 'row', gap: 8 },
   op: {
     borderWidth: 1,
@@ -278,4 +339,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  opPrimary: { paddingHorizontal: 16 },
 });
