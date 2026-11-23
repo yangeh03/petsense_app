@@ -12,7 +12,20 @@ export type MarkdownBlock =
   | { kind: 'quote'; spans: MarkdownSpan[] }
   | { kind: 'listItem'; marker: string; spans: MarkdownSpan[] };
 
-const INLINE = /(\*\*[^*\n]+\*\*|`[^`\n]+`)/g;
+const INLINE = /(\*\*(?:`[^`\n]+`|`(?![^`\n]+`)|[^*`\n])+\*\*|`[^`\n]+`)/g;
+const CODE = /`[^`\n]+`/g;
+
+function parseBold(text: string): MarkdownSpan[] {
+  const spans: MarkdownSpan[] = [];
+  let offset = 0;
+  for (const match of text.matchAll(CODE)) {
+    if (match.index > offset) spans.push({ text: text.slice(offset, match.index), bold: true });
+    spans.push({ text: match[0].slice(1, -1), bold: true, code: true });
+    offset = match.index + match[0].length;
+  }
+  if (offset < text.length) spans.push({ text: text.slice(offset), bold: true });
+  return spans;
+}
 
 /** 行内解析：成对的 ** 加粗与 `代码` 之外的字符原样保留 */
 export function parseInline(line: string): MarkdownSpan[] {
@@ -22,7 +35,7 @@ export function parseInline(line: string): MarkdownSpan[] {
     const token = match[0];
     const index = match.index ?? 0;
     if (index > lastIndex) spans.push({ text: line.slice(lastIndex, index) });
-    if (token.startsWith('**')) spans.push({ text: token.slice(2, -2), bold: true });
+    if (token.startsWith('**')) spans.push(...parseBold(token.slice(2, -2)));
     else spans.push({ text: token.slice(1, -1), code: true });
     lastIndex = index + token.length;
   }
@@ -41,6 +54,7 @@ export function parseAgentMarkdown(text: string): MarkdownBlock[] {
   const lines = text.split('\n');
   const blocks: MarkdownBlock[] = [];
   let paragraph: string[] = [];
+  let quote: string[] = [];
 
   const flushParagraph = () => {
     if (paragraph.length) {
@@ -49,19 +63,24 @@ export function parseAgentMarkdown(text: string): MarkdownBlock[] {
     }
   };
 
+  const flushQuote = () => {
+    if (quote.length) {
+      blocks.push({ kind: 'quote', spans: parseInline(quote.join('\n')) });
+      quote = [];
+    }
+  };
+
   for (const raw of lines) {
     const quoteMatch = raw.match(/^>\s?/);
     const listMatch = raw.match(LIST_MARKER);
     if (quoteMatch) {
       flushParagraph();
-      const line = raw.slice(quoteMatch[0].length);
-      const last = blocks[blocks.length - 1];
-      if (last?.kind === 'quote') {
-        // 连续引用行合并为一个块，行间换行由渲染层保留
-        last.spans = parseInline(last.spans.map((s) => s.text).join('\n') + '\n' + line);
-      } else {
-        blocks.push({ kind: 'quote', spans: parseInline(line) });
-      }
+      quote.push(raw.slice(quoteMatch[0].length));
+      continue;
+    }
+    flushQuote();
+    if (!raw.trim()) {
+      flushParagraph();
     } else if (listMatch) {
       flushParagraph();
       blocks.push({
@@ -74,5 +93,6 @@ export function parseAgentMarkdown(text: string): MarkdownBlock[] {
     }
   }
   flushParagraph();
+  flushQuote();
   return blocks;
 }

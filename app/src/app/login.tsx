@@ -38,6 +38,8 @@ export default function LoginScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const close = () => (router.canGoBack() ? router.back() : router.replace('/profile'));
+
   const submit = async () => {
     if (busy) return;
     setBusy(true);
@@ -53,7 +55,7 @@ export default function LoginScreen() {
           avatarEmoji,
         });
       }
-      router.back();
+      close();
     } catch (exc) {
       // 网络层失败（请求未到达服务器）与业务错误（账号/密码）分开提示
       const message = exc instanceof Error ? exc.message : '';
@@ -76,7 +78,7 @@ export default function LoginScreen() {
     >
       {/* 头部：关闭 + 标题 */}
       <View style={[styles.header, { paddingTop: insets.top + Spacing.two }]}>
-        <Pressable onPress={() => router.back()} hitSlop={10} accessibilityLabel="关闭">
+        <Pressable onPress={close} hitSlop={10} accessibilityLabel="关闭">
           <SymbolView
             name={{ ios: 'xmark.circle.fill', android: 'cancel', web: 'cancel' }}
             size={26}

@@ -73,6 +73,7 @@ Read the exact versioned docs at https://docs.expo.dev/versions/v58.0.0/ before 
 
 ## Agent 开发入口
 
+- W01–W10 的双主题视觉补验、缺陷修复与截图索引见 `docs/agent-visual-acceptance-handoff-20261123.md` §6。发送中和委托空态使用隔离数据副本，生产功能验收分别见各工作包 spec。
 - 产品设计 V11（2026-11-22 起，以 Agent 为设计对象：单一 Agent 统一运行循环、无前置路由、常驻实时快照、工具注册表 + 权限矩阵、记忆分级写入；前端架构与组件选型见其第 18 章：WS 直连 + zustand + 自建渲染层与容器（expo-ai-elements spike no-go，见 W01）+ keyboard-controller）见 `docs/agent-product-integration-design.md`；实施按 W 系列工作包（W00–W15）见 `docs/agent-implementation-work-packages.md`，路线与分工见 `docs/agent-implementation-roadmap.md`，跨端契约见 `docs/agent-p00-contract.md`。阶段 1 实施记录见 `docs/agent-phase-one.md`（历史记录，其 decide 路由架构已被 V11 替代，由 W01 删除）。
 - 新 Agent 服务端域在 `server/petsense/agent/`，App 使用独立业务服务，不混入遥测解析。模型凭据仅由服务端环境或外部文件读取，不纳入 Git。
 - 工作包开发流程（2026-11-22 确立，W 系列一律按此执行）：① 先写 spec 文档（`docs/agent-w<NN>-spec.md`），关键决策点与负责人讨论确认后定稿；② 按定稿 spec 实现代码；③ 验收统一用 iOS 模拟器接生产环境，登录测试账号 `petsense`（密码 `123456`，负责人确认随仓库记录）。spec 定稿前不动代码，验收结论回写 spec。涉及新页面或明显改版既有页面的包，spec 的验收清单必须同时列功能项与视觉走查项（截图判定布局/层级/与既有设计语言一致性，见「模拟器 UI 端到端验证」节），只列功能操作的验收清单不完整。

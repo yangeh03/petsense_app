@@ -19,6 +19,21 @@ test('bold does not pair across lines', () => {
   assert.equal(spans[0].text, '**a\nb**');
 });
 
+test('code inside bold drops both delimiters and keeps both styles', () => {
+  assert.deepEqual(parseInline('原因是 **`fetch failed`**'), [
+    { text: '原因是 ' },
+    { text: 'fetch failed', bold: true, code: true },
+  ]);
+});
+
+test('blank lines separate blocks without adding empty rendered lines', () => {
+  assert.deepEqual(parseAgentMarkdown('\n甲\n\n- 乙\n\n丙\n'), [
+    { kind: 'paragraph', spans: [{ text: '甲' }] },
+    { kind: 'listItem', marker: '-', spans: [{ text: '乙' }] },
+    { kind: 'paragraph', spans: [{ text: '丙' }] },
+  ]);
+});
+
 test('quotes merge consecutive lines into one block, marker stripped', () => {
   const blocks = parseAgentMarkdown('> 第一行\n> 第二行\n正文');
   assert.equal(blocks.length, 2);
@@ -26,6 +41,16 @@ test('quotes merge consecutive lines into one block, marker stripped', () => {
   assert.equal(blocks[0].spans.map((s) => s.text).join(''), '第一行\n第二行');
   assert.equal(blocks[1].kind, 'paragraph');
   assert.equal(blocks[1].spans[0].text, '正文');
+});
+
+test('merging quote lines preserves inline styles and blank lines separate quotes', () => {
+  assert.deepEqual(parseAgentMarkdown('> **甲**\n> `乙`\n\n> 丙'), [
+    {
+      kind: 'quote',
+      spans: [{ text: '甲', bold: true }, { text: '\n' }, { text: '乙', code: true }],
+    },
+    { kind: 'quote', spans: [{ text: '丙' }] },
+  ]);
 });
 
 test('list items keep their original markers', () => {
