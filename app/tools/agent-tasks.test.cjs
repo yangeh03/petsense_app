@@ -62,3 +62,50 @@ test('background task deliveries render as cards with old-client degradation', (
 function complement(source) {
   return source; // 别名保持断言可读
 }
+
+test('sound event thresholds keep their exact count when the card is edited', () => {
+  const { load } = require('./helpers/load-ts.cjs');
+  const { thresholdDisplayValue, thresholdToValue, conditionSummary } = load(
+    'components/agent/task-threshold.ts',
+  );
+
+  // 声音事件次数不得被当成秒再除以 60（3 次会变成 0）
+  const sound = { metric: 'soundEventCount', op: 'at_least', value: 3, scope: 'daily' };
+  assert.equal(thresholdDisplayValue(sound), '3');
+  assert.equal(thresholdToValue(sound, '3'), 3);
+  assert.equal(thresholdToValue(sound, '5'), 5);
+
+  // 走动阈值用分钟显示且往返可逆
+  const walk = { metric: 'walkSeconds', op: 'at_least', value: 7200, scope: 'window' };
+  assert.equal(thresholdDisplayValue(walk), '120');
+  assert.equal(thresholdToValue(walk, '120'), 7200);
+  assert.equal(thresholdToValue(walk, '90'), 5400);
+  assert.equal(thresholdToValue(walk, '1.5'), 90);
+
+  // 非法输入（空、非数、负数、非整数次数）一律拒绝，不静默改成 0 或原值
+  assert.equal(thresholdToValue(sound, ''), null);
+  assert.equal(thresholdToValue(sound, '  '), null);
+  assert.equal(thresholdToValue(sound, 'abc'), null);
+  assert.equal(thresholdToValue(sound, '-1'), null);
+  assert.equal(thresholdToValue(sound, '1.5'), null);
+  assert.equal(thresholdToValue(walk, 'abc'), null);
+
+  assert.equal(conditionSummary(sound), '单日 达到或超过 3 次');
+  assert.equal(conditionSummary(walk), '累计 达到或超过 120 分钟');
+});
+
+test('the task card only sends a threshold the owner actually edited', () => {
+  const card = read('components/agent/task-proposal-card.tsx');
+
+  // 阈值来自统一换算模块，编辑标记决定是否覆盖数值
+  assert.match(card, /thresholdDisplayValue/);
+  assert.match(card, /thresholdToValue/);
+  assert.match(card, /thresholdDirty/);
+  assert.match(card, /setThresholdDirty\(true\)/);
+  // 非法输入中止提交，不静默改值
+  assert.match(card, /阈值需填非负数字/);
+  assert.match(card, /if \(value === null\)/);
+  // 不再有一刀切除以 60 的旧写法
+  assert.doesNotMatch(card, /Math\.round\(plan\.condition\.value \/ 60\)/);
+  assert.doesNotMatch(card, /\* unitSeconds/);
+});

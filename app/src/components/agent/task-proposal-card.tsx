@@ -10,6 +10,12 @@ import { ActivityIndicator, Pressable, StyleSheet, TextInput, View } from 'react
 import { SymbolView } from 'expo-symbols';
 
 import { ThemedText } from '@/components/themed-text';
+import {
+  conditionSummary,
+  thresholdDisplayValue,
+  thresholdToValue,
+  thresholdUnitLabel,
+} from '@/components/agent/task-threshold';
 import { useTheme } from '@/hooks/use-theme';
 import { ApiError } from '@/services/api';
 import {
@@ -80,15 +86,8 @@ function deadlinePresets(): { label: string; value: string }[] {
 
 function conditionText(plan: AgentTaskPlan): string | null {
   if (!plan.condition) return null;
-  const unit = plan.condition.metric === 'walkSeconds' ? '分钟' : '次';
-  const value =
-    plan.condition.metric === 'walkSeconds'
-      ? Math.round(plan.condition.value / 60)
-      : plan.condition.value;
-  const direction = plan.condition.op === 'at_least' ? '达到或超过' : '不多于';
-  const scope = plan.condition.scope === 'daily' ? '单日' : '累计';
   const feature = plan.feature ? FEATURE_LABELS[plan.feature] : '';
-  return `${scope}${feature} ${direction} ${value} ${unit}`;
+  return `${feature} ${conditionSummary(plan.condition)}`;
 }
 
 function planRows(plan: AgentTaskPlan): { label: string; value: string }[] {
@@ -132,9 +131,11 @@ export function TaskProposalCard({
   const fields = proposal.fields as unknown as AgentTaskChangeFields;
   const plan = fields.plan ?? null;
   const presets = useMemo(() => deadlinePresets(), []);
+  // 阈值按自然单位显示（走动=分钟，声音=次数）且保精度；未编辑就原样保留（task-threshold.ts）
   const [threshold, setThreshold] = useState(
-    plan?.condition ? String(Math.round(plan.condition.value / 60)) : '',
+    plan?.condition ? thresholdDisplayValue(plan.condition) : '',
   );
+  const [thresholdDirty, setThresholdDirty] = useState(false);
   const [op, setOp] = useState<'at_least' | 'at_most'>(plan?.condition?.op ?? 'at_least');
   const [scope, setScope] = useState<'window' | 'daily'>(plan?.condition?.scope ?? 'window');
   const [strategy, setStrategy] = useState<'fact_first' | 'wait_baseline'>(
@@ -170,15 +171,18 @@ export function TaskProposalCard({
     const patch: Record<string, unknown> = {};
     if (deadline) patch.deadlineAt = deadline;
     if (plan.condition) {
-      const unitSeconds = plan.condition.metric === 'walkSeconds' ? 60 : 1;
-      const parsed = Number(threshold);
-      patch.condition = {
-        ...plan.condition,
-        op,
-        scope,
-        value:
-          (Number.isFinite(parsed) && parsed >= 0 ? parsed : plan.condition.value) * unitSeconds,
-      };
+      const next: Record<string, unknown> = { ...plan.condition, op, scope };
+      if (thresholdDirty) {
+        // 只在用户真的改过阈值时才覆盖数值；非法输入中止提交，不静默改值
+        const value = thresholdToValue(plan.condition, threshold);
+        if (value === null) {
+          setError('阈值需填非负数字');
+          setBusy(false);
+          return;
+        }
+        next.value = value;
+      }
+      patch.condition = next;
     }
     if (plan.baselineStrategy) patch.baselineStrategy = strategy;
     try {
@@ -303,13 +307,21 @@ export function TaskProposalCard({
               <TextInput
                 accessibilityLabel="提醒阈值"
                 value={threshold}
-                onChangeText={setThreshold}
+                onChangeText={(text) => {
+                  setThreshold(text);
+                  setThresholdDirty(true);
+                }}
                 keyboardType="number-pad"
                 style={[
                   styles.thresholdInput,
                   { borderColor: theme.backgroundSelected, color: theme.text },
                 ]}
               />
+              <ThemedText type="small" themeColor="textSecondary">
+                单位：{thresholdUnitLabel(plan.condition.metric)}
+                {plan.condition.metric === 'walkSeconds' ? '（走动）' : '（声音事件）'}
+                ，留空不改
+              </ThemedText>
             </>
           ) : null}
           {plan.baselineStrategy ? (
