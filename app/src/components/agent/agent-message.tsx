@@ -474,6 +474,14 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry, o
       actions.length +
       taskResults.length +
       careBlocks.length;
+  // 来源去重只算一次：可展示卡（web/带日期）与未知来源回退分别派生（UI 一致性调整）。
+  const uniqueSources = [...new Map((turn.sources ?? []).map((s) => [sourceKey(s), s]))];
+  const cardSources = uniqueSources.filter(
+    ([, source]) => source.type === 'web' || isDatedSource(source),
+  );
+  const unknownSources = uniqueSources.filter(
+    ([, source]) => source.type !== 'web' && !isDatedSource(source),
+  );
 
   const openMember = (speaker: 'pet' | 'assistant') =>
     router.push(speaker === 'pet' ? '/pet' : '/assistant-settings');
@@ -563,20 +571,25 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry, o
         {actions.map((block) => (
           <ActionCard key={block.action.id} action={block.action} petId={petId} />
         ))}
+        {cardSources.length ? (
+          // 来源卡与其他结构化卡同层：与提案/任务/关怀/动作卡共用对齐的内容列，
+          // 不再走缩进的脚注区，保证同一回合内卡片左右边缘一致（UI 一致性调整）。
+          <View style={styles.sourceColumn}>
+            {cardSources.map(([key, source]) =>
+              source.type === 'web' ? (
+                <WebSourceCard key={key} source={source} />
+              ) : isDatedSource(source) ? (
+                <SourceCard key={key} source={source} petId={petId} />
+              ) : null,
+            )}
+          </View>
+        ) : null}
         <View style={styles.replyFootnote}>
-          {[...new Map((turn.sources ?? []).map((source) => [sourceKey(source), source]))].map(
-            ([key, source]) => {
-              if (source.type === 'web') return <WebSourceCard key={key} source={source} />;
-              if (isDatedSource(source)) {
-                return <SourceCard key={key} source={source} petId={petId} />;
-              }
-              return (
-                <ThemedText key={key} type="small" themeColor="textSecondary">
-                  {source.type === 'baseline' ? '个人基线暂无可比样本' : '暂不支持展示的来源'}
-                </ThemedText>
-              );
-            },
-          )}
+          {unknownSources.map(([key, source]) => (
+            <ThemedText key={key} type="small" themeColor="textSecondary">
+              {source.type === 'baseline' ? '个人基线暂无可比样本' : '暂不支持展示的来源'}
+            </ThemedText>
+          ))}
           {turn.status !== 'pending' ? (
             <Pressable
               accessibilityRole="button"
@@ -619,10 +632,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  /** 来源卡与其他结构化卡共用的对齐列：同宽、同左右边缘（不缩进到头像列） */
+  sourceColumn: { gap: 6 },
   source: {
     borderWidth: 1,
     borderRadius: 12,
-    marginTop: 4,
     overflow: 'hidden',
     boxShadow: Shadows.chip,
   },
