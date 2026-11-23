@@ -5,7 +5,7 @@
  * 404、他人 ID、离线与目标加载失败都不标已读（明确状态文案，见 spec W12-A3/A4）。
  */
 
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -51,7 +51,7 @@ export default function InboxDeepLinkScreen() {
           .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
           .join('&');
         // 只跳转，不在此处标已读：目标在伙伴页**定位并展示**那条来源后才标（W12-A3）
-        router.replace(`${target.route}${query ? `?${query}` : ''}`);
+        router.replace(`${target.route}${query ? `?${query}` : ''}` as Href);
       } catch {
         if (ownerRef.current !== requestOwner) return;
         setState('error');

@@ -238,18 +238,30 @@ def hydrate(session, item):
 
 # ── 投影 ──────────────────────────────────────────────────────────────────
 
+def _publication_inputs(session, topic):
+    """W11→W12 已确认发布资格的三项输入（相关性 / 冻结证据 / 交付批准）。
+
+    判据全在 `inbox_publication`（严格解析不可变运行轨迹）；不成立时返回空值，
+    绝不默认按 high 处理。
+    """
+    from petsense.agent import inbox_publication
+    return inbox_publication.publication_inputs(session, topic)
+
+
 def _project_topic(session, pet, topic, *, backfilled=False, now=None):
     """把一个主题投影成收件箱条目（幂等；严重度在键里，升级阶段是新条目）。"""
     source_kind = TOPIC_KIND_TO_SOURCE.get(topic.kind)
     if source_kind is None:
         return False
     turn_id = _resolve_turn_id(session, pet.id, topic=topic)
+    relevance, frozen, approved = _publication_inputs(session, topic)
     eligibility = Eligibility(
         source_kind=source_kind,
         priority={SOURCE_DEVICE_FACT: PRIORITY_DEVICE, SOURCE_CARE: PRIORITY_CARE,
                   SOURCE_LEARNING: PRIORITY_LEARNING}[source_kind],
         published=turn_id is not None, turn_id=turn_id, backfilled=backfilled,
-        reason='topic:%s' % topic.kind)
+        relevance=relevance, frozen_evidence=frozen, delivery_approved=approved,
+        reason='topic:%s' % topic.kind).with_personal()
     if source_kind == SOURCE_LEARNING:
         event_key = 'learning:%s' % topic.anchor          # 学习完成沿用维度+版本
     elif source_kind == SOURCE_DEVICE_FACT:
@@ -307,12 +319,22 @@ def _enrich_item(session, item, now=None):
             turn_id = _resolve_turn_id(session, item.pet_id, topic=topic)
             severity = topic.severity
             source_status = topic.status
+    # W11→W12：已确认发布资格（严格依据不可变运行轨迹）。解析不出来就**保持原值**，
+    # 既不抬升也不降级——正常/默认高相关、安静档、证据缺失都不成立。
+    relevance, frozen, approved = eligibility.relevance, eligibility.frozen_evidence, \
+        eligibility.delivery_approved
+    if item.source_kind == SOURCE_CARE:
+        topic = session.get(AgentCareTopic, ref.get('topicId'))
+        if topic is not None:
+            found_relevance, found_frozen, found_approved = _publication_inputs(session, topic)
+            if found_frozen:
+                relevance, frozen, approved = found_relevance, found_frozen, found_approved
     updated = Eligibility(source_kind=eligibility.source_kind, priority=eligibility.priority,
                           previewable=eligibility.previewable,
                           published=turn_id is not None, turn_id=turn_id,
-                          relevance=eligibility.relevance,
-                          frozen_evidence=eligibility.frozen_evidence,
-                          delivery_approved=eligibility.delivery_approved,
+                          relevance=relevance,
+                          frozen_evidence=frozen,
+                          delivery_approved=approved,
                           high_relevance=eligibility.high_relevance,
                           backfilled=eligibility.backfilled, reason=eligibility.reason)
     policy = policy_input(updated, severity=severity, source_status=source_status)
@@ -324,7 +346,8 @@ def _enrich_item(session, item, now=None):
                           relevance=updated.relevance,
                           frozen_evidence=updated.frozen_evidence,
                           delivery_approved=updated.delivery_approved,
-                          high_relevance=updated.high_relevance,
+                          high_relevance=updated.frozen_evidence
+                          and updated.relevance == 'high' and updated.delivery_approved,
                           push_candidate=push_candidate(policy),
                           backfilled=updated.backfilled, reason=updated.reason)
     _store_eligibility(session, item, updated, now=now)

@@ -510,6 +510,14 @@ def handle_review(job, now):
             care.open_topic(s, pet.id, 'observation', finding['category'], finding['anchor'],
                             severity='info', title=finding['title'], detail=finding['text'],
                             evidence=evidence_rows, now=now)
+            # 稳定 run id：把本次回顾运行挂到主题上，W12 据此把「已确认高相关发布」
+            # 与该主题精确关联（运行 + 宠物 + 已交付回合三重匹配，见 inbox_publication）。
+            topic = s.execute(select(AgentCareTopic).where(
+                AgentCareTopic.pet_id == pet.id, AgentCareTopic.kind == 'observation',
+                AgentCareTopic.anchor == finding['anchor'],
+                AgentCareTopic.status.in_(('open', 'ongoing')))).scalars().first()
+            if topic is not None:
+                topic.run_id = topic.run_id or run_id
         if deliverable:
             blocks = [{'type': 'text', 'speaker': 'assistant', 'text': say}]
             for finding in findings:

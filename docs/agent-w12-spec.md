@@ -165,3 +165,33 @@ topicId 取权威主题、锚点 key 变化重置。服务端新增 `test_agent_
 
 **未做**：模拟器验收与真机往返走查仍待另行委派（本记录只含自动化证据）；Android/Web
 未接推送（W13 仅 iOS）。
+
+### W11 → W12 已确认发布资格集成（2026-11-23，合并后）
+
+**判据（全部严格相等，缺一不成立）**：`agent/inbox_publication.py` 解析 W11 的**不可变运行轨迹**：
+`conclusion.publication.provenance == 'model_high_accepted'`（`'model_normal_accepted'`、
+`'legacy_default_high'`、`'legacy_default_normal'` 一律不成立）+ 同一宠物的 `form='review'` 运行 +
+`conclusion.deliveredBy == 'w09_review'` + 窗口与主题依据一致 + **已交付的 W09 回顾回合**
+（request id 精确匹配 `care:review:<kind>:<pet>:<窗口>`，且其 care 块 `runId` 等于该运行 id）。
+
+**最小元数据补写**：W09 回顾主题此前没有 run id，现由 `care_jobs.handle_review` 写入
+`topic.run_id = run_id`（稳定 run id + 精确链接到已交付回合）。
+
+**恢复语义**：资格由 W12 投影的富化阶段按不可变轨迹重新解析，**重启后自动恢复**；解析不出来时
+**保持原值**（既不抬升也不降级）。安静档（无交付回合）、正常/默认高相关、证据缺失一律不是推送候选。
+
+**端到端测试**（新增 `server/tests/test_agent_w11_w12.py`，11 例，按真实「回顾→收件箱」生命周期构造）：
+正例 1 例（已确认 high → 条目 relevance=high + frozen_evidence + delivery_approved + 推送候选）；
+反例 7 例（normal、默认 high、安静档无交付、缺运行、跨宠物、回合未指向运行、窗口不一致
+→ 全部不抬升）；恢复 1 例（条目先建、运行与回合后到，再次投影即恢复资格）；既有中心策略 1 例
+（安静档下 warning/critical 设备告警与到期回信仍是候选）。
+
+### 本轮联合检查（W11+W12 合并后）
+
+| 检查 | 结果 |
+| --- | --- |
+| 服务端全量 `python -m unittest discover -s tests`（带 `PETSENSE_MQTT_DISABLED=1`） | **657/657 通过**（skipped=3；含新增 11 例） |
+| 客户端 typecheck / lint / prettier / `npm test` | 通过 / 0 错误 0 警告 / 通过 / **126/126 通过**（`tools/inbox-anchor.test.cjs` 6 例计入） |
+
+**状态**：W12 代码与自动化检查完成，**模拟器验收（A5/A6，含浅色/深色视觉走查）待办**；
+本轮未改任何视觉文件，未接 W13 依赖，未提交/未推送/未部署。

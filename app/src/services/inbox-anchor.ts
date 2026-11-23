@@ -26,15 +26,13 @@ export type AnchorTarget = {
 type TurnLike = {
   id: number;
   topicId?: number | null;
-  blocks?:
-    | (
-        | { type: 'text' }
-        | { type: 'proposal' }
-        | { type: 'action' }
-        | { type: 'task_result'; task: { deliveryId: number } }
-        | { type: 'care'; care: { topicId?: number | null } }
-      )[]
-    | null;
+  blocks?: readonly Record<string, unknown>[] | null;
+};
+
+type BlockLike = {
+  type?: string;
+  task?: { deliveryId?: number | null };
+  care?: { topicId?: number | null };
 };
 
 function toId(value: string | undefined | null): number | null {
@@ -67,9 +65,10 @@ export function findAnchorTurnId(turns: TurnLike[], target: AnchorTarget): numbe
   }
   if (target.deliveryId !== null) {
     const found = turns.find((turn) =>
-      (turn.blocks ?? []).some(
-        (block) => block.type === 'task_result' && block.task.deliveryId === target.deliveryId,
-      ),
+      (turn.blocks ?? []).some((raw) => {
+        const block = raw as BlockLike;
+        return block.type === 'task_result' && block.task?.deliveryId === target.deliveryId;
+      }),
     );
     return found ? found.id : null;
   }
@@ -77,9 +76,10 @@ export function findAnchorTurnId(turns: TurnLike[], target: AnchorTarget): numbe
     const found = turns.find(
       (turn) =>
         turn.topicId === target.topicId ||
-        (turn.blocks ?? []).some(
-          (block) => block.type === 'care' && block.care.topicId === target.topicId,
-        ),
+        (turn.blocks ?? []).some((raw) => {
+          const block = raw as BlockLike;
+          return block.type === 'care' && block.care?.topicId === target.topicId;
+        }),
     );
     return found ? found.id : null;
   }
