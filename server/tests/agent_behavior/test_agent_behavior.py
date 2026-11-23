@@ -7,6 +7,7 @@
 import hashlib
 import io
 import json
+import re
 import os
 import secrets
 import sys
@@ -45,6 +46,15 @@ def _latest_run(pet_id):
     with db.session_scope() as s:
         return s.execute(select(AgentRun).where(AgentRun.pet_id == pet_id)
                          .order_by(AgentRun.id.desc())).scalars().first()
+
+
+def _asserts_claim(text, phrase):
+    """文本是否断言了某个结论（否定式表述不算，如「不能据此认定活动减少」）。"""
+    for match in re.finditer(re.escape(phrase), text or ''):
+        window = text[max(0, match.start() - 14):match.start()]
+        if not re.search(r'(不能|无法|没法|不会|没有|尚未|还没|不可|不足以|不应|不要|别)$', window):
+            return True
+    return False
 
 
 class BehaviorScenarioTests(unittest.TestCase):
@@ -1137,7 +1147,8 @@ class CareBehaviorTests(unittest.TestCase):
         reply = daily[0].reply
         self.assertIn('走', reply, f'应提到走动统计：{reply}')
         self.assertNotIn('比平时', reply)
-        self.assertNotIn('异常', reply)
+        self.assertFalse(_asserts_claim(reply, '异常'), f'不得断言异常：{reply}')
+        self.assertFalse(_asserts_claim(reply, '活动减少'), f'不得断言活动减少：{reply}')
         conclusion = json.loads(_latest_run(self.pet).conclusion)
         self.assertNotIn('degraded:', conclusion['reason_code'])
 
@@ -1153,7 +1164,7 @@ class CareBehaviorTests(unittest.TestCase):
             self.assertTrue(any(word in reply for word in ('没有', '暂无', '未', '欠')),
                             f'无数据应如实说明：{reply}')
             self.assertNotIn('比平时', reply)
-            self.assertNotIn('减少', reply)
+            self.assertFalse(_asserts_claim(reply, '减少'), f'不得断言活动减少：{reply}')
 
     def test_E53_battery_event_and_why_followup(self):
         """低电事件消息只述事实；追问「为什么提醒我」引用真实主题依据。"""
@@ -1208,7 +1219,7 @@ class CareBehaviorTests(unittest.TestCase):
             s.query(AgentTurn).filter(AgentTurn.pet_id == self.pet).delete()
         for seq in (8, 9, 10):
             self._frame(seq, battery=13)
-        agent_jobs.tick(now=self.t0 + timedelta(minutes=30), limit=5)
+        agent_jobs.tick(now=utc_now() + timedelta(minutes=1), limit=5)
         self.assertEqual(len(self._care_turns('care:event:')), 1, '标准档交付关键设备事实')
 
     def test_E56_event_form_rejects_writes(self):

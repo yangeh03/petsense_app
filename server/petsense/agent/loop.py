@@ -46,6 +46,7 @@ def search_enabled():
 
 
 SPEAKER_MARK = '【爱宠】|【照料助手】'
+SPEAKER_PREFIX_RE = re.compile(r'^\s*【[^】]{1,8}】\s*')
 STANCE_LINE = re.compile(r'^\s*\{.*\}\s*$')
 SPEAKER_RE = re.compile(SPEAKER_MARK)
 SPEAKERS = ('pet', 'assistant')
@@ -689,6 +690,7 @@ def run_structured(context):
             schemas = registry.schemas_for(form, 'allowed', search_enabled=False) if allow_tools else []
             turn = model.respond(input_items, tools=schemas or None, max_output_tokens=max_tokens)
             _, stripped = parse_stance(turn.get('text'))
+            stripped = SPEAKER_PREFIX_RE.sub('', stripped or '')
             if stripped:
                 messages_trace.append({'role': 'assistant', 'text': stripped[:2000]})
             calls = (turn.get('function_calls') or [])[:max_calls]
