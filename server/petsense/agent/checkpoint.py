@@ -16,6 +16,7 @@ from petsense.db import iso_z
 
 logger = logging.getLogger(__name__)
 
+MAX_TOOL_ROUNDS = 2          # 检查点的工具回合预算（证据已物化，模型只需核对）
 MAX_PARSE_RETRIES = 1
 MAX_OUTPUT_TOKENS = 1400
 EVIDENCE_CHAR_LIMIT = 6000
@@ -115,6 +116,7 @@ def evaluate(ctx, now):
         'pet_id': ctx['pet_id'], 'user_id': ctx['user_id'], 'form': registry.CHECKPOINT,
         'system': _CHECKPOINT_SYSTEM, 'task': user_prompt,
         'max_output_tokens': MAX_OUTPUT_TOKENS,
+        'max_rounds': MAX_TOOL_ROUNDS,
         'parse': _parse_decision_value,
         'max_parse_retries': MAX_PARSE_RETRIES,
         'retry_instruction': _RETRY_INSTRUCTION + (

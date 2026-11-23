@@ -35,6 +35,8 @@ REVIEW_KIND = 'care_review'
 EVENT_KIND = 'care_event'
 
 FINDING_BUDGET = 3          # 每次回顾的发现交付预算（服务端截断，spec §2）
+REVIEW_MAX_TOOL_ROUNDS = 4  # 真实模型常先查档案/实时/观测再作答，预算过窄会拿不到正文
+REVIEW_MAX_OUTPUT_TOKENS = 2400
 EVIDENCE_DAYS_SHOWN = 7
 
 _REVIEW_SYSTEM = (
@@ -276,6 +278,8 @@ def handle_review(job, now):
         'pet_id': pet.id, 'user_id': pet.user_id, 'form': registry.REVIEW,
         'system': _REVIEW_SYSTEM, 'task': task, 'settings': settings, 'trigger': trigger,
         'parse': _parse_review_payload,
+        'max_rounds': REVIEW_MAX_TOOL_ROUNDS,
+        'max_output_tokens': REVIEW_MAX_OUTPUT_TOKENS,
         'retry_instruction': '上一次输出不是合法的回顾 JSON。重新输出：'
                               '{"say":"…","level":"high或normal","findings":[…]}，不要其他文字。',
     })
@@ -359,6 +363,8 @@ def handle_event(job, now):
         'pet_id': pet.id, 'user_id': pet.user_id, 'form': registry.EVENT,
         'system': _EVENT_SYSTEM, 'task': task, 'settings': settings, 'trigger': trigger,
         'parse': _parse_event_payload,
+        'max_rounds': REVIEW_MAX_TOOL_ROUNDS,
+        'max_output_tokens': REVIEW_MAX_OUTPUT_TOKENS,
         'retry_instruction': '上一次输出不是合法的事件 JSON。重新输出：'
                               '{"say":"…","disturb":true或false}，不要其他文字。',
     })

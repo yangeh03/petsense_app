@@ -636,7 +636,7 @@ _BACKGROUND_SYSTEM_BASE = (
     '工具只允许事实读取：委托变更、档案/设定/记忆写入、联网与设备动作均不可用，'
     '调用会被拒绝且不得声称已执行。输出为纯 JSON 对象（不要包裹代码块），结构见任务说明。')
 
-BACKGROUND_MAX_TOOL_ROUNDS = 2
+BACKGROUND_MAX_TOOL_ROUNDS = 4   # 后台形态的工具回合预算（真实模型常先查档案/实时/观测再作答）
 BACKGROUND_MAX_CALLS_PER_ROUND = 3
 BACKGROUND_MAX_OUTPUT_TOKENS = 1400
 BACKGROUND_WALL_LIMIT_S = 60.0
