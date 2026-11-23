@@ -23,7 +23,7 @@ from datetime import timedelta
 
 from sqlalchemy import or_, select
 
-from petsense.db import session_scope, utc_now
+from petsense.db import dialect_insert, session_scope, utc_now
 from petsense.db.models.agent import AgentJob
 
 logger = logging.getLogger(__name__)
@@ -51,19 +51,24 @@ def scheduler_enabled():
 
 
 def enqueue(session, kind, payload, dedup_key, next_run_at=None, max_attempts=DEFAULT_MAX_ATTEMPTS):
-    """追加作业（幂等）：dedup_key 已存在时不建新行。返回 (job_id, created)。"""
-    existing = session.execute(select(AgentJob.id).where(AgentJob.dedup_key == dedup_key)
-                               ).scalar_one_or_none()
-    if existing is not None:
-        return existing, False
+    """追加作业（幂等）：dedup_key 已存在时不建新行。返回 (job_id, created)。
+
+    用方言 upsert（on_conflict_do_nothing）而不是「先查后插」：并发同键写入时
+    各得一个幂等结果且不产生重复行（先查后插在两个事务同时查空时会各插一行）。
+    """
     now = utc_now()
-    row = AgentJob(kind=kind, dedup_key=dedup_key,
-                   payload_json=json.dumps(payload, ensure_ascii=False),
-                   status='pending', attempts=0, max_attempts=max_attempts,
-                   next_run_at=next_run_at or now, created_at=now, updated_at=now)
-    session.add(row)
-    session.flush()
-    return row.id, True
+    stmt = dialect_insert(session, AgentJob).values(
+        kind=kind, dedup_key=dedup_key,
+        payload_json=json.dumps(payload, ensure_ascii=False),
+        status='pending', attempts=0, max_attempts=max_attempts,
+        next_run_at=next_run_at or now, created_at=now, updated_at=now)
+    stmt = stmt.on_conflict_do_nothing(index_elements=['dedup_key'])
+    result = session.execute(stmt)
+    if result.rowcount == 1:
+        return result.inserted_primary_key[0], True
+    existing = session.execute(select(AgentJob.id).where(
+        AgentJob.dedup_key == dedup_key)).scalar_one()
+    return existing, False
 
 
 def cancel(session, dedup_key):
@@ -76,6 +81,18 @@ def cancel(session, dedup_key):
         row.lease_until = None
         row.updated_at = utc_now()
     return True
+
+
+def cancel_prefix(session, prefix):
+    """按稳定键前缀终止作业（委托取消：清掉该委托所有版本的检查点作业）。返回取消数。"""
+    rows = session.execute(select(AgentJob).where(
+        AgentJob.dedup_key.like(prefix + '%'),
+        AgentJob.status == 'pending')).scalars().all()
+    for row in rows:
+        row.status = 'done'
+        row.lease_until = None
+        row.updated_at = utc_now()
+    return len(rows)
 
 
 def _job_dict(row):

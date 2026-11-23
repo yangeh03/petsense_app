@@ -167,7 +167,9 @@ class W09CareTests(unittest.TestCase):
         self._scan(_at(0, 8, 0))  # 首启水位（D4：从下一调度点开始）
         self._scan(_at(0, 9, 30))
         with patch('petsense.agent.model.respond', _fake_model([
-            _json_out({'say': '昨天走了 40 分钟，状态不错。', 'findings': []})])):
+            _json_out({'say': '昨天走了 40 分钟，状态不错。', 'level': 'high',
+                       'findings': [{'category': 'walk_volume', 'anchor': 'walk-boost-yesterday',
+                                     'title': '走动变多', 'text': '昨天走动比前一日多。'}]})])):
             jobs.tick(now=_at(0, 9, 30, 5), limit=5)  # 周一时周回顾同点到点，均应执行
         daily = self._turns('care:review:daily:')
         self.assertEqual(len(daily), 1)
@@ -242,8 +244,20 @@ class W09CareTests(unittest.TestCase):
         conclusion = json.loads(run.conclusion)
         self.assertEqual(conclusion['findings'], 0)
 
+    def _seed_yesterday_minutes(self, minutes=60, device='collar-1'):
+        """种上海「昨天」的观测分钟行（回顾窗口=昨天 00:00→今天 00:00）。"""
+        today = datetime.now(SH).replace(hour=0, minute=0, second=0, microsecond=0)
+        start = (today - timedelta(days=1)).astimezone(UTC)
+        with db.session_scope() as s:
+            for i in range(minutes):
+                s.add(TelemetryMinute(owner_id=self.uid, device_id=device,
+                                      minute=start + timedelta(minutes=i), metrics='{}',
+                                      actions=json.dumps({'走动': 30}),
+                                      observed_seconds=60, frames=60))
+
     def test_review_degrades_to_facts_without_model(self):
         """模型不可用：回顾按事实降级交付（标准档），轨迹记 degraded。"""
+        self._seed_yesterday_minutes()
         self._scan(_at(0, 8, 0))
         self._scan(_at(0, 9, 30))
         with patch('petsense.agent.model.respond',
@@ -251,14 +265,29 @@ class W09CareTests(unittest.TestCase):
             jobs.tick(now=_at(0, 9, 30, 5), limit=5)
         daily = self._turns('care:review:daily:')
         self.assertEqual(len(daily), 1)
-        # 无数据降级文案（本用例未种观测；有数据时为「观察小结」逐日事实）
-        self.assertIn('没有留下观测记录', daily[0].reply)
+        # 有数据时降级文案为「观察小结」逐日事实（只报统计，不推断）
+        self.assertIn('观察小结', daily[0].reply)
         with db.session_scope() as s:
             from petsense.db.models.agent import AgentRun
             run = s.execute(select(AgentRun).where(AgentRun.pet_id == self.pet)
                             .order_by(AgentRun.id.desc())).scalars().first()
         self.assertEqual(run.status, 'degraded')
         self.assertIn('model_unavailable', json.loads(run.conclusion)['reason_code'])
+
+    def test_review_degraded_without_data_has_no_message(self):
+        """无数据的降级回顾：只留轨迹不发消息（无数据不打扰，spec §2 D2）。"""
+        self._scan(_at(0, 8, 0))
+        self._scan(_at(0, 9, 30))
+        with patch('petsense.agent.model.respond',
+                   _fake_model([RuntimeError('no credentials')])):
+            jobs.tick(now=_at(0, 9, 30, 5), limit=5)
+        self.assertEqual(self._turns('care:review:daily:'), [], '无数据不发主动消息')
+        with db.session_scope() as s:
+            from petsense.db.models.agent import AgentRun
+            run = s.execute(select(AgentRun).where(AgentRun.pet_id == self.pet)
+                            .order_by(AgentRun.id.desc())).scalars().first()
+        self.assertEqual(run.status, 'degraded')
+        self.assertEqual(json.loads(run.conclusion)['delivered'], False)
 
     # ── A2 硬件事件 ─────────────────────────────────────────────────────────
 
@@ -608,6 +637,164 @@ class W09CareTests(unittest.TestCase):
             row = s.execute(select(AgentJob).where(AgentJob.dedup_key == 'care:scan:loop')).scalar_one()
         self.assertEqual(row.status, 'pending')
         self.assertGreater(row.next_run_at, now)
+
+
+class W09ReviewIntegrationTests(W09CareTests):
+    """W09 评审修复的确定性回归：消息去重、主动程度门槛、调度资格、WS 交付与轨迹。"""
+
+    def _review_job(self, kind='daily', key='2026-11-19', start='2026-11-19T00:00:00+08:00',
+                    end='2026-11-20T00:00:00+08:00', scheduled='2026-11-20T09:00:00+08:00',
+                    now=None):
+        with db.session_scope() as s:
+            jobs.enqueue(s, 'care_review',
+                         {'pet': self.pet, 'kind': kind, 'key': key,
+                          'windowStart': start, 'windowEnd': end, 'scheduledAt': scheduled},
+                         dedup_key='care:review:%s:%d:%s' % (kind, self.pet, key),
+                         next_run_at=now or self.t0)
+
+    def test_say_without_finding_has_no_message(self):
+        """模型只说话不给发现：没有授权证据 → 只留轨迹不发主动消息。"""
+        self._review_job()
+        with patch('petsense.agent.model.respond', _fake_model([
+                _json_out({'say': '昨天走了 40 分钟。', 'findings': []})])):
+            jobs.tick(now=self.t0 + timedelta(minutes=1), limit=5)
+        self.assertEqual(self._turns('care:review:daily:'), [], '无发现支撑的消息不发布')
+        with db.session_scope() as s:
+            from petsense.db.models.agent import AgentRun
+            run = s.execute(select(AgentRun).where(AgentRun.pet_id == self.pet)
+                            .order_by(AgentRun.id.desc())).scalars().first()
+        conclusion = json.loads(run.conclusion)
+        self.assertEqual(conclusion['authorized'], False)
+        self.assertEqual(conclusion['delivered'], False)
+
+    def test_standard_level_gates_normal_finding(self):
+        """标准档只发高相关发现；同一条一般发现（level=normal）在多提醒档才发。"""
+        finding = {'category': 'walk_volume', 'anchor': 'walk-normal', 'title': '走动',
+                   'text': '走动和平时差不多。'}
+        # 标准档 + level=normal → 不发
+        self._set_proactivity(1)
+        self._review_job()
+        with patch('petsense.agent.model.respond', _fake_model([
+                _json_out({'say': '今天它和平时差不多。', 'level': 'normal', 'findings': [finding]})])):
+            jobs.tick(now=self.t0 + timedelta(minutes=1), limit=5)
+        self.assertEqual(self._turns('care:review:daily:'), [], '标准档不发一般发现')
+        # 多提醒档 + 同一发现 → 发
+        self._set_proactivity(2)
+        with db.session_scope() as s:
+            row = s.execute(select(AgentCareTopic).where(
+                AgentCareTopic.pet_id == self.pet, AgentCareTopic.kind == 'observation')).scalar_one()
+            row.status = 'recovered'   # 允许新实例再开（避免同实例重复）
+            row.recovered_at = utc_now()
+        self._review_job(key='2026-11-20', start='2026-11-20T00:00:00+08:00',
+                         end='2026-11-21T00:00:00+08:00')
+        with patch('petsense.agent.model.respond', _fake_model([
+                _json_out({'say': '今天它和平时差不多。', 'level': 'normal', 'findings': [finding]})])):
+            jobs.tick(now=self.t0 + timedelta(minutes=2), limit=5)
+        self.assertEqual(len(self._turns('care:review:daily:')), 1, '多提醒档可发一般发现')
+
+    def test_same_anchor_not_reported_twice(self):
+        """日/周回顾同锚点：第二次只更新主题，不再发第二条消息。"""
+        finding = {'category': 'walk_volume', 'anchor': 'walk-boost-week', 'title': '走动变多',
+                   'text': '这几天走动比前几日多。'}
+        self._review_job()
+        with patch('petsense.agent.model.respond', _fake_model([
+                _json_out({'say': '昨天走动变多。', 'level': 'high', 'findings': [finding]})])):
+            jobs.tick(now=self.t0 + timedelta(minutes=1), limit=5)
+        self.assertEqual(len(self._turns('care:review:daily:')), 1)
+        self._review_job(kind='weekly', key='2026-11-16',
+                         start='2026-11-16T00:00:00+08:00', end='2026-11-23T00:00:00+08:00',
+                         scheduled='2026-11-23T09:15:00+08:00', now=self.t0 + timedelta(minutes=2))
+        with patch('petsense.agent.model.respond', _fake_model([
+                _json_out({'say': '这周走动也变多。', 'level': 'high',
+                           'findings': [dict(finding, text='周汇总里仍然提到同一件事。')]})])):
+            jobs.tick(now=self.t0 + timedelta(minutes=3), limit=5)
+        self.assertEqual(len(self._turns('care:review:')), 1, '同一锚点不得重复发消息')
+        with db.session_scope() as s:
+            topics = s.execute(select(AgentCareTopic).where(
+                AgentCareTopic.pet_id == self.pet, AgentCareTopic.kind == 'observation')).scalars().all()
+        self.assertEqual(len(topics), 1, '同锚点不重复开题')
+        self.assertGreaterEqual(len(json.loads(topics[0].evidence)), 2, '既有主题的依据被更新')
+
+    def test_eligibility_uses_owned_observations_or_current_binding(self):
+        """调度资格：真实可用观测或当前绑定；设备已被别人认领则不合格。"""
+        with db.session_scope() as s:
+            pet = s.get(Pet, self.pet)
+            self.assertTrue(care.review_eligible(s, pet))
+            # 无绑定但有严格归属的真实观测 → 合格
+            pet.device_id = 'collar-unbound'
+            s.add(TelemetryMinute(owner_id=self.uid, device_id='collar-unbound',
+                                  minute=utc_now() - timedelta(hours=1), metrics='{}',
+                                  actions=json.dumps({'走动': 10}), observed_seconds=60, frames=60))
+            s.flush()
+            self.assertTrue(care.review_eligible(s, pet))
+            # 设备被别人认领 → 不合格（不把旧设备算给任何人）
+            other = User(username='w09-other', display_name='other', password_hash='x',
+                         salt='s', avatar_emoji='🙂', bio='', created_at=db.utc_now())
+            s.add(other)
+            s.flush()
+            s.add(Device(device_id='collar-unbound', owner_id=other.id, name='',
+                         claimed_at=self.t0 - timedelta(hours=1)))
+            self.assertFalse(care.review_eligible(s, pet))
+
+    def test_review_run_trace_keeps_actual_model_trace(self):
+        """轨迹保留真实模型回合、工具与预算，并记录窗口与主动程度（可审计）。"""
+        self._review_job()
+        with patch('petsense.agent.model.respond', _fake_model([
+                {'text': '', 'function_calls': [{'name': 'query_observations', 'call_id': 'c1',
+                                                 'arguments': json.dumps({'start': '2026-11-19T00:00:00+08:00',
+                                                                         'end': '2026-11-20T00:00:00+08:00'})}]},
+                _json_out({'say': '昨天它走动偏多。', 'level': 'high',
+                           'findings': [{'category': 'walk_volume', 'anchor': 'walk-x',
+                                         'title': '走动', 'text': '走动偏多。'}]})])):
+            jobs.tick(now=self.t0 + timedelta(minutes=1), limit=5)
+        with db.session_scope() as s:
+            from petsense.db.models.agent import AgentRun
+            run = s.execute(select(AgentRun).where(AgentRun.pet_id == self.pet)
+                            .order_by(AgentRun.id.desc())).scalars().first()
+            summary = {
+                'conclusion': json.loads(run.conclusion),
+                'messages': json.loads(run.messages),
+                'tool_summary': json.loads(run.tool_summary),
+                'budget': json.loads(run.budget),
+                'snapshot': json.loads(run.snapshot) if run.snapshot else None,
+            }
+        self.assertEqual(summary['conclusion']['window'], '2026-11-19')
+        self.assertEqual(summary['conclusion']['proactivity'], 1)
+        self.assertEqual(summary['conclusion']['trigger']['windowStart'],
+                         '2026-11-19T00:00:00+08:00')
+        self.assertTrue(summary['tool_summary'], '工具调用须留在轨迹')
+        self.assertEqual(summary['tool_summary'][0]['name'], 'query_observations')
+        self.assertGreaterEqual(summary['budget']['rounds'], 1)
+        self.assertIn('reviewFacts', summary['snapshot'])
+        self.assertEqual(summary['snapshot']['settings']['proactivity'], 1)
+
+    def test_background_delivery_pushes_single_wellformed_frame(self):
+        """后台交付：WS 只推一帧，且 turn.blocks 已解析为数组（只序列化一次）。"""
+        from petsense.agent import ws as agent_ws
+
+        class FakeSocket:
+            def __init__(self):
+                self.frames = []
+
+            def send(self, payload):
+                self.frames.append(payload)
+
+        socket = FakeSocket()
+        agent_ws.clients[socket] = self.uid
+        self.addCleanup(agent_ws.clients.pop, socket, None)
+        self._review_job()
+        with patch('petsense.agent.model.respond', _fake_model([
+                _json_out({'say': '昨天它走动偏多。', 'level': 'high',
+                           'findings': [{'category': 'walk_volume', 'anchor': 'walk-ws',
+                                         'title': '走动', 'text': '走动偏多。'}]})])):
+            jobs.tick(now=self.t0 + timedelta(minutes=1), limit=5)
+        self.assertEqual(len(socket.frames), 1, '只推一帧')
+        frame = json.loads(socket.frames[0])
+        self.assertEqual(frame['type'], 'turn')
+        blocks = frame['turn']['blocks']
+        self.assertIsInstance(blocks, list, 'blocks 应为已解析的数组（不得二次序列化）')
+        self.assertTrue(any(block.get('type') == 'care' for block in blocks))
+        self.assertTrue(any(block.get('type') == 'text' for block in blocks))
 
 
 if __name__ == '__main__':

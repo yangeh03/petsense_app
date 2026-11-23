@@ -16,6 +16,7 @@ W09 后台形态（agent-w09-spec.md §3）：review/event 与对话共用本循
 任务与事实由代码确定性组装，输出为任务 JSON 文本由调用方校验解析。
 """
 import json
+import logging
 import os
 import re
 import time
@@ -34,6 +35,8 @@ SEARCH_DISABLED_ENV = 'PETSENSE_SEARCH_DISABLED'  # D5 灰度开关：生产 dro
 SEARCH_CALL_LIMIT = 2      # 每运行 web_search_call 累计上限，达到后不再挂载
 WEB_PAGE_CALL_LIMIT = 3    # 每运行 read_web_page 执行上限，第 4 次起结构化拒绝
 MAX_WEB_SOURCES = 6        # 回合 sources 中网页来源上限（与观测来源并存）
+
+logger = logging.getLogger(__name__)
 
 
 def search_enabled():
@@ -633,74 +636,130 @@ _BACKGROUND_SYSTEM_BASE = (
     '工具只允许事实读取：委托变更、档案/设定/记忆写入、联网与设备动作均不可用，'
     '调用会被拒绝且不得声称已执行。输出为纯 JSON 对象（不要包裹代码块），结构见任务说明。')
 
+BACKGROUND_MAX_TOOL_ROUNDS = 2
+BACKGROUND_MAX_CALLS_PER_ROUND = 3
+BACKGROUND_MAX_OUTPUT_TOKENS = 1400
+BACKGROUND_WALL_LIMIT_S = 60.0
+BACKGROUND_TOOL_RESULT_LIMIT = 4096
 
-def run_background(context):
-    """执行一次 W09 后台运行（review/event 形态，agent-w09-spec.md §3）。
 
-    context: {'pet_id', 'user_id', 'form': 'review'|'event', 'task': 任务说明+事实（用户消息）,
-              'system_extra': 形态专属系统提示段, 'trigger': 轨迹触发描述, 'settings'?}
-    返回 {'text': 模型任务输出（含可能的 stance 行，调用方解析）, 'degraded': [...],
-          'trace': 轨迹}；模型异常向上抛（作业层按退避重试/降级处理）。
+def run_structured(context):
+    """后台形态共用的有界模型回合（V11 单一运行循环：W08 检查点、W09 回顾与事件复用）。
+
+    context:
+      pet_id / user_id      主体与工具鉴权
+      form                  工具权限矩阵的运行形态（checkpoint / review / event）
+      system                该形态的系统提示段（事实与工具边界由代码给定）
+      task                  用户消息（任务说明 + 确定性事实）
+      settings              助手设定（注入人格段，可选）
+      trigger               轨迹触发描述（落 runs.save 的结论，可审计）
+      parse                 可选：text -> (value, ok)；ok=False 时按 retry_instruction 重问一次
+      retry_instruction     parse 失败时的重问文案
+      max_rounds / max_calls_per_round / max_output_tokens / wall_limit_s  可选预算覆盖
+
+    返回 {'text','value','error','degraded','trace'}；模型异常不外抛（error='model_unavailable'），
+    由调用方按各自的降级语义处理。轨迹含真实消息序列、工具调用与预算。
     """
     form = context['form']
+    parse = context.get('parse')
     started = time.monotonic()
-    deadline = started + RUN_WALL_LIMIT_S
-    stance = {'scope': 'allowed', 'intent': 'observe', 'speaker': 'assistant'}  # 触发确定性归代码，范围恒 allowed
-    tool_summary, messages_trace = [], []
-    degraded = []
-    system_content = _BACKGROUND_SYSTEM_BASE + '\n' + (context.get('system_extra') or '')
+    wall = float(context.get('wall_limit_s') or BACKGROUND_WALL_LIMIT_S)
+    deadline = started + wall
+    max_rounds = int(context.get('max_rounds') or BACKGROUND_MAX_TOOL_ROUNDS)
+    max_calls = int(context.get('max_calls_per_round') or BACKGROUND_MAX_CALLS_PER_ROUND)
+    max_tokens = int(context.get('max_output_tokens') or BACKGROUND_MAX_OUTPUT_TOKENS)
+    max_parse_retries = int(context.get('max_parse_retries', 1))
+    tool_summary, messages_trace, degraded = [], [], []
+    system_content = context['system']
     if context.get('settings'):
         system_content += '\n' + agent_settings.prompt_line(context['settings'])
     input_items = [{'role': 'system', 'content': system_content},
                    {'role': 'user', 'content': context['task']}]
     messages_trace.append({'role': 'user', 'task': context['task'][:600]})
-    rounds = 0
-    stripped = ''
-    while True:
-        allow_tools = rounds < MAX_TOOL_ROUNDS and time.monotonic() < deadline
-        if not allow_tools and rounds >= MAX_TOOL_ROUNDS:
-            degraded.append('tool_rounds_exhausted')
-        elif not allow_tools:
-            degraded.append('wall_clock_exceeded')
-        schemas = registry.schemas_for(form, 'allowed', search_enabled=False) if allow_tools else []
-        turn = model.respond(input_items, tools=schemas or None, max_output_tokens=2400)
-        _, stripped = parse_stance(turn['text'])
-        if stripped:
-            messages_trace.append({'role': 'assistant', 'text': stripped[:2000]})
-        calls = turn['function_calls'][:MAX_CALLS_PER_ROUND]
-        if not calls:
-            if not stripped.strip():
+    tool_rounds = parse_failures = 0
+    text, value, error = '', None, None
+    try:
+        while True:
+            allow_tools = tool_rounds < max_rounds and time.monotonic() < deadline
+            if not allow_tools and tool_rounds >= max_rounds:
+                degraded.append('tool_rounds_exhausted')
+            elif not allow_tools:
+                degraded.append('wall_clock_exceeded')
+            # 预算耗尽后不再挂载工具（模型仍调用时按降级交付，不无限循环）
+            schemas = registry.schemas_for(form, 'allowed', search_enabled=False) if allow_tools else []
+            turn = model.respond(input_items, tools=schemas or None, max_output_tokens=max_tokens)
+            _, stripped = parse_stance(turn.get('text'))
+            if stripped:
+                messages_trace.append({'role': 'assistant', 'text': stripped[:2000]})
+            calls = (turn.get('function_calls') or [])[:max_calls]
+            if calls and allow_tools:
+                tool_rounds += 1
+                if stripped.strip():
+                    input_items.append({'role': 'assistant', 'content': stripped})
+                for call in calls:
+                    name, call_id = call['name'], call['call_id'] or f'call_{len(tool_summary)}'
+                    try:
+                        arguments = json.loads(call['arguments'] or '{}')
+                    except ValueError:
+                        arguments = None
+                    gate = registry.execute_tool(name, arguments, form, 'allowed', context)
+                    result_json = json.dumps(gate['result'], ensure_ascii=False, default=str)
+                    if len(result_json) > BACKGROUND_TOOL_RESULT_LIMIT:
+                        result_json = result_json[:BACKGROUND_TOOL_RESULT_LIMIT] + '…(截断)'
+                    input_items.append({'type': 'function_call', 'call_id': call_id,
+                                        'name': name, 'arguments': call['arguments'] or '{}'})
+                    input_items.append({'type': 'function_call_output', 'call_id': call_id,
+                                        'output': result_json})
+                    tool_summary.append({'name': name, 'allowed': gate['allowed'],
+                                         'reason': gate['reason'],
+                                         'arguments': (call['arguments'] or '')[:300],
+                                         'duration_ms': gate['duration_ms'],
+                                         'result_bytes': len(result_json)})
+                messages_trace.append({'tool_round': tool_rounds,
+                                       'calls': tool_summary[-len(calls):]})
+                continue
+            if calls and not allow_tools:
+                degraded.append('model_called_without_tools')
+            text = stripped
+            if not text.strip():
                 degraded.append('empty_response')
-                raise ValueError('模型未返回可用输出')
-            break
-        if not schemas:
-            degraded.append('model_called_without_tools')
-            if stripped.strip():
+                error = 'model_unavailable'
                 break
-            raise ValueError('模型未返回可用输出')
-        rounds += 1
-        if stripped.strip():
-            input_items.append({'role': 'assistant', 'content': stripped})
-        for call in calls:
-            name, call_id = call['name'], call['call_id'] or f'call_{len(tool_summary)}'
-            try:
-                arguments = json.loads(call['arguments'] or '{}')
-            except ValueError:
-                arguments = None
-            gate = registry.execute_tool(name, arguments, form, 'allowed', context)
-            result_json = json.dumps(gate['result'], ensure_ascii=False, default=str)
-            if len(result_json) > TOOL_RESULT_LIMIT:
-                result_json = result_json[:TOOL_RESULT_LIMIT] + '…(截断)'
-            input_items.append({'type': 'function_call', 'call_id': call_id,
-                                'name': name, 'arguments': call['arguments'] or '{}'})
-            input_items.append({'type': 'function_call_output', 'call_id': call_id, 'output': result_json})
-            tool_summary.append({'name': name, 'allowed': gate['allowed'], 'reason': gate['reason'],
-                                 'arguments': (call['arguments'] or '')[:300],
-                                 'duration_ms': gate['duration_ms'], 'result_bytes': len(result_json)})
-        messages_trace.append({'tool_round': rounds, 'calls': tool_summary[-len(calls):]})
+            if parse is None:
+                value = text
+                break
+            value, ok = parse(text)
+            if ok:
+                break
+            if parse_failures < max_parse_retries:
+                parse_failures += 1
+                input_items.append({'role': 'assistant', 'content': text})
+                input_items.append({'role': 'user', 'content': context.get('retry_instruction') or ''})
+                continue
+            error = 'model_invalid_output'
+            break
+    except Exception as exc:  # noqa: BLE001  模型失败降级为结构化 error（不外抛）
+        logger.warning('background model failed for form %s: %s', form, type(exc).__name__)
+        messages_trace.append({'model_error': f'{type(exc).__name__}: {str(exc)[:200]}'})
+        error = 'model_unavailable'
+        text, value = '', None
     trace = {'form': form, 'trigger': context.get('trigger'),
              'conclusion': {'reason_code': 'degraded:' + ','.join(degraded) if degraded else 'ok'},
              'messages': messages_trace, 'tool_summary': tool_summary,
-             'budget': {'rounds': rounds, 'wall_seconds': round(time.monotonic() - started, 2)},
+             'budget': {'rounds': tool_rounds, 'parse_failures': parse_failures,
+                        'wall_seconds': round(time.monotonic() - started, 2)},
              'degraded': degraded}
-    return {'text': stripped.strip(), 'degraded': degraded, 'trace': trace}
+    return {'text': text, 'value': value, 'error': error, 'degraded': degraded, 'trace': trace}
+
+
+def run_background(context):
+    """W09 后台运行（review/event 形态）的包装：共用 run_structured。
+
+    context: {'pet_id','user_id','form':'review'|'event','system_extra','task','trigger','settings'?}
+    返回 {'text','value','error','degraded','trace'}。
+    """
+    system_content = _BACKGROUND_SYSTEM_BASE + '\n' + (context.get('system_extra') or '')
+    payload = dict(context)
+    payload['system'] = system_content
+    payload.setdefault('max_output_tokens', 2400)
+    return run_structured(payload)

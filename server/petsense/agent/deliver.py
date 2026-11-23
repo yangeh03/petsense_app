@@ -10,28 +10,34 @@ import json
 
 from sqlalchemy import select
 
-from petsense.db import iso_z, utc_now
+from petsense.db import dialect_insert, iso_z, utc_now
 from petsense.db.models import Pet
 from petsense.db.models.agent import AgentTurn
 
 
 def deliver_background_message(session, pet_id, request_key, blocks, *, topic_id=None,
                                sources=None, now=None):
-    """落一条后台回合（幂等：request_key 已存在时返回既有回合）。返回 (turn, created)。"""
-    existing = session.execute(select(AgentTurn).where(
-        AgentTurn.pet_id == pet_id, AgentTurn.request_id == request_key)).scalar_one_or_none()
-    if existing is not None:
-        return existing, False
-    text = next((block.get('text') for block in blocks
-                 if isinstance(block, dict) and block.get('type') == 'text'), '')
-    turn = AgentTurn(pet_id=pet_id, request_id=request_key, text='', target='assistant',
-                     topic_id=topic_id, reply_to=None, reply=text, speaker='assistant',
-                     sources=json.dumps(sources or [], ensure_ascii=False),
-                     blocks=json.dumps(blocks, ensure_ascii=False),
-                     status='complete', created_at=now or utc_now())
-    session.add(turn)
-    session.flush()
-    return turn, True
+    """落一条后台回合（幂等：request_key 已存在时返回既有回合）。返回 (turn, created)。
+
+    用方言 upsert（pet_id, request_id 唯一键）而不是「先查后插」：并发同键写入时
+    各得一个幂等结果且只落一条回合，不重复交付。
+    """
+    values = {'pet_id': pet_id, 'request_id': request_key, 'text': '', 'target': 'assistant',
+              'topic_id': topic_id, 'reply_to': None,
+              'reply': next((block.get('text') for block in blocks
+                             if isinstance(block, dict) and block.get('type') == 'text'), ''),
+              'speaker': 'assistant',
+              'sources': json.dumps(sources or [], ensure_ascii=False),
+              'blocks': json.dumps(blocks, ensure_ascii=False),
+              'status': 'complete', 'created_at': now or utc_now()}
+    stmt = dialect_insert(session, AgentTurn).values(**values)
+    stmt = stmt.on_conflict_do_nothing(index_elements=['pet_id', 'request_id'])
+    result = session.execute(stmt)
+    if result.rowcount == 1:
+        return session.get(AgentTurn, result.inserted_primary_key[0]), True
+    existing = session.execute(select(AgentTurn.id).where(
+        AgentTurn.pet_id == pet_id, AgentTurn.request_id == request_key)).scalar_one()
+    return session.get(AgentTurn, existing), False
 
 
 def push_delivered(user_id, pet_id, turn):

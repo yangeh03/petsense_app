@@ -164,8 +164,8 @@ class ConfirmationTests(W08TestCase):
         self.assertEqual(task.current_version, 1)
         job = self._job()
         self.assertEqual(job.kind, 'task.checkpoint')
-        self.assertEqual(job.dedup_key, f'task:{task.id}')
-        self.assertEqual(json.loads(job.payload_json), {'taskId': task.id})
+        self.assertEqual(job.dedup_key, f'task:{task.id}:v1')
+        self.assertEqual(json.loads(job.payload_json), {'taskId': task.id, 'version': 1})
         # 重复决定幂等：不新建任务/作业
         self.assertEqual(self._decide(row.id).status_code, 200)
         with db.session_scope() as s:
@@ -250,8 +250,10 @@ class LifecycleTests(W08TestCase):
                    return_value={'decision': 'remind', 'text': '它走动超过两小时了',
                                  'run_id': None, 'error': None}):
             with db.session_scope() as s:
-                jobs.enqueue(s, task_service.CHECKPOINT_KIND, {'taskId': task.id},
-                             dedup_key=f'task:{task.id}', next_run_at=self.now)
+                jobs.enqueue(s, task_service.CHECKPOINT_KIND,
+                             {'taskId': task.id, 'version': task.current_version},
+                             dedup_key=f'task:{task.id}:v{task.current_version}',
+                             next_run_at=self.now)
             cancel = self.client.post(f'/api/app/agent/pets/{self.pet}/tasks/{task.id}/ops',
                                       json={'op': 'cancel'})
             self.assertEqual(cancel.status_code, 200)
@@ -572,8 +574,10 @@ class RecoveryTests(W08TestCase):
             with db.session_scope() as s:
                 t = s.get(AgentTask, task.id)
                 t.deadline_at = self.now
-                jobs.enqueue(s, task_service.CHECKPOINT_KIND, {'taskId': task.id},
-                             dedup_key=f'task:{task.id}', next_run_at=self.now)
+                jobs.enqueue(s, task_service.CHECKPOINT_KIND,
+                             {'taskId': task.id, 'version': task.current_version},
+                             dedup_key=f'task:{task.id}:v{task.current_version}',
+                             next_run_at=self.now)
             claimed = jobs.claim_due(now=self.now + timedelta(seconds=1))
             self.assertEqual(len(claimed), 1)
             self.assertEqual(jobs.recover_interrupted(), 1)  # 重启恢复
@@ -700,6 +704,167 @@ class BookAndSnapshotTests(W08TestCase):
             line = snapshot._tasks_line(s, pet)
         self.assertIn('目标', line)
         self.assertIn('截止', line)
+
+
+
+class CheckpointSchedulingRegressionTests(W08TestCase):
+    """W08 评审修复的确定性回归：续期重排、在途换版、幂等入队与计划异常保作业。"""
+
+    def _tick_to(self, when, limit=3):
+        return jobs.tick(now=when, limit=limit)
+
+    def _job_rows(self):
+        with db.session_scope() as s:
+            return s.execute(select(AgentJob).order_by(AgentJob.id)).scalars().all()
+
+    def _confirm_with_deadline(self, deadline):
+        plan = self._plan(deadlineAt=deadline.isoformat())
+        row, _ = self._propose(plan=plan)
+        self.assertEqual(self._decide(row.id).status_code, 200)
+        return self._task()
+
+    def test_renew_after_completion_rearms_checkpoint_job(self):
+        """已到期交付后再续期：必须真的排上新的检查点作业（旧版本作业已是 done）。"""
+        deadline = self.now + timedelta(hours=1)
+        task = self._confirm_with_deadline(deadline)
+        seed_minutes(self.uid, 'esp32-001',
+                     self.now.replace(minute=0, second=0, microsecond=0).astimezone(SHANGHAI), 1)
+        with patch('petsense.agent.checkpoint.evaluate',
+                   return_value={'decision': 'letter', 'text': '到期回信。', 'run_id': 1,
+                                 'error': None}):
+            self._tick_to(deadline + timedelta(seconds=1))
+        self.assertEqual(self._task().status, 'completed')
+        keys = [row.dedup_key for row in self._job_rows()]
+        self.assertEqual(keys, [f'task:{task.id}:v1'], '旧版本作业应为唯一一条且已完成')
+
+        # 续期（新版本）→ 新作业
+        row, _ = self._propose(action='renew', task_id=task.id, version=1)
+        self.assertEqual(self._decide(row.id).status_code, 200)
+        renewed = self._task()
+        self.assertEqual(renewed.status, 'observing')
+        self.assertEqual(renewed.current_version, 2)
+        keys = [row.dedup_key for row in self._job_rows()]
+        self.assertIn(f'task:{task.id}:v2', keys, '续期必须重新建立检查点作业')
+        v2 = next(row for row in self._job_rows() if row.dedup_key == f'task:{task.id}:v2')
+        self.assertEqual(v2.status, 'pending')
+        self.assertEqual(json.loads(v2.payload_json), {'taskId': task.id, 'version': 2})
+
+        # 新版本真的会被调度执行（不是只建了行）
+        with patch('petsense.agent.checkpoint.evaluate',
+                   return_value={'decision': 'continue', 'text': '', 'run_id': 2,
+                                 'error': None}) as evaluate:
+            self._tick_to(self.now + timedelta(minutes=2))
+            self.assertEqual(evaluate.call_count, 1)
+
+    def test_inflight_version_change_keeps_new_checkpoint(self):
+        """在途换版：旧版本结果作废，新版本作业独立存在并真的执行。"""
+        task = self._confirm_with_deadline(self.now + timedelta(days=1))
+        seed_minutes(self.uid, 'esp32-001',
+                     self.now.replace(minute=0, second=0, microsecond=0).astimezone(SHANGHAI), 1)
+        # 模拟在途：v1 作业已被领取（working）
+        claimed = jobs.claim_due(now=self.now + timedelta(seconds=1))
+        self.assertEqual(len(claimed), 1)
+        self.assertEqual(claimed[0]['payload']['version'], 1)
+        # 作业在途期间用户改计划 → v2
+        row, _ = self._propose(action='update', task_id=task.id, version=1)
+        self.assertEqual(self._decide(row.id).status_code, 200)
+        self.assertEqual(self._task().current_version, 2)
+        keys = [row.dedup_key for row in self._job_rows()]
+        self.assertIn(f'task:{task.id}:v2', keys, '换版必须排上新版本作业')
+        # 旧作业作废（重启恢复后按 pending 重领 → 版本已变，结果丢弃）
+        jobs.recover_interrupted()
+        with patch('petsense.agent.checkpoint.evaluate',
+                   return_value={'decision': 'letter', 'text': '旧版本回信。', 'run_id': 3,
+                                 'error': None}) as evaluate:
+            self._tick_to(self.now + timedelta(minutes=2))
+        # 只有新版本执行了检查点，旧版本结果不投递
+        self.assertEqual(evaluate.call_count, 1)
+        with db.session_scope() as s:
+            deliveries = s.execute(select(AgentTaskDelivery)).scalars().all()
+            self.assertEqual(deliveries, [], '换版前的在途结果不得交付')
+
+    def test_plan_read_failure_keeps_job_pending(self):
+        """计划读取异常：作业保留并退避重排，不被静默结束。"""
+        task = self._confirm_with_deadline(self.now + timedelta(days=1))
+        with patch('petsense.agent.tasks.plan_of', side_effect=task_service.TaskError('计划缺失', status=500)):
+            self._tick_to(self.now + timedelta(minutes=2))
+        rows = self._job_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0].status, 'pending', '作业应保留待重试，不得静默结束')
+        self.assertGreater(rows[0].next_run_at, self.now + timedelta(minutes=2))
+
+    def test_concurrent_enqueue_same_key_is_idempotent(self):
+        """并发同键入队：只落一条作业（方言 upsert，不是先查后插）。"""
+        with db.session_scope() as s:
+            first, created_first = jobs.enqueue(
+                s, task_service.CHECKPOINT_KIND, {'taskId': 1, 'version': 1},
+                dedup_key='task:1:v1', next_run_at=self.now)
+        self.assertTrue(created_first)
+        with db.session_scope() as s:
+            second, created_second = jobs.enqueue(
+                s, task_service.CHECKPOINT_KIND, {'taskId': 1, 'version': 1},
+                dedup_key='task:1:v1', next_run_at=self.now)
+        self.assertFalse(created_second)
+        self.assertEqual(first, second)
+        with db.session_scope() as s:
+            self.assertEqual(len(s.execute(select(AgentJob)).scalars().all()), 1)
+
+    def test_concurrent_background_delivery_same_key_is_idempotent(self):
+        """并发同键后台交付：只落一条回合（稳定 request key 去重）。"""
+        from petsense.agent import deliver as deliver_service
+        blocks = [{'type': 'text', 'speaker': 'assistant', 'text': '提醒正文。'}]
+        with db.session_scope() as s:
+            turn_one, created_one = deliver_service.deliver_background_message(
+                s, self.pet, 'task-999', blocks, now=self.now)
+        with db.session_scope() as s:
+            turn_two, created_two = deliver_service.deliver_background_message(
+                s, self.pet, 'task-999', blocks, now=self.now)
+        self.assertTrue(created_one)
+        self.assertFalse(created_two)
+        self.assertEqual(turn_one.id, turn_two.id)
+        with db.session_scope() as s:
+            self.assertEqual(len(s.execute(select(AgentTurn).where(
+                AgentTurn.request_id == 'task-999')).scalars().all()), 1)
+
+
+class PlanValidationRegressionTests(W08TestCase):
+    """计划归一化的边界回归：非法时间与非法数值一律拒绝，绝不静默改值。"""
+
+    def test_invalid_explicit_deadline_rejected(self):
+        for value in ('昨天', 'not-a-date', '', 12345, None):
+            fields = {'kind': 'fact_watch', 'question': '它今天走动吗', 'feature': 'actions',
+                      'deadlineAt': value}
+            if value in (None, ''):
+                # 空值按缺省处理（3 天），不是非法输入
+                payload = task_service.normalize_plan(fields, now=self.now)
+                self.assertEqual(task_service.iso_z_parse(payload['deadlineAt'])
+                                 - task_service.iso_z_parse(payload['startAt']),
+                                 timedelta(days=3))
+                continue
+            with self.assertRaises(task_service.TaskError):
+                task_service.normalize_plan(fields, now=self.now)
+
+    def test_past_deadline_rejected(self):
+        with self.assertRaises(task_service.TaskError):
+            task_service.normalize_plan({'kind': 'fact_watch', 'question': '过期委托',
+                                         'feature': 'actions',
+                                         'deadlineAt': (self.now - timedelta(hours=1)).isoformat()},
+                                        now=self.now)
+
+    def test_non_finite_threshold_rejected(self):
+        for value in (float('nan'), float('inf'), -1, True, '5', None):
+            with self.assertRaises(task_service.TaskError):
+                task_service.normalize_plan({
+                    'kind': 'fact_watch', 'question': '阈值委托', 'feature': 'actions',
+                    'condition': {'metric': 'walkSeconds', 'op': 'at_least', 'value': value,
+                                  'scope': 'window'}}, now=self.now)
+
+    def test_sound_event_count_keeps_integer_precision(self):
+        payload = task_service.normalize_plan({
+            'kind': 'fact_watch', 'question': '叫太多次就提醒', 'feature': 'sounds',
+            'condition': {'metric': 'soundEventCount', 'op': 'at_least', 'value': 3,
+                          'scope': 'daily'}}, now=self.now)
+        self.assertEqual(payload['condition']['value'], 3)
 
 
 def plan_of_db(task):

@@ -15,13 +15,14 @@
 """
 import json
 import logging
+import math
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
 from petsense.db import iso_z, utc_now
-from petsense.db.models import Device, Pet
+from petsense.db.models import Device, Pet, TelemetryMinute
 from petsense.db.models.agent import AgentCareTopic, CareDeviceState, CarePetState
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,7 @@ BATTERY_RESOLVE_ABOVE = 25
 BATTERY_TRIGGER_FRAMES = 3
 BATTERY_RESOLVE_FRAMES = 3
 INVALID_TRIGGER_FRAMES = 90   # ≈3 分钟（按实际上报节拍计帧）
+INVALID_STREAK_GAP_S = 30     # 节拍间隔超过此值视为断连：连续无效计数不跨断连累计
 STALE_AFTER_S = 30            # 失联：最后已收帧超过 30 秒
 STABLE_CONNECTION_S = 30      # 启动/重连保护：连接稳定满 30 秒后才判失联
 EVIDENCE_LIMIT = 20           # 主题依据列表上限（保留最新）
@@ -224,14 +226,17 @@ def set_replay_mode(active):
 
 
 def _battery_qualified(payload):
-    """合格电量帧：battery.found 且 percent 为数值。"""
+    """合格电量帧：battery.found 且 percent 为范围内的有限数值。"""
     battery = payload.get('battery')
     if not isinstance(battery, dict) or not battery.get('found'):
         return None
     percent = battery.get('percent')
-    if not isinstance(percent, (int, float)) or isinstance(percent, bool):
+    if isinstance(percent, bool) or not isinstance(percent, (int, float)):
         return None
-    return float(percent)
+    percent = float(percent)
+    if not math.isfinite(percent) or percent < 0 or percent > 100:
+        return None  # 畸形读数不计作合格帧（不推进越界计数，也不算明确回稳）
+    return percent
 
 
 def observe_frame(session, device_id, owner_id, payload, received_at):
@@ -313,7 +318,7 @@ def observe_frame(session, device_id, owner_id, payload, received_at):
 
     # 长期无效读数规则：缺字段不计作明确无效（既不累积也不回稳）
     health = payload.get('health')
-    if isinstance(health, dict) and 'valid' in health:
+    if isinstance(health, dict) and isinstance(health.get('valid'), bool):
         frame_note['healthValid'] = bool(health.get('valid'))
         if health.get('valid') is True:
             row.invalid_streak = 0
@@ -349,6 +354,13 @@ def observe_frame(session, device_id, owner_id, payload, received_at):
     if stale_row is not None and recover_topic(stale_row, received_at):
         append_evidence(stale_row, {'at': iso_z(received_at), 'kind': 'recover',
                                     'note': '重新收到设备帧'})
+
+    # 断连后重新上线：连续无效计数不再跨断连累计（连续口径要求节拍相接）
+    if row.last_frame_at is not None and row.invalid_streak:
+        gap = (received_at - row.last_frame_at).total_seconds()
+        if gap > INVALID_STREAK_GAP_S:
+            row.invalid_streak = 0
+            row.invalid_first_at = None
 
     row.last_frame_at = received_at
     row.frames_seen += 1
@@ -521,6 +533,32 @@ def due_reviews(session, pet, now):
 def device_bound_pet(session, pet):
     """调度资格：绑定了设备的宠物（观测都经设备而来，spec §2 D1）。"""
     return bool(pet.device_id)
+
+
+RECENT_OBSERVATION_DAYS = 7    # 「真实可用观测」的近期窗口（无当前绑定时用）
+
+
+def review_eligible(session, pet, now=None):
+    """D1 调度资格：真实可用观测 **或** 当前设备绑定。
+
+    - 当前绑定：设备仍在本用户名下（devices.owner_id == pet.user_id）。
+    - 真实可用观测：严格归属本用户名与本宠设备号的近期观测（不把已释放设备的
+      历史算给新主人：观测查询本身按 owner_id + device_id 过滤）。
+    - 设备已被别人认领（owner_id 不同）时既不算绑定也不采用其历史观测。
+    """
+    now = now or utc_now()
+    if not pet.device_id:
+        return False
+    device = session.get(Device, pet.device_id)
+    if device is not None:
+        if device.owner_id != pet.user_id:
+            return False
+        return True
+    since = now - timedelta(days=RECENT_OBSERVATION_DAYS)
+    owned = session.execute(select(TelemetryMinute.minute).where(
+        TelemetryMinute.owner_id == pet.user_id, TelemetryMinute.device_id == pet.device_id,
+        TelemetryMinute.minute >= since).limit(1)).scalar_one_or_none()
+    return owned is not None
 
 
 # ── 事件事实组装（供事件运行与降级文案） ─────────────────────────────────────

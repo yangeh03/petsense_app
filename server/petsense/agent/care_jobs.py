@@ -3,10 +3,17 @@
 全部注册到 W08 持久作业队列（jobs.register_handler），复用其去重、租约、退避与
 重启恢复——本包不自建调度。scan 周期自排（返回 next_run_at 保持 pending），负责：
 宠物启用水位、周期回顾窗口入队、失联扫描与学习完成转换；review/event 为一次性
-作业：组装确定性事实 → loop.run_background（统一循环的后台形态）→ 服务端校验
-（主体、窗口、主题引用、交付预算）→ 按助手设定交付（deliver_background_message
-稳定 request key 去重，提交后推 WS 帧）。模型不可用或输出不合法时按事实降级
-（W04 facts-only 同语义），状态如实入轨迹。
+作业：组装确定性事实 → loop.run_structured（V11 统一循环的后台形态，与 W08 检查点
+共用同一有界模型回合）→ 服务端校验（主体、窗口、主题引用、主动程度、交付预算）
+→ 按助手设定交付（deliver_background_message 稳定 request key 去重，提交后推 WS 帧）。
+模型不可用或输出不合法时按事实降级（W04 facts-only 同语义），状态如实入轨迹。
+
+交付门槛（spec §2 D2，代码强制档位、模型判断相关性）：
+- 安静档（0）不发任何主动会话消息；
+- 标准档（1）只发高相关发现与关键设备事实；
+- 多提醒档（2）可发非紧急但有依据的发现。
+回顾消息必须绑定到「新的或实质更新的授权证据」：只有开了新主题的发现才算授权证据；
+与既有主题同锚点的重复提报只更新主题、不再发消息（日/周回顾不重复提报同一事件）。
 """
 import json
 import logging
@@ -36,11 +43,16 @@ _REVIEW_SYSTEM = (
     '覆盖不足的时间段如实说明，不推断为异常、活动减少或健康问题；'
     '按主人设置的主动程度把握分寸。'
     '输出 JSON：{"say": "给主人看的回顾消息（没事可说时为空字符串）", '
+    '"level": "high或normal", '
     '"findings": [{"category": "walk_volume|sound_events|coverage|observation|other", '
-    '"anchor": "同一事件的自然键（小写英文与数字，跨天指同一件事时保持一致）", '
+    '"anchor": "同一事件的自然键（小写英文与数字；跨天指同一件事时保持一致）", '
     '"title": "短标题", "text": "这条发现的一句说明"}]}。'
+    'say 中不要罗列全部数字，挑值得说的说。'
+    'level=high 表示值得现在打扰主人（异常、里程碑、主人关心的事）；'
+    'level=normal 是一般发现，只有多提醒档才会主动发出。'
     'findings 为空数组表示零发现；已在「近期主题」里报告过的事不要作为新发现重复提报，'
-    '确有新进展时沿用同一 anchor。say 中不要罗列全部数字，挑值得说的说。')
+    '确有新进展时沿用同一 anchor。'
+    '每条消息都要有对应的发现支撑：没有发现就不要写 say。')
 
 _EVENT_SYSTEM = (
     '任务：就一条已确认的设备/学习事实写主动提醒。事实与依据由系统给出，不可更改；'
@@ -48,13 +60,6 @@ _EVENT_SYSTEM = (
     '低电/失联/读数无效是关键设备事实，通常值得提醒；轻微或已快恢复的可以建议不打扰。'
     '语气自然简短，说明依据时间（如「刚才」「今早」），不使用原始字段名。'
     '输出 JSON：{"say": "给主人的提醒文案", "disturb": true|false}。')
-
-
-def _run_background_form(pet_id, user_id, form, system_extra, task, trigger, settings):
-    """统一循环的后台形态往返；异常向上抛由作业层退避重试。"""
-    context = {'pet_id': pet_id, 'user_id': user_id, 'form': form, 'task': task,
-               'system_extra': system_extra, 'trigger': trigger, 'settings': settings}
-    return loop.run_background(context)
 
 
 def _parse_task_json(text):
@@ -77,6 +82,24 @@ def _parse_task_json(text):
     return value if isinstance(value, dict) else None
 
 
+def _parse_review_payload(text):
+    """回顾输出的结构化解析回调：返回 (payload|None, 是否合法)。"""
+    value = _parse_task_json(text)
+    if value is None:
+        return None, False
+    if not isinstance(value.get('findings', []), list):
+        return None, False
+    return value, True
+
+
+def _parse_event_payload(text):
+    """事件输出的结构化解析回调：返回 (payload|None, 是否合法)。"""
+    value = _parse_task_json(text)
+    if value is None:
+        return None, False
+    return value, True
+
+
 # ── scan：周期自排的调度扫描 ────────────────────────────────────────────────
 
 def handle_scan(job, now):
@@ -84,9 +107,11 @@ def handle_scan(job, now):
     with session_scope() as s:
         pets = s.execute(select(Pet)).scalars().all()
         for pet in pets:
-            care.ensure_pet_state(s, pet, now)
-            if not care.device_bound_pet(s, pet):
+            # D1 调度资格：真实可用观测或当前绑定；不合格的宠物不落启用水位，
+            # 之后变为合格时水位从那一刻起算（不回补任意历史）。
+            if not care.review_eligible(s, pet, now):
                 continue
+            care.ensure_pet_state(s, pet, now)
             for plan in care.due_reviews(s, pet, now):
                 jobs.enqueue(s, REVIEW_KIND,
                              {'pet': pet.id, 'kind': plan['kind'], 'key': plan['key'],
@@ -160,16 +185,25 @@ def _review_fallback_text(facts):
     return '\n'.join(lines)
 
 
-def _validate_findings(payload, pet_id, session):
-    """校验模型发现：类别白名单、锚点归一、主题引用同主体、锚点去重与交付预算。
+def _observation_topic(session, pet_id, anchor):
+    """按锚点查既有观测主题（跨类别只看锚点：同一事实不因分类不同而重复开题）。"""
+    return session.execute(select(AgentCareTopic).where(
+        AgentCareTopic.pet_id == pet_id, AgentCareTopic.kind == 'observation',
+        AgentCareTopic.anchor == anchor,
+        AgentCareTopic.status.in_(('open', 'ongoing')))).scalars().first()
 
-    返回 (findings, merged_anchors)：merged 为已被既有已交付主题承接（沿用同一
-    anchor 的开放主题）而不重复提报的锚点。
+
+def _validate_findings(payload, pet_id, session, now=None):
+    """校验模型发现：类别白名单、锚点归一、同锚点去重与交付预算。
+
+    返回 (new_findings, merged_anchors)：new_findings 为开了新主题的发现（授权证据），
+    merged_anchors 为与既有主题同锚点的重复提报（只更新主题，不再发消息）。
     """
+    now = now or utc_now()
     raw = payload.get('findings') if isinstance(payload, dict) else None
     if not isinstance(raw, list):
         return [], []
-    findings, anchors, merged = [], [], []
+    findings, merged = [], []
     for item in raw:
         if not isinstance(item, dict):
             continue
@@ -178,16 +212,12 @@ def _validate_findings(payload, pet_id, session):
         text = str(item.get('text') or '').strip()[:300]
         if not anchor or not text:
             continue
-        if anchor in anchors:
+        if any(f['anchor'] == anchor for f in findings) or anchor in merged:
             continue
-        anchors.append(anchor)
-        existing = session.execute(select(AgentCareTopic).where(
-            AgentCareTopic.pet_id == pet_id, AgentCareTopic.kind == 'observation',
-            AgentCareTopic.anchor == anchor,
-            AgentCareTopic.status.in_(('open', 'ongoing')))).scalar_one_or_none()
+        existing = _observation_topic(session, pet_id, anchor)
         if existing is not None:
             merged.append(anchor)
-            care.append_evidence(existing, {'at': iso_z(utc_now()), 'kind': 'review',
+            care.append_evidence(existing, {'at': iso_z(now), 'kind': 'review',
                                             'note': text[:120]})
             continue
         findings.append({'category': category, 'anchor': anchor,
@@ -197,47 +227,76 @@ def _validate_findings(payload, pet_id, session):
     return findings, merged
 
 
+def _relevance(payload, findings):
+    """消息相关性：模型标注优先；未标注时按发现的重要度推断（默认按重要处理）。"""
+    level = payload.get('level') if isinstance(payload, dict) else None
+    if level in ('high', 'normal'):
+        return level
+    levels = [item.get('level') for item in findings if item.get('level') in ('high', 'normal')]
+    if 'high' in levels:
+        return 'high'
+    if levels:
+        return 'normal'
+    return 'high'
+
+
 def handle_review(job, now):
     payload = job['payload']
     with session_scope() as s:
         pet = s.get(Pet, payload['pet'])
-        if pet is None or not care.device_bound_pet(s, pet):
-            return  # 归属或绑定变化后不再回顾（窗口作业自然完成）
+        if pet is None or not care.review_eligible(s, pet, now):
+            return  # 归属、绑定或资格变化后不再回顾（窗口作业自然完成）
         settings = settings_service.load(s, pet.user_id)
         facts = review_facts(s, pet,
                              _parse_iso(payload['windowStart']), _parse_iso(payload['windowEnd']))
+    proactivity = settings.get('proactivity', 1)
     task = ('宠物：%s（%s）\n窗口：%s 至 %s\n回顾事实（JSON）：\n%s\n'
             '主人主动程度：%s（0=安静不发主动消息，1=标准只说高相关，2=多提醒可含非紧急但有依据的发现）\n'
             '请按任务说明输出 JSON。'
             % (pet.name, pet.species or '', payload['windowStart'], payload['windowEnd'],
-               json.dumps(facts, ensure_ascii=False), settings.get('proactivity', 1)))
-    trigger = {'kind': payload['kind'], 'window': payload['key'], 'petId': pet.id}
+               json.dumps(facts, ensure_ascii=False), proactivity))
+    trigger = {'kind': payload['kind'], 'window': payload['key'], 'petId': pet.id,
+               'windowStart': payload['windowStart'], 'windowEnd': payload['windowEnd'],
+               'scheduledAt': payload.get('scheduledAt')}
     degraded, say, findings, merged = [], '', [], []
-    trace = {'form': registry.REVIEW, 'trigger': trigger, 'messages': [{'task': task[:600]}],
-             'tool_summary': [], 'budget': {}, 'degraded': []}
-    try:
-        outcome = _run_background_form(pet.id, pet.user_id, registry.REVIEW,
-                                       _REVIEW_SYSTEM, task, trigger, settings)
-        trace = outcome['trace']
-        payload_json = _parse_task_json(outcome['text'])
-        degraded = list(outcome['degraded'])
-        if payload_json is None:
+    relevance = 'high'
+    outcome = loop.run_structured({
+        'pet_id': pet.id, 'user_id': pet.user_id, 'form': registry.REVIEW,
+        'system': _REVIEW_SYSTEM, 'task': task, 'settings': settings, 'trigger': trigger,
+        'parse': _parse_review_payload,
+        'retry_instruction': '上一次输出不是合法的回顾 JSON。重新输出：'
+                              '{"say":"…","level":"high或normal","findings":[…]}，不要其他文字。',
+    })
+    trace = outcome['trace']
+    degraded = list(outcome['degraded'])
+    if outcome['error']:
+        degraded.append(outcome['error'])
+    payload_json = outcome['value']
+    if payload_json is None:
+        if 'model_invalid_output' not in degraded and 'model_unavailable' not in degraded:
             degraded.append('task_json_invalid')
-            say = _review_fallback_text(facts)
-        else:
-            say = str(payload_json.get('say') or '').strip()
-            with session_scope() as s:
-                findings, merged = _validate_findings(payload_json, pet.id, s)
-    except Exception:
-        logger.exception('care review model run failed for pet %s', pet.id)
-        degraded.append('model_unavailable')
         say = _review_fallback_text(facts)
+        # 降级文案只报窗口事实；窗口没有任何观测时只留轨迹不发消息（无数据不打扰）
+        authorized = facts['coveredDays'] > 0
+    else:
+        say = str(payload_json.get('say') or '').strip()
+        with session_scope() as s:
+            findings, merged = _validate_findings(payload_json, pet.id, s, now=now)
+        relevance = _relevance(payload_json, findings)
+        # 授权证据 = 开了新主题的发现（与既有主题同锚点的重复提报不再发消息）
+        authorized = bool(findings)
+    deliverable = bool(say) and authorized and proactivity > 0 and (
+        proactivity >= 2 or relevance == 'high')
     status = 'degraded' if degraded else 'complete'
     trace['trigger'] = trigger
     trace['degraded'] = degraded
     trace['conclusion'] = {'reason_code': 'degraded:' + ','.join(degraded) if degraded else 'ok',
-                           'window': payload['key'], 'findings': len(findings), 'mergedAnchors': merged}
-    trace['snapshot'] = {'reviewFacts': facts}
+                           'window': payload['key'], 'findings': len(findings),
+                           'mergedAnchors': merged, 'proactivity': proactivity,
+                           'relevance': relevance, 'authorized': bool(authorized),
+                           'delivered': bool(deliverable),
+                           'coveredDays': facts['coveredDays'], 'totalDays': facts['totalDays']}
+    trace['snapshot'] = {'reviewFacts': facts, 'settings': {'proactivity': proactivity}}
     run_id = runs.save(pet.id, None, trace, status)
     delivered = None
     with session_scope() as s:
@@ -246,7 +305,7 @@ def handle_review(job, now):
                             severity='info', title=finding['title'], detail=finding['text'],
                             evidence=[{'at': iso_z(now), 'kind': 'review', 'note': finding['text'][:120],
                                        'window': payload['key']}], now=now)
-        if settings.get('proactivity', 1) > 0 and say:
+        if deliverable:
             blocks = [{'type': 'text', 'speaker': 'assistant', 'text': say},
                       {'type': 'care', 'care': {'kind': 'review', 'category': payload['kind'],
                                                 'title': '周期回顾', 'status': 'info',
@@ -277,42 +336,48 @@ def handle_event(job, now):
         settings = settings_service.load(s, pet.user_id)
         state_row = s.get(CareDeviceState, topic.anchor) if topic.kind == 'device' else None
         facts = care.event_facts(topic, state_row)
+    proactivity = settings.get('proactivity', 1)
     task = ('宠物：%s\n事件事实（JSON）：\n%s\n阶段：%s\n主人主动程度：%s\n请按任务说明输出 JSON。'
             % (pet.name, json.dumps(facts, ensure_ascii=False), payload.get('phase'),
-               settings.get('proactivity', 1)))
+               proactivity))
     trigger = {'kind': 'event', 'category': topic.category, 'phase': payload.get('phase'),
                'topicId': topic.id, 'petId': pet.id}
     degraded, say, disturb = [], '', True
-    trace = {'form': registry.EVENT, 'trigger': trigger, 'messages': [{'task': task[:600]}],
-             'tool_summary': [], 'budget': {}, 'degraded': []}
-    try:
-        outcome = _run_background_form(pet.id, pet.user_id, registry.EVENT, _EVENT_SYSTEM, task,
-                                       trigger, settings)
-        trace = outcome['trace']
-        degraded = list(outcome['degraded'])
-        payload_json = _parse_task_json(outcome['text'])
-        if payload_json is None:
+    outcome = loop.run_structured({
+        'pet_id': pet.id, 'user_id': pet.user_id, 'form': registry.EVENT,
+        'system': _EVENT_SYSTEM, 'task': task, 'settings': settings, 'trigger': trigger,
+        'parse': _parse_event_payload,
+        'retry_instruction': '上一次输出不是合法的事件 JSON。重新输出：'
+                              '{"say":"…","disturb":true或false}，不要其他文字。',
+    })
+    trace = outcome['trace']
+    degraded = list(outcome['degraded'])
+    if outcome['error']:
+        degraded.append(outcome['error'])
+    payload_json = outcome['value']
+    if payload_json is None:
+        if 'model_invalid_output' not in degraded and 'model_unavailable' not in degraded:
             degraded.append('task_json_invalid')
-            say = care.deterministic_event_text(topic, payload.get('phase'))
-        else:
-            say = str(payload_json.get('say') or '').strip() or \
-                care.deterministic_event_text(topic, payload.get('phase'))
-            disturb = payload_json.get('disturb')
-            if not isinstance(disturb, bool):
-                disturb = True
-    except Exception:
-        logger.exception('care event model run failed for topic %s', topic.id)
-        degraded.append('model_unavailable')
         say = care.deterministic_event_text(topic, payload.get('phase'))
+        disturb = True
+    else:
+        say = str(payload_json.get('say') or '').strip() or \
+            care.deterministic_event_text(topic, payload.get('phase'))
+        disturb = payload_json.get('disturb')
+        if not isinstance(disturb, bool):
+            disturb = True
     status = 'degraded' if degraded else 'complete'
     trace['trigger'] = trigger
     trace['degraded'] = degraded
     trace['conclusion'] = {'reason_code': 'degraded:' + ','.join(degraded) if degraded else 'ok',
-                           'disturb': disturb, 'delivered': bool(say)}
-    trace['snapshot'] = {'eventFacts': facts}
+                           'disturb': disturb, 'proactivity': proactivity,
+                           'category': topic.category, 'phase': payload.get('phase'),
+                           'delivered': bool(say)}
+    trace['snapshot'] = {'eventFacts': facts, 'settings': {'proactivity': proactivity}}
     run_id = runs.save(pet.id, None, trace, status)
-    # 交付决策归代码：安静档一律不发；标准/多提醒尊重模型的「不值得打扰」，降级时事实关键默认发
-    proactivity = settings.get('proactivity', 1)
+    # 交付决策归代码 + 模型判断：安静档一律不发；其余两档由模型判断「是否值得
+    # 此刻打扰」（disturb=false 不交付）。档位差异主要体现在周期回顾发现的取舍
+    # （标准档只发高相关，多提醒档可发一般发现）。
     deliverable = bool(say) and proactivity > 0 and disturb is not False
     delivered_turn = None
     with session_scope() as s:

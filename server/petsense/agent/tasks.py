@@ -12,6 +12,7 @@ apply_proposal；委托簿内暂停/恢复/取消直接生效（D3）。交付�
 只计 observing_since 之后的覆盖。
 """
 import json
+import math
 import secrets
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -50,6 +51,18 @@ PAUSED_POLL = timedelta(minutes=15)
 WAIT_BASELINE_POLL = timedelta(minutes=15)
 
 CHECKPOINT_KIND = 'task.checkpoint'
+CHECKPOINT_RETRY_DELAY = timedelta(minutes=5)   # 计划读取异常时保留作业并退避重排
+
+
+def checkpoint_key(task_id, version):
+    """检查点作业的稳定键：按委托版本分键。
+
+    版本分键让「已到期交付后再续期」能重新建作业（旧版本的作业已是 done 行，
+    复用同一键只会拿到那条已完成记录，新版本永远等不到检查点），也让在途换版
+    时旧版本作业作废、新版本作业独立存在，互不吞掉。
+    """
+    return f'task:{task_id}:v{version}'
+
 
 # 交付事务提交后待推的 WS 帧（事务内不推 WS；handle_checkpoint_job 出事务后统一 flush）
 _PENDING_PUSHES = []
@@ -128,8 +141,9 @@ def normalize_plan(fields, now=None):
             if fixed.get('op') not in ('at_least', 'at_most'):
                 errors.append('op 需为 at_least / at_most')
             value = fixed.get('value')
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
-                errors.append('value 需为非负数值')
+            if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                    or not math.isfinite(value) or value < 0:
+                errors.append('value 需为有限非负数值')
             elif metric == 'soundEventCount' and isinstance(value, float):
                 fixed['value'] = int(value)
             if fixed.get('scope') not in ('window', 'daily'):
@@ -417,8 +431,8 @@ def _create_task(session, pet, row, plan, now):
                               payload=json.dumps(plan, ensure_ascii=False),
                               proposal_id=row.id, created_at=now))
     session.flush()
-    jobs.enqueue(session, CHECKPOINT_KIND, {'taskId': task.id},
-                 dedup_key=f'task:{task.id}', next_run_at=now)
+    jobs.enqueue(session, CHECKPOINT_KIND, {'taskId': task.id, 'version': 1},
+                 dedup_key=checkpoint_key(task.id, 1), next_run_at=now)
     return task
 
 
@@ -436,15 +450,18 @@ def _append_version(session, task, row, plan, now, renew):
     task.deadline_at = iso_z_parse(plan['deadlineAt'])
     task.effective_from = max(iso_z_parse(plan['startAt']), task.effective_from, now)
     task.due_attempts = 0
+    task.last_check_at = None     # 新版本重新起算节流与水位（否则旧版本会压住新版本）
+    task.watermark_at = None
     task.updated_at = now
     if task.status == 'completed':  # 续期重启观察（历史回信保留）
         task.status = 'observing'
         task.ended_at = None
         task.end_reason = None
-        jobs.enqueue(session, CHECKPOINT_KIND, {'taskId': task.id},
-                     dedup_key=f'task:{task.id}', next_run_at=now)
     elif task.status == 'waiting_baseline':
         task.effective_from = now  # 新版本等待期重新起算
+    # 每个版本一条检查点作业：续期（已完成→观察中）与在途换版都会真的排上新的作业
+    jobs.enqueue(session, CHECKPOINT_KIND, {'taskId': task.id, 'version': version},
+                 dedup_key=checkpoint_key(task.id, version), next_run_at=now)
     return task
 
 
@@ -480,7 +497,7 @@ def _transition(session, task, op, now):
         task.status = 'cancelled'
         task.ended_at = now
         task.end_reason = 'cancelled'
-        jobs.cancel(session, f'task:{task.id}')
+        jobs.cancel_prefix(session, f'task:{task.id}:')
     task.updated_at = now
     return task
 
@@ -511,20 +528,32 @@ def handle_checkpoint_job(job, now=None):
     """
     from petsense.agent import checkpoint as checkpoint_runner
     now = now or utc_now()
-    task_id = (job.get('payload') or {}).get('taskId')
+    payload = job.get('payload') or {}
+    task_id = payload.get('taskId')
+    job_version = payload.get('version')
+    ctx = None
     with session_scope() as session:
-        ctx = None
         task = session.get(AgentTask, task_id)
-        if task is not None and task.status not in ('cancelled', 'completed'):
-            pet = session.get(Pet, task.pet_id)
-            if pet is not None:
-                try:
-                    plan = plan_of(session, task)
-                    ctx = _plan_phase(session, task, pet, plan, now)
-                except TaskError:
-                    ctx = None
-    if ctx is None or ctx['mode'] == 'skip':
-        return {'next_run_at': ctx['reschedule']} if ctx else None
+        if task is None or task.status in ('cancelled', 'completed'):
+            return None  # 委托已结束：作业完成
+        if job_version is not None and task.current_version != job_version:
+            # 在途换版：旧版本作业的结果作废（spec §3 提交前复核换版）；
+            # 新版本在换版时已排了自己的作业，不会因这里被吞掉。
+            return None
+        pet = session.get(Pet, task.pet_id)
+        if pet is None:
+            return None
+        try:
+            plan = plan_of(session, task)
+            ctx = _plan_phase(session, task, pet, plan, now)
+        except TaskError:
+            ctx = None
+    if ctx is None:
+        # 计划读取异常：保留作业并退避重排，不静默结束（否则委托再无检查点）
+        return {'next_run_at': now + CHECKPOINT_RETRY_DELAY}
+    if ctx['mode'] == 'skip':
+        # 跳过模式只重排，不进入交付阶段（_commit_phase 读 ctx['plan']）
+        return {'next_run_at': ctx['reschedule']}
     outcome = checkpoint_runner.evaluate(ctx, now)  # 模型失败不抛：decision=None 带 error
     with session_scope() as session:
         task = session.get(AgentTask, task_id)
