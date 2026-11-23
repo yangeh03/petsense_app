@@ -296,14 +296,15 @@ class SnapshotMemorySectionTests(unittest.TestCase):
             snap = snapshot.assemble(s, pet, utc_now())
         self.assertIn('门口踱步', snap['sections']['memory'])
         self.assertEqual(snap['meta']['trimmed'], [])
-        # 直接对 _trim 断言裁剪顺序：learning → memory → current.secondary，核心项永不裁
+        # 直接对 _trim 断言裁剪顺序：learning → tasks → memory → current.secondary，核心项永不裁（W08 加 tasks 行）
         sections = {'profile': {'name': '长' * 520},
                     'current': {'action': '走动', 'online': False, 'ageSeconds': 5,
                                 'batteryPercent': 88, 'receivedAt': '2026-11-22T00:00:00Z'},
                     'learning': '学' * 100, 'memory': '认' * 80,
+                    'tasks': '目' * 60,
                     'now': {'shanghai': '2026-11-22T20:00:00', 'utc': '2026-11-22T12:00:00Z'}}
         trimmed = snapshot._trim(sections)
-        self.assertEqual(trimmed, ['learning', 'memory', 'current.secondary'])
+        self.assertEqual(trimmed, ['learning', 'tasks', 'memory', 'current.secondary'])
         self.assertNotIn('learning', sections)
         self.assertNotIn('memory', sections)
         self.assertIn('action', sections['current'])

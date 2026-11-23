@@ -27,11 +27,13 @@ from petsense.uwb.service import service as uwb_service
 from sqlalchemy import func, select
 
 DIALOGUE = 'dialogue'
+CHECKPOINT = 'checkpoint'  # W08 检查点形态：仅事实读取工具可用（agent-w08-spec.md §3）
 FACT_READ = 'fact_read'
 MEMORY = 'memory'
 PROFILE = 'profile'      # 确认门组（W03）：明确指令直写 / 候选确认卡，两路径在执行器内（agent-w03-spec.md §3.4）
 SETTINGS = 'settings'    # 直写组（W03）：助手设定，明确指令即改即回显
 EXTERNAL_READ = 'external_read'  # W06：公网网页深读（联网知识组）
+TASK = 'task'            # W08 委托组：read_task 只读 / propose_task_change 只生成候选（P00 §5）
 TOOL_TIMEOUT_S = 15.0
 
 _TOOLS = {}
@@ -107,7 +109,7 @@ register(ToolSpec(
         'granularity': {'type': 'string', 'enum': ['minute', 'summary'],
                         'description': 'minute=分钟汇总（默认）；summary=仅窗口总量'}},
         'required': ['start', 'end'], 'additionalProperties': False},
-    group=FACT_READ, forms=(DIALOGUE,), execute=_execute_query_observations))
+    group=FACT_READ, forms=(DIALOGUE, CHECKPOINT), execute=_execute_query_observations))
 
 
 def _execute_read_baseline(args, context):
@@ -137,7 +139,7 @@ register(ToolSpec(
                     'description': '维度：actions=动作（走动），sounds=声音（叫声等事件）'},
         'date': {'type': 'string', 'description': '对比日期，上海日期 YYYY-MM-DD，缺省今天'}},
         'additionalProperties': False},
-    group=FACT_READ, forms=(DIALOGUE,), execute=_execute_read_baseline))
+    group=FACT_READ, forms=(DIALOGUE, CHECKPOINT), execute=_execute_read_baseline))
 
 
 def _bucket_actions(rows, start):
@@ -483,6 +485,104 @@ register(ToolSpec(
         'url': {'type': 'string', 'description': '要读取的网页地址（http/https 绝对地址）'}},
         'required': ['url'], 'additionalProperties': False},
     group=EXTERNAL_READ, forms=(DIALOGUE,), execute=_execute_read_web_page, timeout_s=20.0))
+
+
+def _execute_read_task(args, context):
+    task_id = args.get('taskId')
+    if task_id is not None and (isinstance(task_id, bool) or not isinstance(task_id, int)):
+        return {'error': 'taskId 需为整数'}
+    with session_scope() as s:
+        pet = _pet_of(s, context)
+        from petsense.agent import tasks as task_service
+        return task_service.read_tool_payload(s, pet, task_id=task_id)
+
+
+register(ToolSpec(
+    name='read_task',
+    description='查询本宠当前的观察委托与交付（事实观察/个人比较/定时回顾）：状态（观察中、'
+                '等待基线、已暂停、已交付、已取消）、当前计划、截止时间、已发出的提醒与回信。'
+                '传 taskId 看单个委托详情（含历史交付）；缺省列出全部。主人问「我托付过你什么/'
+                '之前让你留意的事怎么样了」用本工具查证，检索不到就如实说没有，不得编造委托。',
+    parameters={'type': 'object', 'properties': {
+        'taskId': {'type': 'integer', 'description': '委托 id，缺省列全部'}},
+        'additionalProperties': False},
+    group=TASK, forms=(DIALOGUE,), execute=_execute_read_task))
+
+
+def _execute_propose_task_change(args, context):
+    from petsense.agent import proposals as proposal_service
+    from petsense.agent import tasks as task_service
+    try:
+        payload = task_service.normalize_proposal_fields(args, now=utc_now())
+    except task_service.TaskError as exc:
+        return {'error': exc.message,
+                'guidance': '委托候选未通过校验，未生成。请修正后重新发起，或如实向主人说明原因。'}
+    if payload['action'] in ('update', 'renew', 'pause', 'resume', 'cancel'):
+        with session_scope() as s:
+            pet = _pet_of(s, context)
+            task = s.get(task_service.AgentTask, payload['taskId'])
+            if task is None or task.pet_id != pet.id:
+                return {'error': '委托不存在或不在当前宠物名下，先用 read_task 查证。'}
+            if task.current_version != payload['expectedVersion']:
+                return {'error': '委托计划已更新，请用 read_task 读取最新版本后重试。',
+                        'currentVersion': task.current_version}
+    try:
+        with session_scope() as s:
+            pet = _pet_of(s, context)
+            row, refreshed = proposal_service.create_task_proposal(
+                s, pet, context.get('turn_id'), payload)
+    except proposal_service.ProposalError as exc:
+        return {'error': exc.message,
+                'guidance': '候选未生成。请向主人如实说明原因。'}
+    refreshed_ids = [tid for tid in refreshed if tid != context.get('turn_id')]
+    action_note = {
+        'create': '新建观察委托', 'update': '修改委托计划', 'renew': '续期委托',
+        'pause': '暂停委托', 'resume': '恢复委托', 'cancel': '取消委托'}[payload['action']]
+    return {'written': False, 'proposal': proposal_service.public(row),
+            'refreshedTurnIds': refreshed_ids,
+            'guidance': f'已生成「{action_note}」待确认候选（确认卡会出现在回复中）。'
+                        '未经主人在确认卡上确认前，不得声称已开始观察、已记录或已生效；'
+                        '主人要改候选时，按新内容重新调用本工具生成新版本。'}
+
+
+register(ToolSpec(
+    name='propose_task_change',
+    description='生成或更新观察委托的待确认候选（确认卡）。主人请你「留意/盯着/到时告诉我/'
+                '这周帮我看看」某件事时使用，action 按语义选择：create=新建、update=修改计划、'
+                'renew=续期（截止后再延长）、pause/resume/cancel=暂停/恢复/取消既有委托'
+                '（后四类须带 taskId 与 read_task 返回的 currentVersion）。'
+                'plan 字段：kind=fact_watch（盯某指标是否越过阈值）/ comparison（与个人基线比较）/'
+                'scheduled_review（到时汇总回顾）；question=主人的关注点原意；'
+                'feature=actions（走动）或 sounds（声音事件）；condition={metric,op(at_least/at_most),'
+                'value,scope(window/daily)}；comparison 类计划给 comparison.band（below=比平时少/'
+                'above=比平时多）与 baselineStrategy（fact_first=先按事实观察/wait_baseline=等基线就绪）；'
+                'startAt/deadlineAt 为 ISO 时间（期限缺省 3 天、最长 30 天；「这周」到本周日结束）。'
+                '本工具只生成候选，确认后才开始观察；评估与回信由系统检查点完成。',
+    parameters={'type': 'object', 'properties': {
+        'action': {'type': 'string', 'enum': ['create', 'update', 'renew', 'pause', 'resume', 'cancel']},
+        'plan': {'type': 'object', 'properties': {
+            'kind': {'type': 'string', 'enum': ['fact_watch', 'comparison', 'scheduled_review']},
+            'title': {'type': 'string', 'description': '委托短标题（≤24 字），可选'},
+            'question': {'type': 'string', 'description': '主人关注点（≤200 字）'},
+            'feature': {'type': 'string', 'enum': ['actions', 'sounds']},
+            'condition': {'type': 'object', 'properties': {
+                'metric': {'type': 'string', 'enum': ['walkSeconds', 'soundEventCount']},
+                'op': {'type': 'string', 'enum': ['at_least', 'at_most']},
+                'value': {'type': 'number'},
+                'scope': {'type': 'string', 'enum': ['window', 'daily']}},
+                'description': '阈值条件：value 秒数/次数，scope=window 自开始累计 / daily 按日'},
+            'comparison': {'type': 'object', 'properties': {
+                'band': {'type': 'string', 'enum': ['below', 'above']}}},
+            'baselineStrategy': {'type': 'string', 'enum': ['fact_first', 'wait_baseline']},
+            'timezone': {'type': 'string', 'description': '缺省 Asia/Shanghai'},
+            'startAt': {'type': 'string', 'description': 'ISO 时间；缺省现在'},
+            'deadlineAt': {'type': 'string', 'description': 'ISO 时间；缺省 3 天后'}},
+            'required': ['kind', 'question']},
+        'taskId': {'type': 'integer', 'description': '目标委托 id（update/renew/pause/resume/cancel 必填）'},
+        'expectedVersion': {'type': 'integer', 'description': 'read_task 返回的 currentVersion'},
+        'note': {'type': 'string', 'description': '提案理由（入运行轨迹）'}},
+        'required': ['action'], 'additionalProperties': False},
+    group=TASK, forms=(DIALOGUE,), execute=_execute_propose_task_change))
 
 
 

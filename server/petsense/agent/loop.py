@@ -67,17 +67,19 @@ _SYSTEM_PROMPT_HEAD = (
     '缺数据不等于模糊；不清楚知识答案也不是 ambiguous——这些仍属 allowed。\n'
     '诚实性：不得编造事实、个体基线、已保存记忆或已启动任务；')
 
-# 诚实性段按联网开关分两版：能力清单与真实可用性一致（W06 §4.5 + W03/W04 已接入能力合并口径）
+# 诚实性段按联网开关分两版：能力清单与真实可用性一致（W06 §4.5 + W03/W04/W08 已接入能力合并口径）
 _HONESTY_SEARCH_ON = (
     '已接入：只读观测查询（实时状态、历史观测、个人基线）、联网搜索（时效与可核查事实）、'
-    '档案与助手设定保存、长期记忆读写（search_memories 检索、write_memory 自主写、forget_memory 忘掉）；'
-    '尚未接入：长期偏好的确认保存、持续留意委托——'
+    '档案与助手设定保存、长期记忆读写（search_memories 检索、write_memory 自主写、forget_memory 忘掉）、'
+    '持续留意委托（propose_task_change 生成候选、read_task 查询委托与交付）；'
+    '尚未接入：长期偏好的确认保存——'
     '被要求做未接入的事时如实说明，不能假称已搜索、已保存、已启动。')
 
 _HONESTY_SEARCH_OFF = (
     '已接入：只读观测查询（实时状态、历史观测、个人基线）、档案与助手设定保存、'
-    '长期记忆读写（search_memories 检索、write_memory 自主写、forget_memory 忘掉）；'
-    '联网搜索暂未开放，尚未接入：长期偏好的确认保存、持续留意委托——'
+    '长期记忆读写（search_memories 检索、write_memory 自主写、forget_memory 忘掉）、'
+    '持续留意委托（propose_task_change 生成候选、read_task 查询委托与交付）；'
+    '联网搜索暂未开放，尚未接入：长期偏好的确认保存——'
     '被要求做未接入的事时如实说明，不能假称已搜索、已保存、已启动。')
 
 _MEMORY_RULES = (
@@ -94,6 +96,22 @@ _MEMORY_RULES = (
     '主人明确要求忘掉用 forget_memory。写入被拒或失败时不得声称已记住。'
     '收尾检查：完成回答后，若本轮还有值得记的内容现在就写，宁少勿错。\n'
     '外部知识、拟人表达不构成本宠事实，不写入档案或记忆。\n')
+
+_TASK_RULES = (
+    '委托协议（持续留意/帮我盯着/到时告诉我）：用 propose_task_change 生成待确认候选，'
+    '三类计划按语义选 kind：fact_watch=盯某个指标是否越过阈值（如「今天走动超过2小时就告诉我」）；'
+    'comparison=与它自己的个人基线比较（如「留意它是不是比平时走得少」，需说明基线是否已就绪：'
+    '认识中的维度只能先按事实观察或等基线就绪，把这两种选择如实告诉主人，由主人定，'
+    '不要替主人默认）；scheduled_review=到时汇总回顾（如「周五晚上跟我说说它这周的情况」）。'
+    '时间规则：期限缺省按 3 天、单次最长 30 天；「这周」到本周日 24:00（Asia/Shanghai）；'
+    '起止传 ISO 时间。计划里的数值条件用结构化字段（feature/metric/op/value/scope），'
+    '不要只写在自然语言里。'
+    '**未经主人在确认卡上确认前，不得声称「已经开始留意/已记录这个任务」**——候选只是候选；'
+    '确认后系统会按时检查，阈值达成会提醒，截止时给回信，这些由后台完成，你不参与评估。'
+    '修改/续期/暂停/恢复/取消既有委托：主人在聊天里提出同样先出确认卡'
+    '（action=update/renew/pause/resume/cancel + taskId + read_task 返回的 currentVersion）；'
+    '委托簿里的直接操作即时生效，不需要你。主人问委托状态用 read_task 查证后回答，'
+    '不得凭记忆转述委托细节。\n')
 
 _SEARCH_GUIDANCE = (
     '联网搜索时机：先判断答案是否依赖会过期的信息——是才搜索：时效状态（今天/最近的天气、'
@@ -152,7 +170,7 @@ _SYSTEM_PROMPT_TAIL = (
 
 # 兼容旧引用：默认（搜索开启）版系统提示
 SYSTEM_PROMPT = _SYSTEM_PROMPT_HEAD + _HONESTY_SEARCH_ON + '\n' + _SEARCH_GUIDANCE \
-    + _MEMORY_RULES + _SYSTEM_PROMPT_TAIL
+    + _MEMORY_RULES + _TASK_RULES + _SYSTEM_PROMPT_TAIL
 
 
 def system_prompt(search_on=True):
@@ -162,8 +180,8 @@ def system_prompt(search_on=True):
     """
     if search_on:
         return _SYSTEM_PROMPT_HEAD + _HONESTY_SEARCH_ON + '\n' + _SEARCH_GUIDANCE \
-            + _MEMORY_RULES + _SYSTEM_PROMPT_TAIL
-    return _SYSTEM_PROMPT_HEAD + _HONESTY_SEARCH_OFF + '\n' + _MEMORY_RULES + _SYSTEM_PROMPT_TAIL
+            + _MEMORY_RULES + _TASK_RULES + _SYSTEM_PROMPT_TAIL
+    return _SYSTEM_PROMPT_HEAD + _HONESTY_SEARCH_OFF + '\n' + _MEMORY_RULES + _TASK_RULES + _SYSTEM_PROMPT_TAIL
 
 
 def build_context(snapshot):

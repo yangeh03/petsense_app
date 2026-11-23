@@ -218,4 +218,4 @@ class AgentTests(unittest.TestCase):
         self.assertEqual({tool['name'] for tool in tools_offered},
                          {'query_observations', 'read_baseline', 'read_current_status', 'write_memory',
                           'search_memories', 'forget_memory', 'read_pet_profile', 'prepare_profile_update',
-                          'prepare_role_settings', 'read_web_page'})
+                          'prepare_role_settings', 'read_web_page', 'read_task', 'propose_task_change'})

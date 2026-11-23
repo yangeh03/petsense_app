@@ -129,3 +129,69 @@ class AgentProposal(Base):
     superseded_by = Column(Integer, nullable=True)
     created_at = Column(UTCDatetime, nullable=False)
     decided_at = Column(UTCDatetime, nullable=True)
+
+
+class AgentTask(Base):
+    """W08 委托（agent-w08-spec.md §3）：稳定委托标识（pet 内唯一 task_key）+ 追加式计划版本。
+
+    status: waiting_baseline / observing / paused / completed / cancelled；
+    「待确认」是 AgentProposal(pending) 态，不落本表（未确认提案不创建调度任务）。
+    deadline_at 不因暂停延长；paused_intervals 记录暂停窗口（评估时计为未观察缺口）；
+    effective_from = max(计划开始, 确认时间)：确认晚于原定开始时不把先前窗口算作已观察；
+    observing_since 为 wait_baseline 委托真正进入观察（基线就绪）的时刻。
+    watermark_at 为观测水位（数据位置），last_check_at 为上次模型检查（普通节流 ≥1h）。
+    """
+    __tablename__ = 'agent_tasks'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    pet_id = Column(Integer, ForeignKey('pets.id'), nullable=False, index=True)
+    task_key = Column(String(40), nullable=False)
+    current_version = Column(Integer, nullable=False, default=1)
+    status = Column(String(16), nullable=False, default='observing')
+    timezone = Column(String(40), nullable=False, default='Asia/Shanghai')
+    deadline_at = Column(UTCDatetime, nullable=False)
+    effective_from = Column(UTCDatetime, nullable=False)
+    observing_since = Column(UTCDatetime, nullable=True)
+    paused_intervals = Column(Text, nullable=False, default='[]')
+    topic_id = Column(Integer, nullable=True)
+    proposal_id = Column(Integer, nullable=True)
+    last_check_at = Column(UTCDatetime, nullable=True)
+    watermark_at = Column(UTCDatetime, nullable=True)
+    due_attempts = Column(Integer, nullable=False, default=0)
+    ended_at = Column(UTCDatetime, nullable=True)
+    end_reason = Column(String(24), nullable=True)
+    created_at = Column(UTCDatetime, nullable=False)
+    updated_at = Column(UTCDatetime, nullable=False)
+    __table_args__ = (UniqueConstraint('pet_id', 'task_key'),)
+
+
+class AgentTaskPlan(Base):
+    """W08 计划版本（追加式）：version 从 1 递增，payload 为归一化计划 JSON；
+    修改/续期追加新版本，历史计划与回信保留可查。"""
+    __tablename__ = 'agent_task_plans'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    task_id = Column(Integer, ForeignKey('agent_tasks.id'), nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    payload = Column(Text, nullable=False)
+    proposal_id = Column(Integer, nullable=True)
+    created_at = Column(UTCDatetime, nullable=False)
+    __table_args__ = (UniqueConstraint('task_id', 'version'),)
+
+
+class AgentTaskDelivery(Base):
+    """W08 交付（提醒/回信）：instance_key 为稳定结果键（task 内唯一）。
+
+    提醒按委托及条件实例去重（remind:<上海日期>），回信按委托版本去重（letter:v<版本>）；
+    turn_id 关联交付回合（深链原会话），payload 持内容与证据摘要。
+    """
+    __tablename__ = 'agent_task_deliveries'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    task_id = Column(Integer, ForeignKey('agent_tasks.id'), nullable=False, index=True)
+    plan_version = Column(Integer, nullable=False)
+    kind = Column(String(16), nullable=False)
+    instance_key = Column(String(64), nullable=False)
+    turn_id = Column(Integer, nullable=True)
+    run_id = Column(Integer, nullable=True)
+    archived_memory_id = Column(Integer, nullable=True)
+    payload = Column(Text, nullable=False, default='{}')
+    created_at = Column(UTCDatetime, nullable=False)
+    __table_args__ = (UniqueConstraint('task_id', 'instance_key'),)
