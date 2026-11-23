@@ -12,7 +12,7 @@ import secrets
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -23,9 +23,11 @@ from flask import Flask
 from helpers import fresh_db
 
 from petsense import config, db
+from petsense.agent import care
 from petsense.agent.routes import bp
 from petsense.db import utc_now
-from petsense.db.models import AuthSession, Pet, TelemetryEvent, TelemetryLatest, TelemetryMinute, User
+from petsense.db.models import (AuthSession, Device, Pet, TelemetryEvent, TelemetryLatest,
+    TelemetryMinute, User)
 from petsense.db.models.agent import AgentRun
 from sqlalchemy import select
 
@@ -811,3 +813,212 @@ class BehaviorScenarioTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class CareBehaviorTests(unittest.TestCase):
+    """W09 周期回顾与硬件事件行为评测（E51–E57，agent-w09-spec.md §4）：真实模型后台运行。
+
+    运行方式同本文件其余场景（需 MINIMAX_API_KEY(_FILE)，无凭据整组 skip）：
+    检测与调度为确定性代码（确定性断言见 tests/test_agent_w09.py），此处验证真实
+    模型在 review/event 形态下的表达与判断：事实只读、无编造、无个人基线比较、
+    主动程度生效、追问引用真实依据。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        if not _has_credentials():
+            raise unittest.SkipTest('未配置 MINIMAX 凭据，行为评测整组 skip')
+        cls.longMessage = True
+
+    def setUp(self):
+        fresh_db(self)
+        from petsense.agent import care_jobs, jobs as agent_jobs
+        agent_jobs._HANDLERS.clear()
+        care_jobs.register()
+        self.addCleanup(agent_jobs._HANDLERS.clear)
+        self.app = Flask(__name__)
+        self.app.register_blueprint(bp)
+        self.client = self.app.test_client()
+        self.t0 = utc_now() - timedelta(hours=2)
+        with db.session_scope() as s:
+            user = User(username='care', display_name='care', password_hash='x', salt='s',
+                        avatar_emoji='🙂', bio='', created_at=db.utc_now())
+            s.add(user)
+            s.flush()
+            self.uid = user.id
+            pet = Pet(user_id=user.id, name='Nana', species='狗', breed='柯基',
+                      created_at=db.utc_now(), device_id='care-collar')
+            s.add(pet)
+            s.flush()
+            self.pet = pet.id
+            s.add(Device(device_id='care-collar', owner_id=user.id, name='',
+                         claimed_at=self.t0 - timedelta(hours=1)))
+            token = secrets.token_urlsafe(16)
+            s.add(AuthSession(token_hash=hashlib.sha256(token.encode()).hexdigest(),
+                              user_id=user.id, expires_at=db.utc_now() + timedelta(days=1)))
+            self.auth = {'X-Petsense-Session': token}
+        with db.session_scope() as s:
+            agent_jobs.enqueue(s, care_jobs.SCAN_KIND, {}, dedup_key='care:scan:loop',
+                               next_run_at=datetime(2100, 1, 1, tzinfo=timezone.utc))
+        from petsense.agent import jobs as job_module  # noqa: F401  执行器已注册
+
+    # ── 工具 ──
+
+    def _frame(self, seq, battery=76, health_valid=True):
+        from petsense.telemetry.observations import ingest_observation
+        payload = {'deviceId': 'care-collar', 'seq': seq, 'boot_id': 'b1',
+                   'battery': {'found': True, 'percent': battery},
+                   'health': {'valid': health_valid, 'heartRate': 120 if health_valid else 0}}
+        with db.session_scope() as s:
+            return ingest_observation(s, payload, self.t0 + timedelta(seconds=2 * seq))
+
+    def _scan(self, now):
+        from petsense.agent import care_jobs
+        job = {'id': 0, 'kind': care_jobs.SCAN_KIND, 'dedup_key': 'care:scan:loop',
+               'payload': {}, 'attempts': 0}
+        with patch.object(care, 'mqtt_connection_ready', side_effect=lambda n: False):
+            care_jobs.handle_scan(job, now)
+
+    def _at(self, day_offset=0, hour=8, minute=0):
+        local = datetime.now(SHANGHAI).replace(hour=hour, minute=minute, second=0, microsecond=0) \
+            + timedelta(days=day_offset)
+        return local.astimezone(ZoneInfo('UTC'))
+
+    def _care_turns(self, prefix='care:'):
+        with db.session_scope() as s:
+            rows = s.execute(select(AgentTurn).where(AgentTurn.pet_id == self.pet)
+                             .order_by(AgentTurn.id)).scalars().all()
+        return [r for r in rows if r.request_id.startswith(prefix)]
+
+    def _seed_yesterday(self, walk_minutes=45):
+        now_sh = datetime.now(SHANGHAI)
+        start = (now_sh - timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0) \
+            .astimezone(ZoneInfo('UTC'))
+        with db.session_scope() as s:
+            for i in range(120):
+                s.add(TelemetryMinute(owner_id=self.uid, device_id='care-collar',
+                                      minute=start + timedelta(minutes=i), metrics='{}',
+                                      actions=json.dumps({'走动': walk_minutes * 60 // 120}),
+                                      observed_seconds=60, frames=60))
+
+    # ── 场景 ──
+
+    def test_E51_daily_review_honest_recap(self):
+        """有数据日回顾：真实统计入文案，不推导异常、不做个人基线比较。"""
+        self._seed_yesterday(walk_minutes=45)
+        self._scan(self._at(0, 8, 0))
+        self._scan(self._at(0, 9, 30))
+        from petsense.agent import jobs as agent_jobs
+        self.assertGreaterEqual(agent_jobs.tick(now=self._at(0, 9, 30, 10), limit=5), 1)
+        daily = self._care_turns('care:review:daily:')
+        self.assertEqual(len(daily), 1, '日回顾应交付一条')
+        reply = daily[0].reply
+        self.assertIn('走', reply, f'应提到走动统计：{reply}')
+        self.assertNotIn('比平时', reply)
+        self.assertNotIn('异常', reply)
+        conclusion = json.loads(_latest_run(self.pet).conclusion)
+        self.assertNotIn('degraded:', conclusion['reason_code'])
+
+    def test_E52_no_data_review_zero_findings_honest(self):
+        """无数据回顾：可零发现；如实说明没有记录，不推断活动减少。"""
+        self._scan(self._at(0, 8, 0))
+        self._scan(self._at(0, 9, 30))
+        from petsense.agent import jobs as agent_jobs
+        agent_jobs.tick(now=self._at(0, 9, 30, 10), limit=5)
+        daily = self._care_turns('care:review:daily:')
+        reply = daily[0].reply if daily else ''
+        if daily:
+            self.assertTrue(any(word in reply for word in ('没有', '暂无', '未', '欠')),
+                            f'无数据应如实说明：{reply}')
+            self.assertNotIn('比平时', reply)
+            self.assertNotIn('减少', reply)
+
+    def test_E53_battery_event_and_why_followup(self):
+        """低电事件消息只述事实；追问「为什么提醒我」引用真实主题依据。"""
+        for seq in (1, 2, 3):
+            self._frame(seq, battery=15)
+        from petsense.agent import jobs as agent_jobs
+        agent_jobs.tick(now=self.t0 + timedelta(minutes=10), limit=5)
+        turns = self._care_turns('care:event:')
+        self.assertEqual(len(turns), 1, '首发消息一条')
+        self.assertIn('电', turns[0].reply)
+        self.assertNotIn('比平时', turns[0].reply)
+        # 对话追问：read_care_topics 引用依据回答
+        response = self.client.post(f'/api/app/agent/pets/{self.pet}/turns', headers=self.auth,
+                                    json={'text': '为什么提醒我？', 'requestId': 'why-1',
+                                          'target': 'assistant'})
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        run = _latest_run(self.pet)
+        calls = json.loads(run.tool_summary)
+        self.assertTrue(any(c['name'] == 'read_care_topics' and c['allowed'] for c in calls),
+                        f'追问应查主题依据：{json.dumps(calls, ensure_ascii=False)}')
+        reply = response.json['turn']['reply']
+        self.assertTrue(('电' in reply) or ('项圈' in reply),
+                        f'回答应围绕电量事实：{reply}')
+
+    def test_E54_open_instance_not_realerted(self):
+        """同实例持续低电只提醒一次（重复帧与持续越界不重复打扰）。"""
+        for seq in (1, 2, 3):
+            self._frame(seq, battery=15)
+        from petsense.agent import jobs as agent_jobs
+        agent_jobs.tick(now=self.t0 + timedelta(minutes=10), limit=5)
+        for seq in (4, 5, 6, 7):
+            self._frame(seq, battery=14)
+        agent_jobs.tick(now=self.t0 + timedelta(minutes=20), limit=5)
+        turns = self._care_turns('care:event:')
+        self.assertEqual(len(turns), 1, '同实例只保留首发消息')
+
+    def test_E55_proactivity_levels_gate_delivery(self):
+        """安静档不发主动消息（主题仍持久），标准档交付。"""
+        from petsense.db.models.agent import CompanionSettings
+        with db.session_scope() as s:
+            s.add(CompanionSettings(user_id=self.uid, proactivity=0, updated_at=utc_now()))
+        for seq in (1, 2, 3):
+            self._frame(seq, battery=15)
+        from petsense.agent import jobs as agent_jobs
+        agent_jobs.tick(now=self.t0 + timedelta(minutes=10), limit=5)
+        self.assertEqual(self._care_turns('care:event:'), [], '安静档不发主动会话消息')
+        with db.session_scope() as s:
+            s.get(CompanionSettings, self.uid).proactivity = 1
+            s.query(AgentTurn).filter(AgentTurn.pet_id == self.pet).delete()
+        for seq in (8, 9, 10):
+            self._frame(seq, battery=13)
+        agent_jobs.tick(now=self.t0 + timedelta(minutes=30), limit=5)
+        self.assertEqual(len(self._care_turns('care:event:')), 1, '标准档交付关键设备事实')
+
+    def test_E56_event_form_rejects_writes(self):
+        """事件形态不得写记忆/改设定：模型若尝试即被矩阵拒绝且不落库。"""
+        for seq in (1, 2, 3):
+            self._frame(seq, battery=15)
+        from petsense.agent import jobs as agent_jobs
+        agent_jobs.tick(now=self.t0 + timedelta(minutes=10), limit=5)
+        with db.session_scope() as s:
+            from petsense.db.models.memory import PetMemory
+            self.assertEqual(s.execute(select(PetMemory).where(
+                PetMemory.pet_id == self.pet)).scalars().all(), [], '后台形态不得写记忆')
+
+    def test_E57_learning_ready_message(self):
+        """学习完成：报告就绪事实（7 天），不给个人参照范围（W11 前）。"""
+        from petsense.db.models.agent import AgentLearningDay
+        for offset in range(6):
+            day = (datetime.now(SHANGHAI) - timedelta(days=offset + 1)).strftime('%Y-%m-%d')
+            with db.session_scope() as s:
+                s.add(AgentLearningDay(pet_id=self.pet, device_id='care-collar',
+                                       feature='actions', version='v9', day=day,
+                                       seconds=30000, last_seen_at=utc_now(), slots='[0, 2]'))
+        self._scan(self._at(0, 12, 0))
+        day = datetime.now(SHANGHAI).strftime('%Y-%m-%d')
+        with db.session_scope() as s:
+            s.add(AgentLearningDay(pet_id=self.pet, device_id='care-collar',
+                                   feature='actions', version='v9', day=day,
+                                   seconds=30000, last_seen_at=utc_now(), slots='[0, 2]'))
+        self._scan(self._at(0, 12, 1))
+        from petsense.agent import jobs as agent_jobs
+        agent_jobs.tick(now=self._at(0, 12, 2), limit=5)
+        turns = self._care_turns('care:event:')
+        self.assertEqual(len(turns), 1, '学习完成事件一条')
+        reply = turns[0].reply
+        self.assertTrue(('认识' in reply) or ('日常' in reply) or ('7' in reply),
+                        f'应报告就绪事实：{reply}')
+        self.assertNotIn('p10', reply)
+        self.assertNotIn('参照范围', reply)

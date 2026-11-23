@@ -110,8 +110,16 @@ class RegistryMatrixTests(unittest.TestCase):
         self.assertEqual(gate['reason'], 'stance_missing')
 
     def test_form_gate(self):
+        # W09 起 review/event 为后台事实形态（query_observations 等事实工具开放）；
+        # 写入/设定类工具在任何后台形态仍被形态门拒绝
         args = {'start': '2026-01-01T00:00:00+08:00', 'end': '2026-01-02T00:00:00+08:00'}
         gate = registry.execute_tool('query_observations', args, 'review', 'allowed', self.context)
+        self.assertTrue(gate['allowed'])
+        gate = registry.execute_tool('write_memory', {'kind': 'episode', 'summary': 'x'},
+                                     'review', 'allowed', self.context)
+        self.assertFalse(gate['allowed'])
+        self.assertEqual(gate['reason'], 'form_not_allowed')
+        gate = registry.execute_tool('prepare_role_settings', {}, 'event', 'allowed', self.context)
         self.assertFalse(gate['allowed'])
         self.assertEqual(gate['reason'], 'form_not_allowed')
 
@@ -142,12 +150,14 @@ class RegistryMatrixTests(unittest.TestCase):
     def test_schemas_for_scope(self):
         self.assertEqual(registry.schemas_for('dialogue', 'out_of_scope'), [])
         names = [s['name'] for s in registry.schemas_for('dialogue', 'allowed')]
-        # W06 新增 read_web_page（EXTERNAL_READ 组）；开关关闭时不进 schemas（见 test_agent_w06）
+        # W06 新增 read_web_page（EXTERNAL_READ 组）；开关关闭时不进 schemas（见 test_agent_w06）；
+        # W09 新增 read_care_topics（事实只读），review/event 后台形态挂事实子集（不含基线/写入）
         self.assertEqual(set(names), {'query_observations', 'read_baseline', 'read_current_status',
                                       'write_memory', 'search_memories', 'forget_memory',
                                       'read_pet_profile', 'prepare_profile_update', 'prepare_role_settings',
-                                      'read_web_page'})
-        self.assertEqual(registry.schemas_for('review', 'allowed'), [])
+                                      'read_web_page', 'read_care_topics'})
+        self.assertEqual({s['name'] for s in registry.schemas_for('review', 'allowed')},
+                         {'query_observations', 'read_current_status', 'read_pet_profile'})
 
 
 class RunTrajectoryTests(unittest.TestCase):

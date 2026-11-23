@@ -239,7 +239,10 @@ class CurrentStatusToolTests(unittest.TestCase):
         self.assertEqual(gate['reason'], 'scope_not_allowed')
         gate = registry.execute_tool('read_current_status', {}, 'dialogue', None, self.context)
         self.assertEqual(gate['reason'], 'stance_missing')
+        # W09：事实工具在 review 形态开放（后台事实子集），写入类仍被形态门拒绝
         gate = registry.execute_tool('read_current_status', {}, 'review', 'allowed', self.context)
+        self.assertIsNone(gate['reason'])
+        gate = registry.execute_tool('forget_memory', {'memoryId': 1}, 'review', 'allowed', self.context)
         self.assertEqual(gate['reason'], 'form_not_allowed')
 
     def test_registered_in_dialogue_schemas(self):

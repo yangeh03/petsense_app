@@ -43,6 +43,46 @@ export type AgentSource = AgentWindowSource | AgentWebSource;
 
 export const isWebSource = (source: AgentSource): source is AgentWebSource => source.type === 'web';
 
+/** W09 主动关怀块（care.py / care_jobs.py 写入）：设备事件、周期回顾与学习完成提醒。 */
+export type AgentCareInfo = {
+  kind: 'review' | 'device' | 'learning' | string;
+  category: string;
+  title: string;
+  status: string;
+  severity?: string;
+  topicId?: number | null;
+  openedAt?: string | null;
+  windowStart?: string;
+  windowEnd?: string;
+  evidence?: {
+    at: string;
+    kind: string;
+    battery?: number | null;
+    healthValid?: boolean | null;
+    note?: string;
+  }[];
+  runId?: number | null;
+};
+
+/** W09 主题（GET /care/topics）：稳定 ID、状态、依据与时间，供追溯与下钻。 */
+export type AgentCareTopic = {
+  id: number;
+  kind: string;
+  category: string;
+  anchor: string;
+  instance: number;
+  status: 'open' | 'ongoing' | 'recovered' | 'closed' | string;
+  severity: string;
+  title: string;
+  detail: string;
+  evidence: AgentCareInfo['evidence'];
+  delivered: number;
+  openedAt: string;
+  updatedAt: string;
+  recoveredAt: string | null;
+  closedReason: string | null;
+};
+
 export type AgentTurn = {
   id: number;
   requestId: string;
@@ -60,6 +100,7 @@ export type AgentTurn = {
     | (
         | { type: 'text'; speaker: 'pet' | 'assistant'; text: string }
         | { type: 'proposal'; proposal: AgentProposal }
+        | { type: 'care'; care: AgentCareInfo }
       )[]
     | null;
   images: AgentImageMeta[];
@@ -137,3 +178,9 @@ export const fetchAgentObservation = (pet: number, start: string, end: string) =
 
 export const markAgentRead = (pet: number, ids: number[]) =>
   request<{ turns: AgentTurn[] }>(`/agent/pets/${pet}/read`, { method: 'POST', body: { ids } });
+
+/** W09：主题追溯列表（可选状态过滤；依据随行，供「为什么提醒我」下钻）。 */
+export const fetchCareTopics = (pet: number, status?: string) =>
+  request<{ topics: AgentCareTopic[] }>(
+    `/agent/pets/${pet}/care/topics${status ? `?status=${status}` : ''}`,
+  );

@@ -24,6 +24,7 @@ import {
   AGENT_UPLOAD_MAX_EDGE,
   normalizeForUpload,
 } from '@/services/normalize-image';
+import { refreshCareRules } from '@/services/care-rules';
 import { useAgentChatStore, type AgentAttachment } from '@/stores/agent-chat';
 import { useCompanionSettingsStore } from '@/stores/companion-settings';
 
@@ -81,6 +82,8 @@ export function useAgentChat(user: { id: number } | null) {
     try {
       const data = await fetchDashboard();
       state.setPet(data.pet);
+      // W09：按当前宠物探测后端受管理告警规则（切宠/退出时内部恢复本地逻辑）
+      void refreshCareRules(data.pet?.id ?? null);
       if (data.pet) {
         const latest = (await fetchAgentTurns(data.pet.id)).turns;
         useAgentChatStore

@@ -11,6 +11,9 @@ read_web_page 由本层计数限次；web 来源并入回合 sources（§4.6，�
 （2026-11-23 E35 归因），本轮搜索记录与 citations 在下一轮前以系统提醒显式带回。
 W07：owner 消息可带图片引用，本轮与最近 1 条带图历史内联为 input_image（D1），
 更早历史降级为文字占位；图片摘要入轨迹，base64 不落任何存储。
+W09 后台形态（agent-w09-spec.md §3）：review/event 与对话共用本循环的关键能力
+（模型往返、事实工具权限矩阵、轨迹与降级记账），但无对话历史/图片/流式进度，
+任务与事实由代码确定性组装，输出为任务 JSON 文本由调用方校验解析。
 """
 import json
 import os
@@ -146,6 +149,9 @@ _SYSTEM_PROMPT_TAIL = (
     '照片中的宠物默认按「照片里的宠物」描述，只有主人明确说明是本宠时才关联本宠，'
     '即使用爱宠身份回应也不能擅自把照片里的动物称为「我」。要改档案时遵守档案写入及确认协议；'
     '图片不扩大话题范围，编程等无关请求即使带图仍应拒绝；识别不清或图片与问题无关时如实说明，不编造图中细节。\n'
+    '主动提醒：后台会就设备事实（低电、失联、读数无效）、周期回顾发现与学习完成主动提醒主人；'
+    '主人问「为什么提醒我」或某条提醒的依据时，用 read_care_topics 查主题与依据帧，按依据如实回答，'
+    '不得编造提醒原因。'
     '表达：对主人用自然语言，不展示原始字段名、设备编码或实现细节，除非主人明确在排查设备。'
     '历史数据必须调用工具查询，未提供区域语义时说明不能判断。'
     '正文可用受限 markdown（标题/列表/粗体/段落），不要输出代码块和表格。')
@@ -598,3 +604,85 @@ def run_dialogue(context, on_progress=None):
             'sources': sources, 'stance': stance or {'scope': 'unknown', 'intent': 'unknown', 'speaker': 'assistant'},
             'degraded': bool(degraded), 'trace': trace, 'proposals': proposals,
             'refreshedTurnIds': refreshed_turn_ids}
+
+
+_BACKGROUND_SYSTEM_BASE = (
+    '你是宠物产品的照料助手，正在执行一次后台任务（不是与主人的对话）。'
+    '任务说明与确定性事实由用户消息给出：事实由系统组织，你只负责表达、相关性与是否值得打扰的判断，'
+    '不得改动、外推或编造任何事实数值；需要补充明细时可调用提供的事实类只读工具。'
+    '无数据不推导异常、活动减少或健康问题；两段实际观测只能并列陈述，不得说「比平时」。'
+    '个人基线比较尚未接入：不得输出任何个人参照范围或与个人日常的比较。'
+    '工具只允许事实读取：委托变更、档案/设定/记忆写入、联网与设备动作均不可用，'
+    '调用会被拒绝且不得声称已执行。输出为纯 JSON 对象（不要包裹代码块），结构见任务说明。')
+
+
+def run_background(context):
+    """执行一次 W09 后台运行（review/event 形态，agent-w09-spec.md §3）。
+
+    context: {'pet_id', 'user_id', 'form': 'review'|'event', 'task': 任务说明+事实（用户消息）,
+              'system_extra': 形态专属系统提示段, 'trigger': 轨迹触发描述, 'settings'?}
+    返回 {'text': 模型任务输出（含可能的 stance 行，调用方解析）, 'degraded': [...],
+          'trace': 轨迹}；模型异常向上抛（作业层按退避重试/降级处理）。
+    """
+    form = context['form']
+    started = time.monotonic()
+    deadline = started + RUN_WALL_LIMIT_S
+    stance = {'scope': 'allowed', 'intent': 'observe', 'speaker': 'assistant'}  # 触发确定性归代码，范围恒 allowed
+    tool_summary, messages_trace = [], []
+    degraded = []
+    system_content = _BACKGROUND_SYSTEM_BASE + '\n' + (context.get('system_extra') or '')
+    if context.get('settings'):
+        system_content += '\n' + agent_settings.prompt_line(context['settings'])
+    input_items = [{'role': 'system', 'content': system_content},
+                   {'role': 'user', 'content': context['task']}]
+    messages_trace.append({'role': 'user', 'task': context['task'][:600]})
+    rounds = 0
+    stripped = ''
+    while True:
+        allow_tools = rounds < MAX_TOOL_ROUNDS and time.monotonic() < deadline
+        if not allow_tools and rounds >= MAX_TOOL_ROUNDS:
+            degraded.append('tool_rounds_exhausted')
+        elif not allow_tools:
+            degraded.append('wall_clock_exceeded')
+        schemas = registry.schemas_for(form, 'allowed', search_enabled=False) if allow_tools else []
+        turn = model.respond(input_items, tools=schemas or None, max_output_tokens=2400)
+        _, stripped = parse_stance(turn['text'])
+        if stripped:
+            messages_trace.append({'role': 'assistant', 'text': stripped[:2000]})
+        calls = turn['function_calls'][:MAX_CALLS_PER_ROUND]
+        if not calls:
+            if not stripped.strip():
+                degraded.append('empty_response')
+                raise ValueError('模型未返回可用输出')
+            break
+        if not schemas:
+            degraded.append('model_called_without_tools')
+            if stripped.strip():
+                break
+            raise ValueError('模型未返回可用输出')
+        rounds += 1
+        if stripped.strip():
+            input_items.append({'role': 'assistant', 'content': stripped})
+        for call in calls:
+            name, call_id = call['name'], call['call_id'] or f'call_{len(tool_summary)}'
+            try:
+                arguments = json.loads(call['arguments'] or '{}')
+            except ValueError:
+                arguments = None
+            gate = registry.execute_tool(name, arguments, form, 'allowed', context)
+            result_json = json.dumps(gate['result'], ensure_ascii=False, default=str)
+            if len(result_json) > TOOL_RESULT_LIMIT:
+                result_json = result_json[:TOOL_RESULT_LIMIT] + '…(截断)'
+            input_items.append({'type': 'function_call', 'call_id': call_id,
+                                'name': name, 'arguments': call['arguments'] or '{}'})
+            input_items.append({'type': 'function_call_output', 'call_id': call_id, 'output': result_json})
+            tool_summary.append({'name': name, 'allowed': gate['allowed'], 'reason': gate['reason'],
+                                 'arguments': (call['arguments'] or '')[:300],
+                                 'duration_ms': gate['duration_ms'], 'result_bytes': len(result_json)})
+        messages_trace.append({'tool_round': rounds, 'calls': tool_summary[-len(calls):]})
+    trace = {'form': form, 'trigger': context.get('trigger'),
+             'conclusion': {'reason_code': 'degraded:' + ','.join(degraded) if degraded else 'ok'},
+             'messages': messages_trace, 'tool_summary': tool_summary,
+             'budget': {'rounds': rounds, 'wall_seconds': round(time.monotonic() - started, 2)},
+             'degraded': degraded}
+    return {'text': stripped.strip(), 'degraded': degraded, 'trace': trace}

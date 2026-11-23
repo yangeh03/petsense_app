@@ -89,6 +89,8 @@ def create_app(start_background=True):
         start_memory_worker()  # W04：日/周汇总、认识卡蒸馏、记忆报告（幂等 tick）
         from petsense.agent import jobs as agent_jobs
         agent_jobs.start_scheduler()  # W08：持久作业调度（PETSENSE_SCHEDULER_DISABLED 可关；kind 执行器随各域注册）
+        from petsense.agent import care_jobs
+        care_jobs.start_care()  # W09：scan/review/event 执行器注册 + 周期扫描入队（幂等）
         from petsense.agent import ws as agent_ws
         agent_ws.start_ping_loop()
         telemetry_realtime.start_ws_ping_loop()
