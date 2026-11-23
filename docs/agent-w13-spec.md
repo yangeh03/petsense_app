@@ -13,6 +13,7 @@
 | D5 | 同一账号的所有已开启设备均可收。按收件箱条目和设备去重。服务方结果不明时保留站内消息并停止重试，避免重复。 |
 | D6 | 签名和凭据就绪后，经 EAS 内部分发安装到授权的 iOS 测试真机。 |
 | D7 | 安静档抑制主动发现的推送。关键设备告警和明确委托的到期回信仍遵守用户的系统通知设置。 |
+| D8 | 与 W12 共用设备严重度口径。仍开放的 warning 和 critical 告警可推送，info 设备事实仅进收件箱。 |
 
 ## 客户端与发布
 
@@ -39,3 +40,106 @@
 | W13-A6 | 通过服务端全量 unittest、客户端全套检查和 Web 构建，核对 iOS 原生构建与对应 fingerprint OTA。记录部署、发布版本、iOS 开关和回退方式。 |
 
 发布时分别记录服务端部署、Expo ticket、模拟器响应、OTA 和 iOS 真机推送。缺少签名、授权设备或端到端证据时，iOS 保持关闭并记录待验项。
+
+## 实施记录（2026-11-23，iOS 首版）
+
+本节记录本轮实现、验证结果与**合入前必须调整的一处**。集成缝的完整契约见
+`docs/agent-w13-integration-seam.md`。
+
+### 已实现
+
+- **服务端推送域** `server/petsense/agent/`：`push.py`（分类、资格复核、去重、投递状态机）、
+  `push_provider.py`（Expo Push Service 票据与回执，传输层可替换）、
+  `push_jobs.py`（挂在 W08 持久作业队列上的周期派发与回执扫描）、
+  `push_routes.py`（`/api/app/push/*`）。数据层新增 `push_preferences`、
+  `push_installations`、`push_deliveries` 三张表。
+- **客户端** `app/src/services/push.ts`（注册、权限状态、token 轮换、退出解绑、通知响应）、
+  `app/src/services/inbox-deep-link.ts`（稳定收件箱 ID → 路由的深链缝）、
+  `app/src/app/notification-settings.tsx`（设置页，入口在「我的 → 伙伴 → 通知推送」），
+  `_layout.tsx` 接入前台/后台/冷启动同一路径与登录续接。
+- **原生配置**：`app.json` 接入 `expo-notifications` 配置插件（仅 iOS 相关项：
+  `enableRemoteNotifications`）；新增 `app/eas.json`，含 `internal` 内部分发档位
+  （只发 iOS 真机、接 production 通道以便同一条 fingerprint OTA 到达测试机）。
+  **未**设置 Android application ID 与 Android 专属插件项（本轮不交付 Android）。
+
+### 关键语义
+
+- **平台闸门默认全关**：`PETSENSE_PUSH_IOS_ENABLED` 默认关闭，另有
+  `PETSENSE_PUSH_DISABLED` 急停。闸门关闭时待发件保留在队列里（不消耗重试次数），
+  开闸后仍可发送；闸门关闭期间不建新投递行，因此开闸不会补发历史条目。
+- **去重键**为 `(收件箱条目, 安装实例)`：同一账号多台设备各一行；token 轮换不换安装
+  实例，因此轮换不会造成重复投递。
+- **发送前复核**归属、用户开关、系统权限、平台闸门、通知资格与 token 有效性，避免
+  退出、切账号或权限撤回后的误发。
+- **未知即停**：调用服务方后结果不明（超时）或进程在外部调用后、落库前中断，
+  一律标记 `unknown` 并停止该条重试——写前意图（`pending → sending`）在独立事务提交，
+  崩溃后可被识别。站内收件箱不受该状态影响。
+- **锁屏只显示通用提示**：载荷只含通用文案、稳定收件箱 ID 与分类，不含宠物名、数值
+  或任何私密内容。
+- **个人变化三门槛**：W11 证据引用存在 + 模型判定高相关 + W09 主动程度 > 0；安静档
+  不推个人变化，关键设备告警与明确委托的到期回信不受安静档影响。
+
+### 本轮验证结果
+
+| 项目 | 结果 |
+| --- | --- |
+| 服务端全量 unittest | 628 通过（2 skip），含 `tests/test_agent_w13.py` 52 例 |
+| 客户端 `npm run lint` / `typecheck` / `format:check` / `test` | 全部通过（139 例，含 W13 客户端 23 例） |
+| 客户端 Web 构建 `npx expo export --platform web` | 通过（`dist/` 含 `notification-settings.html`） |
+| Web 实际加载 | 首页正常渲染；`expo-notifications` 在 Web 端不报错，Android/Web 不注册、不申请权限 |
+| 真实推送 | **未验证**（无签名、无授权设备、无真实凭据，按约束不接触真实服务方） |
+
+行为测试全部用本地假 provider 驱动（`tests/test_agent_w13.py` 的 `FakeProvider`），
+覆盖票据成功、业务拒收、失效 token、明确可恢复拒收、响应未知、请求后中断六类结果。
+
+### 待验项（按 W13-A3–A6，由负责人执行）
+
+- **A3** iOS 模拟器：设置页视觉（浅色/深色对照）、拒绝状态、通知响应入口与冷启动导航。
+  模拟输入只作应用响应证据。
+- **A4** iOS 真机：EAS 内部分发构建（`eas build --profile internal --platform ios`），
+  记录构建 ID、运行时、设备/OS、权限与票据结果；验证后台/冷启动送达、点击原对象、
+  前台行为、通用锁屏内容、退出或禁用后的抑制、重复执行不重复提示。
+- **A5** 授权隔离环境生成真实来源事件；核对 Android 与 Web 继续用收件箱。
+- **A6** 服务端部署、发布版本、iOS 开关状态与回退方式。
+
+### ⚠️ 合入前必须调整：迁移修订号
+
+`server/alembic/versions/w13_push_tmp.py` 当前是**临时编号**
+（`revision='w13_push_tmp'`, `down_revision='0019'`）：本工作树上一版迁移是 0019，
+W12 正在并行实现 0020，W13 按指示在本工作树内临时接在 0019 之后以保证本分支可独立
+跑通全量单测与 alembic 往返。
+
+合入主干时必须改为 `revision='0021'`、`down_revision='0020'`（文件名
+`0021_agent_w13_push.py`）。不改会在主干产生两个 head，`alembic upgrade head` 行为
+不确定。详见 `docs/agent-w13-integration-seam.md` §3。
+
+### 评审修复（2026-11-23，Codex 复核）
+
+- **登出顺序**：改为**先解绑再登出**——解绑请求在会话仍有效时发出，服务端才能认证
+  并把旧归属从发送集合剔除；解绑失败不阻塞登出，服务端还有权限与归属复核兜底。
+- **token 绑定唯一化**：同一 Expo token 只允许绑定一个安装实例；同 token 再次注册
+  时旧实例立即停用并清空 token，旧账号待发件作废（新主人不会收到旧账号消息，同一
+  设备不会收到两份）。
+- **安装实例 ID 单次生成**：并发调用共用同一个 promise，不会出现两份绑定。
+- **发送时按 W12 当前来源复核**：不信任发布时的缓存 meta。发送前经注入的
+  ``inbox_source`` 解析器读回当前来源、拥有者、范围、补入标记与设备告警当前状态；
+  解析器未接入时保守抑制。
+- **D8 严重度**：info 设备事实不推送（发布时与发送时各拦一次）；warning/critical
+  仍开放才可推。D7 不变：安静档只抑制个人变化，设备告警与明确委托的回信照发。
+- **个人变化四门槛**：W11 冻结证据 + 模型高相关被接受 + W09 已发布对象仍开放 +
+  当前主动程度 > 0。
+- **token 隐私**：审计只存 `token_digest` + `token_version`（历史 token 以摘要留档），
+  错误信息与日志经 `push_provider.scrub()` 清洗；旧 token 的 `DeviceNotRegistered`
+  回执**不会**废掉同一安装实例上的新 token。
+- **事务边界**：领取、复核、落库各自独立成短事务，**调用 Expo 时不持有数据库
+  事务**；写前意图先提交，崩溃后按未知处理，绝不重发。只有明确可恢复的拒收才重试。
+- **回执窗口 24h**：超出窗口未拿到回执按未知处理并停止重试；载荷 >4KB 视为明确
+  schema 错误。
+- **客户端**：重复点击折叠为一次导航；冷启动响应等认证就绪后再处理；待处理项带账号，
+  不影响其它账号；设置页开关遵守服务端闸门（闸门关闭不申请系统权限，如实显示）。
+- **EAS 档位**：移除 schema 不接受的 `ios.device`（`eas config` 实测拒绝），
+  `eas config --platform ios --profile internal --json --non-interactive` 现已通过，
+  解析结果为 `distribution=internal / channel=production / simulator=false`，
+  不产出公开产物。
+- **来源类型无别名**：W12 的 `kind` 只认 `device_fact` / `due_letter` / `care` /
+  `learning`，载荷不能靠别名自选分类或归属。
