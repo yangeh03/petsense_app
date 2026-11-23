@@ -65,10 +65,11 @@ function statusPill(
   status: AgentTask['status'],
   theme: ReturnType<typeof useTheme>,
 ): { fg: string; bg: string } {
-  if (status === 'observing') return { fg: theme.online, bg: theme.onlineBackground };
-  if (status === 'completed') return { fg: theme.tint, bg: theme.tintBackground };
-  if (status === 'waiting_baseline') return { fg: theme.warning, bg: theme.warningBackground };
-  return { fg: theme.textSecondary, bg: theme.backgroundSelected };
+  if (status === 'observing') return { fg: theme.onlineForeground, bg: theme.onlineBackground };
+  if (status === 'completed') return { fg: theme.tintForeground, bg: theme.tintBackground };
+  if (status === 'waiting_baseline')
+    return { fg: theme.warningForeground, bg: theme.warningBackground };
+  return { fg: theme.text, bg: theme.backgroundSelected };
 }
 
 function TaskRow({
@@ -103,7 +104,7 @@ function TaskRow({
 
   const pill = statusPill(task.status, theme);
   const overdue = task.status === 'observing' && now > new Date(task.deadlineAt).getTime();
-  const deadlineColor = overdue ? theme.warning : theme.textSecondary;
+  const deadlineColor = overdue ? theme.warningForeground : theme.textSecondary;
 
   return (
     <View
@@ -157,7 +158,7 @@ function TaskRow({
             }}
             style={styles.topicLink}
           >
-            <ThemedText type="small" style={{ color: theme.tint }}>
+            <ThemedText type="small" themeColor="tintForeground">
               回到原会话
             </ThemedText>
             <SymbolView name={CHEVRON_ICON} tintColor={theme.tint} size={11} />
@@ -177,7 +178,7 @@ function TaskRow({
                 { borderColor: theme.tint, backgroundColor: theme.tintBackground },
               ]}
             >
-              <ThemedText type="smallBold" style={{ color: theme.tint }}>
+              <ThemedText type="smallBold" themeColor="tintForeground">
                 恢复观察
               </ThemedText>
             </Pressable>
@@ -282,8 +283,9 @@ export default function AgentTasksScreen() {
             tintColor={theme.textSecondary}
             size={32}
           />
-          <ThemedText type="small" themeColor="textSecondary">
-            还没有委托。在伙伴会话里说「帮我留意…」，确认后就会出现在这里。
+          <ThemedText type="smallBold">还没有委托</ThemedText>
+          <ThemedText type="small" themeColor="textSecondary" style={styles.emptyHint}>
+            在伙伴会话里说「帮我留意…」，确认后就会出现在这里。
           </ThemedText>
         </View>
       ) : null}
@@ -311,6 +313,7 @@ const styles = StyleSheet.create({
   center: { justifyContent: 'center' },
   error: { alignSelf: 'center', paddingVertical: 4 },
   empty: { alignItems: 'center', gap: 10, paddingBottom: 24 },
+  emptyHint: { maxWidth: 260, textAlign: 'center' },
   task: {
     borderWidth: 1,
     borderRadius: 16,

@@ -11,22 +11,17 @@ import { useTheme } from '@/hooks/use-theme';
 
 import { parseAgentMarkdown, type MarkdownSpan } from './markdown';
 
+// 中文破折号连同前字排版，避免换行时拆开或悬在行首。
+const JOINED_EM_DASH = '\u2060—\u2060—';
+
 function Spans({ spans }: { spans: MarkdownSpan[] }) {
   return (
     <>
-      {spans.map((span, index) =>
-        span.bold ? (
-          <Text key={index} style={styles.bold}>
-            {span.text}
-          </Text>
-        ) : span.code ? (
-          <Text key={index} style={styles.code}>
-            {span.text}
-          </Text>
-        ) : (
-          <Text key={index}>{span.text}</Text>
-        ),
-      )}
+      {spans.map((span, index) => (
+        <Text key={index} style={[span.bold && styles.bold, span.code && styles.code]}>
+          {span.code ? span.text : span.text.replaceAll('——', JOINED_EM_DASH)}
+        </Text>
+      ))}
     </>
   );
 }

@@ -614,7 +614,7 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry, o
               style={styles.replyAction}
               onPress={() => (turn.status === 'failed' ? onRetry(turn) : onContinueTopic(turn))}
             >
-              <ThemedText type="small" themeColor="textSecondary">
+              <ThemedText type="smallBold">
                 {turn.status === 'failed' ? '再说一次' : '继续聊这件事'}
               </ThemedText>
             </Pressable>

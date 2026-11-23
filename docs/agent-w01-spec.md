@@ -243,3 +243,9 @@ components/agent/          气泡定制（三人格 renderItem）、输入区、
 
 - 变更：本 spec、`server/tools/minimax_responses_smoke.py`（§8 步骤 0）、`server/petsense/agent/`（§3.1 布局）、alembic `0009`、客户端 §4.2 文件、行为评测目录、AGENTS.md（W01 完成状态与运行入口）、P00 契约（stance/WS 帧语义如有修订）。
 - 交接：W02 以 `loop.py` 的组装点为快照服务接入位；W03+ 新工具按「先改契约再注册」走 `registry.py`；W06 搜索工具在 `model.py` 的 Responses API 适配层上挂 `web_search`（W00 §4.4 实测结论）；回放脚本供后续各包验收取证复用。
+
+
+### 2026-11-23 视觉补验
+
+伙伴页浅色历史消息、深色历史消息和原生发送状态已走查。复测了 Markdown 加粗内的代码、列表间距和会话操作文字对比度。
+详见 [W01–W10 视觉验收与证据](agent-visual-acceptance-handoff-20261123.md#6-接手后验收记录2026-11-23)。

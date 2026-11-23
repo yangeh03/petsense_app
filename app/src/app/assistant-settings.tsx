@@ -50,7 +50,11 @@ export default function AssistantSettingsScreen() {
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
   const draft: CompanionSettings = { ...settings, ...changes };
-  const update = (patch: Partial<CompanionSettings>) => setChanges({ ...changes, ...patch });
+  const update = (patch: Partial<CompanionSettings>) => {
+    setChanges((current) => ({ ...current, ...patch }));
+    setSaved(false);
+    setError('');
+  };
 
   // 进入页面先拉取服务端当前值：store 可能还没加载（未经过伙伴页），
   // 不拉取会以默认值渲染表单，保存时把已持久化的设定覆盖回默认。
@@ -122,17 +126,13 @@ export default function AssistantSettingsScreen() {
           </ThemedText>
         ) : (
           <>
-            {!!saved && (
-              <ThemedText type="smallBold" style={{ color: theme.online }}>
-                已保存，伙伴页立即生效。
-              </ThemedText>
-            )}
             <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
               <ThemedText type="smallBold">助手名字</ThemedText>
               <TextInput
                 value={draft.assistantName}
                 onChangeText={(assistantName) => update({ assistantName })}
                 accessibilityLabel="助手名字"
+                editable={!saving}
                 placeholder="照料助手"
                 placeholderTextColor={theme.textSecondary}
                 returnKeyType="done"
@@ -154,6 +154,7 @@ export default function AssistantSettingsScreen() {
                 value={draft.ownerTitle ?? ''}
                 onChangeText={(ownerTitle) => update({ ownerTitle })}
                 accessibilityLabel="对主人的称呼"
+                editable={!saving}
                 placeholder="如：妈妈、铲屎官（可留空）"
                 placeholderTextColor={theme.textSecondary}
                 returnKeyType="done"
@@ -171,6 +172,7 @@ export default function AssistantSettingsScreen() {
                       key={option.value}
                       accessibilityRole="button"
                       accessibilityState={{ selected }}
+                      disabled={saving}
                       onPress={() => update({ verbosity: option.value })}
                       style={[
                         styles.chip,
@@ -199,6 +201,7 @@ export default function AssistantSettingsScreen() {
                       key={option.value}
                       accessibilityRole="button"
                       accessibilityState={{ selected }}
+                      disabled={saving}
                       onPress={() => update({ proactivity: option.value })}
                       style={[
                         styles.chip,
@@ -227,19 +230,20 @@ export default function AssistantSettingsScreen() {
               onPress={() => void save()}
               disabled={saving || !loaded || !dirty || !!nameError}
               accessibilityRole="button"
+              accessibilityLiveRegion="polite"
               style={[
                 styles.primary,
                 {
                   backgroundColor: theme.tint,
-                  opacity: saving || !loaded || !dirty || !!nameError ? 0.5 : 1,
+                  opacity: !saved && (!loaded || !dirty || !!nameError) ? 0.5 : 1,
                 },
               ]}
             >
               {saving ? (
-                <ActivityIndicator color={theme.backgroundElement} />
+                <ActivityIndicator color={theme.onTint} />
               ) : (
-                <ThemedText type="smallBold" style={{ color: theme.backgroundElement }}>
-                  保存设定
+                <ThemedText type="smallBold" style={{ color: theme.onTint }}>
+                  {saved ? '已保存' : '保存设定'}
                 </ThemedText>
               )}
             </Pressable>
