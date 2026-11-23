@@ -676,7 +676,7 @@ def run_structured(context):
     input_items = [{'role': 'system', 'content': system_content},
                    {'role': 'user', 'content': context['task']}]
     messages_trace.append({'role': 'user', 'task': context['task'][:600]})
-    tool_rounds = parse_failures = 0
+    tool_rounds = parse_failures = empty_retries = 0
     text, value, error = '', None, None
     try:
         while True:
@@ -722,6 +722,13 @@ def run_structured(context):
                 degraded.append('model_called_without_tools')
             text = stripped
             if not text.strip():
+                # 空响应（推理耗尽输出预算等）放宽 token 上限重试，而不是直接失败
+                # （与对话形态的既有处理一致，W01 §3.2）
+                empty_retries += 1
+                if empty_retries <= 2:
+                    degraded.append('empty_response_retry_%d' % empty_retries)
+                    max_tokens = max(max_tokens, 3600 * empty_retries)
+                    continue
                 degraded.append('empty_response')
                 error = 'model_unavailable'
                 break

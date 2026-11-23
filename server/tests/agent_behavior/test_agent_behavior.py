@@ -1200,8 +1200,11 @@ class CareBehaviorTests(unittest.TestCase):
         from petsense.agent import jobs as agent_jobs
         agent_jobs.tick(now=self.t0 + timedelta(minutes=10), limit=5)
         self.assertEqual(self._care_turns('care:event:'), [], '安静档不发主动会话消息')
+        # 切档走设定端点（切档后实际生效：已开题的事件按新档位补发）
+        response = self.client.patch('/api/app/agent/assistant-settings', headers=self.auth,
+                                    json={'proactivity': 1})
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
         with db.session_scope() as s:
-            s.get(CompanionSettings, self.uid).proactivity = 1
             s.query(AgentTurn).filter(AgentTurn.pet_id == self.pet).delete()
         for seq in (8, 9, 10):
             self._frame(seq, battery=13)

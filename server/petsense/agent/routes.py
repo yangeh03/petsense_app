@@ -20,7 +20,7 @@ from petsense.db.models import Pet
 from petsense.db.models.agent import AgentCareTopic, AgentProposal, AgentTurn
 from petsense.agent.observations import query
 from petsense.agent import baseline as baseline_service
-from petsense.agent import care
+from petsense.agent import care, jobs
 from petsense.agent import attachments, loop, runs, snapshot
 from petsense.agent import proposals as proposal_service
 from petsense.agent import settings as settings_service
@@ -282,7 +282,23 @@ def assistant_settings():
         return {'message': str(exc)}, 400
     with session_scope() as s:
         row = settings_service.persist(s, user['id'], patch)
-        return {'settings': settings_service.public(row)}
+        settings = settings_service.public(row)
+        # 主动程度切档后实际生效（W09 §4 A4）：已开题但还没发出首发消息的事件
+        # 按新档位补排作业（消息本身仍按 request key 去重，同实例只发一条）
+        if any(column == 'proactivity' for column, _ in patch):
+            level = settings['proactivity']
+            pets = s.execute(select(Pet).where(Pet.user_id == user['id'])).scalars().all()
+            for pet in pets:
+                topics = s.execute(select(AgentCareTopic).where(
+                    AgentCareTopic.pet_id == pet.id,
+                    AgentCareTopic.kind.in_(('device', 'learning')),
+                    AgentCareTopic.status.in_(('open', 'ongoing')),
+                    AgentCareTopic.delivered == 0)).scalars().all()
+                for topic in topics:
+                    jobs.enqueue(s, 'care_event', {'topic': topic.id, 'phase': 'open'},
+                                 dedup_key=care.event_job_key(topic.id, 'open', level),
+                                 next_run_at=utc_now())
+        return {'settings': settings}
 
 
 @bp.post('/pets/<int:pet_id>/proposals/<int:proposal_id>/decision')
