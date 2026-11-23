@@ -463,7 +463,10 @@ def handle_review(job, now):
         # b) 模型措辞的方向与已接受证据相反 → 用服务端锚定的比较句替换
         #    （比较仍被锚定，绝对事实叙述保留）。
         accepted = [f for f in findings if f['category'] == 'personal_change']
-        if change_service.asserts_comparison(say):
+        # 回顾路径保持严格：学习期/无合格证据时，正文出现「比平时」等说法一律回退事实摘要
+        # （W05/W09 的「认识中不说比平时」由服务端兜底；E51 按原文子串断言）。
+        # 到期回信才用否定感知的 asserts_comparison——「无法判断是否比平时少」是如实交代。
+        if change_service.claims_personal_change(say):
             if not accepted:
                 degraded.append('personal_change_without_evidence')
                 say = _review_fallback_text(facts)

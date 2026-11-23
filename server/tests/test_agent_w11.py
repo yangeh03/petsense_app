@@ -468,11 +468,11 @@ class ReviewChangeTests(ChangeTestBase):
         self.assertEqual([t for t in topics if t.category == 'personal_change'], [])
         self.assertTrue(any('观察小结' in t.reply for t in agent_turns))
 
-    def test_review_keeps_negated_comparison_disclaimer(self):
-        """没有合格候选时，否定式的比较说明（「无法判断是否比平时多」）不被回退。
+    def test_review_stays_strict_about_comparison_phrases(self):
+        """周期回顾更严：没有合格候选时，正文只要出现「比平时」就回退事实摘要。
 
-        原句取自真实模型轮次：模型在基线学习期如实交代不能比较，此前被子串匹配
-        当成「无证据的个人比较」而整段替换。
+        否定式的说明也一样（「还不能说活动量比平时多或少」）——这是 W05/W09
+        「认识中不说比平时」的服务端兜底，与到期回信路径的否定感知判定不同。
         """
         self.seed_baseline(walks=[10] * 7)
         self.seed_minutes(_day(-1), 1, walk=10)   # 在范围内
@@ -480,8 +480,8 @@ class ReviewChangeTests(ChangeTestBase):
         output = json.dumps({'say': say, 'level': 'high', 'findings': [
             {'category': 'coverage', 'anchor': 'coverage-morning-only', 'text': '昨天只有上午有数据。'}]})
         topics, agent_turns = self._run_review(output)
-        self.assertTrue(any(say in t.reply for t in agent_turns), [t.reply for t in agent_turns])
-        self.assertFalse(any('观察小结' in t.reply for t in agent_turns))
+        self.assertFalse(any('比平时' in t.reply for t in agent_turns), [t.reply for t in agent_turns])
+        self.assertTrue(any('观察小结' in t.reply for t in agent_turns))
 
     def test_checkpoint_letter_with_negated_disclaimer_is_kept(self):
         """到期回信如实说明「无法判断是否比平时少」（无合格证据）不得被拒。
