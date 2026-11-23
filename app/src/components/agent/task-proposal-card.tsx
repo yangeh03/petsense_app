@@ -157,12 +157,13 @@ export function TaskProposalCard({
 
   const decide = async (action: 'confirm' | 'reject') => {
     if (busy || proposal.status !== 'pending' || petId == null) return;
-    setBusy(true);
-    setError('');
+    // 未选口径不许确认：校验要在进入忙碌态之前（提前 return 会跳过 finally，按钮将卡死）
     if (action === 'confirm' && choiceRequired && !strategyChoice) {
       setError('请先选择「等基线就绪」或「先记录绝对事实」');
       return;
     }
+    setBusy(true);
+    setError('');
     try {
       const result = await decideAgentProposal(
         petId,
@@ -432,7 +433,10 @@ export function TaskProposalCard({
                 key={option.value}
                 accessibilityRole="button"
                 accessibilityLabel={option.label}
-                onPress={() => setStrategyChoice(option.value)}
+                onPress={() => {
+                  setStrategyChoice(option.value);
+                  setError('');
+                }}
                 style={[
                   styles.option,
                   { borderColor: theme.backgroundSelected },

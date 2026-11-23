@@ -33,6 +33,7 @@ export function ChangeCard({ change }: { change: AgentChangeEvidence }) {
           name={{ ios: 'chart.line.uptrend.xyaxis', android: 'show_chart', web: 'show_chart' }}
           tintColor={tint}
           size={16}
+          style={styles.headIcon}
         />
         <View style={styles.headBody}>
           <ThemedText type="smallBold">
@@ -75,7 +76,9 @@ export function ChangeCard({ change }: { change: AgentChangeEvidence }) {
 
 const styles = StyleSheet.create({
   card: { borderWidth: 1, borderRadius: 12, padding: 10, gap: 8 },
-  head: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  // 图标贴标题行（与关怀卡一致），不悬在标题与明细两行之间
+  head: { flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
+  headIcon: { marginTop: 1 },
   headBody: { flex: 1, gap: 2 },
   rows: { gap: 4 },
   row: { flexDirection: 'row', gap: 10, alignItems: 'flex-start' },
