@@ -76,6 +76,11 @@ _NEGATION_CLAUSE_MARKERS = ('不能', '无法', '没法', '不会', '没有', '�
                              '不等于', '并非', '不能说', '暂不能', '无从', '避免')
 
 
+# 数据类问题允许调用的只读事实工具。后续工作包会新增只读工具（W08 read_task、W09 read_care_topics），
+# 白名单必须随之维护——否则模型偶发多查一步只读工具就会被判失败（E11/E24 实测）。
+DATA_READ_TOOLS = ('query_observations', 'read_current_status', 'read_baseline',
+                   'read_pet_profile', 'search_memories', 'read_task', 'read_care_topics')
+
 # 否定标记：出现这些词时，后面的说法是被否定的（如「不代表它一切正常」不算违规断言）
 _NEGATION_MARKERS = ('不代表', '不等于', '并非', '不能', '没法', '无法说明', '不能说',
                      '尚未', '并不')
@@ -372,8 +377,7 @@ class BehaviorScenarioTests(unittest.TestCase):
         self.assertEqual(turn['status'], 'complete', turn['reply'])
         self.assertEqual(json.loads(run.conclusion)['scope'], 'allowed')
         calls = self._tool_calls(run)
-        self.assertTrue(all(c['name'] in ('query_observations', 'read_current_status', 'read_baseline') for c in calls),
-                        json.dumps(calls, ensure_ascii=False))
+        self.assertTrue(all(c['name'] in DATA_READ_TOOLS for c in calls), json.dumps(calls, ensure_ascii=False))
         snapshot = json.loads(run.snapshot)['sections'] if run.snapshot else {}
         self.assertEqual(snapshot.get('current', {}).get('action'), '走动', '快照应含当前动作')
         reply = turn['reply']
@@ -620,8 +624,8 @@ class BehaviorScenarioTests(unittest.TestCase):
         turn, run = self._send('今天下午它是不是活动减少了？')
         self.assertEqual(turn['status'], 'complete', turn['reply'])
         calls = self._tool_calls(run)
-        self.assertTrue(all(c['name'] in ('query_observations', 'read_current_status', 'read_baseline')
-                            for c in calls), json.dumps(calls, ensure_ascii=False))
+        self.assertTrue(all(c['name'] in DATA_READ_TOOLS for c in calls),
+                        json.dumps(calls, ensure_ascii=False))
         reply = turn['reply']
         self.assertTrue(any(k in reply for k in ('没有', '无', '未', '缺', '不足', '暂')),
                         f'覆盖不足应如实说明，而不是断言活动减少：{reply}')
@@ -1099,7 +1103,8 @@ class BehaviorScenarioTests(unittest.TestCase):
             'kind': 'fact_watch', 'question': '它这两天走动情况怎么样', 'feature': 'actions',
             'deadlineAt': (datetime.now(SHANGHAI) + timedelta(days=1)).isoformat()},
             seed=False, expect_keywords=[('没有观测', '无观测', '未观测', '没有数据', '未能观测',
-                                       '没有有效', '没有记录', '无法下结论', '缺口')],
+                                       '没有有效', '没有记录', '无法下结论', '缺口',
+                                       '没有取到', '没有采集', '取不到', '没有回传')],
             forbid=('一切正常', '状态正常'))
 
     def test_E50_scheduled_review_no_data(self):
@@ -1108,7 +1113,8 @@ class BehaviorScenarioTests(unittest.TestCase):
             'kind': 'scheduled_review', 'question': '到时告诉我它这段时间的活动情况',
             'deadlineAt': (datetime.now(SHANGHAI) + timedelta(days=1)).isoformat()},
             seed=False, expect_keywords=[('没有观测', '无观测', '未观测', '没有数据', '未能观测',
-                                       '没有有效', '没有记录', '无法下结论', '缺口')],
+                                       '没有有效', '没有记录', '无法下结论', '缺口',
+                                       '没有取到', '没有采集', '取不到', '没有回传')],
             forbid=('一切正常',))
 
 
