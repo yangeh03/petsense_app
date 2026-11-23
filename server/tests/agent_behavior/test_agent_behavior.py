@@ -909,7 +909,11 @@ class BehaviorScenarioTests(unittest.TestCase):
             row = s.execute(select(AgentProposal).where(
                 AgentProposal.kind == 'task_change', AgentProposal.status == 'pending')
                 .order_by(AgentProposal.id.desc())).scalars().first()
-            proposals_module.decide(s, pet, row.id, 'confirm')
+            plan = (json.loads(row.payload).get('plan') or {})
+            # W11 D3：基线未就绪的比较委托须由主人明确选口径——等同于主人在确认卡上
+            # 选了候选自带的策略（与 App 的 strategyChoice 提交一致）
+            strategy = plan.get('baselineStrategy') if plan.get('baselineStrategyChoiceRequired') else None
+            proposals_module.decide(s, pet, row.id, 'confirm', baseline_strategy=strategy)
             return s.execute(select(AgentTask.id)).scalars().first()
 
     def test_E42_delegation_proposes_pending_card(self):
