@@ -77,3 +77,17 @@
 - **集成期修复（真实模型暴露）**：共享后台回合 `loop.run_structured` 原先遇模型空响应即判 `model_unavailable`，与对话形态「空响应放宽 token 上限重试」不一致（E51 暴露）。已补同口径重试（最多 2 次、token 逐次翻倍、重试成功不算降级），检查点／回顾／事件三种形态共用；补确定性用例 2 项。
 - **W09 行为评测此前从未真正跑通**：模块级漏导入 `AgentTurn` 且 `CareBehaviorTests._at()` 缺参数，无凭据环境整组 skip 从未暴露；合并期已修，并在有真实 MiniMax 凭据时复跑 E51–E57 全通（明细见 `docs/agent-w10-spec.md` §7.4）。
 - **未做**：iOS 模拟器验收（W09-A4）与真项圈在线时段验收留待后续轮次；本轮无生产写入、无推送、无部署。合并后自动化证据见 `docs/agent-w10-spec.md` §7.4。
+
+## 7. iOS 模拟器验收（W09-A4，2026-11-23 晚，分支 codex/agent-w08-w10 @ 0094f62+）
+
+环境同 W08 §7（隔离后端 + 本地 broker + 假项圈 `device_emu.py`，真实 MiniMax 模型）。假项圈遥测改报 `battery:{found:true,percent:15}` 走真实 MQTT 入口触发硬件规则。
+
+实测路径与证据（截图 wt-14/18/19，隔离库 agent_care_topics/agent_turns/agent_jobs）：
+
+- **设备事实触发与迁移**：低电帧 ×3 后 `battery_low` 主题开题（topic 1 ongoing，warning），`care_event` 作业执行并在伙伴会话落 care 回合：care 卡「项圈电量偏低」+ 依据行「11/23 17:54 电量 15%」+「为什么提醒我？」入口。
+- **本地告警抑制**：`/api/app/agent/pets/1/care/rules` 返回 `capability: care-v1` 与三条受管规则；此时今日页通知中心显示「一切正常，暂没有需要关注的事」——同一低电事实未再产生本地重复告警（W09-A4 核心断言）。
+- **追问引用证据**：点 care 卡「为什么提醒我？」→ 预填问题发送 → 模型经 `read_care_topics` 引用主题证据帧回复（「依据帧……每帧电量 15.0……状态持续中」），并如实更正此前 no_data 的说法。
+- **切档实际生效**：助手设定页把主动程度切「安静」保存（`companion_settings.proactivity=0`，10:08:51Z）后停掉假项圈 → `data_stale` 主题照常开题（topic 2 open，可追溯），`care_event` 作业 done 但**未**产生任何消息回合（agent_turns 仍为 11）——安静档消息不发布、主题仍可审计，与 §3 设计一致。随后已恢复标准档。
+- 修复：本轮发现 care 卡证据行以文案为 React key，两条同分钟同电量证据会触发重复 key 告警；已改为 index 前缀（`app/src/components/agent/agent-message.tsx`），lint/typecheck/format/test 全过（109/109）。
+
+结论：W09-A4 通过。真项圈在线时段（实机失联/低电/长期无效读数）仍待硬件验收。

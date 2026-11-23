@@ -151,3 +151,34 @@ W08 E42–E50、W09 E51–E57、W10 E58–E65 共 24 个场景在合并后的分
 补充说明：合并后又跑了一轮 24 场景的合并批次（同一代码状态），其中 E47（检查点模型输出偶发不可解析 → 该运行降级）与 E61（日记生成措辞）各偶发 1 次失败，而这两个场景在各自专跑的 3 轮重复中均 3/3 通过，属真实模型输出方差，不是回归；本轮未为它们改动产品语义（W08/W09 分支的后续提交 `9c5a0ce`/`f0386b6` 正好加固后台回合的工具轮次与空响应重试，整合时一并带入）。
 
 本轮**未做**模拟器验收（W10-A3/A4/A5/A6、W08-A6、W09-A4 仍待模拟器）；**未做**真项圈验收；生产录音开关保持关闭；无生产写入、无推送、无部署、无 main 变更。
+
+## 8. iOS 模拟器验收（W10-A3/A4/A5，2026-11-23 晚，分支 codex/agent-w08-w10 @ 0094f62+）
+
+环境同 W08 §7。隔离服务端显式 `PETSENSE_AGENT_RECORDING_ENABLED=1`（生产仍默认关闭）。假项圈 `device_emu.py` 实现 psrec01 设备端：订阅命令 topic，回传 status/start/chunk/end 帧（16 kHz/16 bit 单声道正弦波 WAV）。
+
+**W10-A3 远程录音**（截图 wt-04~08，emu2.log，agent_actions id 1/2，server4.log）：
+
+- 会话请求录音 → 确认卡（远程录音确认，10 秒，目标项圈）→ 点确认后 `petsense/device/acc-collar-1/command` 下发，假项圈回传 320,044 B / 79 分片，`agent-recordings/2.wav` 落盘（RIFF PCM 16k mono），卡片翻「已完成 · 项圈录音完成，可点击播放」。
+- 播放：点「播放录音」→ `action-audio.native.tsx` WebView 内建控件渲染成功；按下播放后 `GET /api/app/agent/recordings/2/audio?token=…` 两次 206（AVPlayer Range 请求），鉴权音频路由只在本包内可达。
+- 失败展示路径：遥测 topic 修正前（设备能力未上报）确认后卡片如实展示「未完成：项圈固件不支持远程录音（需升级到支持 psrec01 的固件）」——降级文案与真实能力判定一致。
+- 重开回读：terminate 重开 App 后已完成录音卡与播放按钮从服务端历史完整恢复。
+- 说明：验收中发现假项圈原先把遥测发到 `petsense/sensor/<id>/data`，服务端只按 `petsense/sensor/<id>` 归属设备帧（`sensor_device()` 拒绝含 `/` 尾段），导致设备 no_data、能力不识别；修正 fixture topic 后链路即通。这是 fixture 错误，不是产品缺陷。
+- 未做：真项圈录音（无升级固件的真机），生产录音开关保持关闭。
+
+**W10-A4 运动日记**（截图 wt-12/13，petgif_diary_jobs，agent_actions id 5/6）：
+
+- 数据准备（测试专用 seed，均已在验收记录中注明）：本地 HTTP 提供测试头像（`PETSENSE_PETGIF_STORAGE_PUBLIC` 指向 127.0.0.1:8099，纯色 PNG），今日 4 个 walking 分钟行（镜像真实观测投影的动作统计形态）。快照口径核对：`today_snapshot` = 走动 240 s / 600 步。
+- 会话请求 → 确认卡「运动日记确认 · 2026-11-23 · 约 4 分钟 · 估算 600 步」→ 确认后建 PetGIF 任务。第一次任务上游轮询 `fetch failed`（真实外部服务瞬时失败），卡片如实展示「未完成：fetch failed」；再次请求出第 2 版确认卡（同日复用/重新生成路径），确认后任务 completed，海报落 `diary-posters/<jobId>.png`，卡片「已完成 · 打开日记详情」。
+- 详情页：打开后鉴权 `GET /api/app/exercise-diaries/poster/<jobId>` 200，页面含保存到相册/去社区发布/重新生成与「近期日记」列表。
+
+**W10-A5 私有草稿**（截图 wt-09~11，agent_actions id 3/4，posts 计数）：
+
+- 明确指令直存：「在社区发一条草稿：…」→ 直写并回执「社区草稿 已完成（仅自己可见）」；模糊意图「帮我想一条发社区的动态」→ 确认卡（文案候选）→ 确认后保存。
+- 发布页：私有槽「来自助手的草稿（仅自己可见）」展示文案，「把助手草稿填入正文」可填入（22/500），「移除助手草稿」移除后槽消失（action 3 dismissed）；重开 App 后发布页私有槽从服务端恢复（action 4 completed）。
+- 异账号：注册第二个隔离账号 `acc_other`，访问 `/api/app/agent/pets/1/social-draft` 返回 404（宠物不存在，归属过滤）。
+- 社区计数：全程 `posts` 表 0 行——草稿不产生任何社区发布副作用，发布始终手动。
+- 失败/缺口路径：录音未确认、日记走动不足 1 分钟（模型如实回复「今日走动 0 秒……没有生成」）与上游 fetch failed 均已覆盖。
+
+**W10-A6 发布兼容**：App 完整检查（lint/typecheck/format/test 109/109）通过；旧 bundle 兼容与生产录音关闭状态由集成阶段核对，未在本轮重复。生产无写入、无 OTA、无部署。
+
+结论：W10-A3/A4/A5 模拟器验收通过；真项圈录音与生产灰度开启仍按 §6.3 门槛另行评估。

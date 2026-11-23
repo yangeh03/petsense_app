@@ -391,8 +391,8 @@ function CareCard({ care, onAskWhy }: { care: AgentCareInfo; onAskWhy?: () => vo
           </ThemedText>
         ) : null}
       </View>
-      {lines.map((line) => (
-        <ThemedText key={line} type="small" themeColor="textSecondary">
+      {lines.map((line, index) => (
+        <ThemedText key={`${index}-${line}`} type="small" themeColor="textSecondary">
           依据 · {line}
         </ThemedText>
       ))}
