@@ -1693,10 +1693,10 @@ class ChangeBehaviorTests(unittest.TestCase):
     def test_E70_weekly_cites_only_eligible_slots(self):
         """E70 部分可比周：只引用可比且确实超范围的时段。"""
         scan0, scan1, tick_at, change_day = self._weekly_clock()
-        # 基线锚定到异常日前 7 个有效日（_ready_baseline 以今天为参照会漂出窗口）
+        # 基线 = 异常日之前紧邻的 7 天（留空中间日会制造人为覆盖缺口，把模型带偏）
         base_day = datetime.strptime(change_day, '%Y-%m-%d').date()
         for index in range(7):
-            self._seed_minutes((base_day - timedelta(days=8 - index)).isoformat(), 1, walk=10)
+            self._seed_minutes((base_day - timedelta(days=7 - index)).isoformat(), 1, walk=10)
         self._seed_minutes(change_day, 1, walk=100)
         self._scan(scan0)
         self._scan(scan1)
@@ -1705,6 +1705,16 @@ class ChangeBehaviorTests(unittest.TestCase):
         agent_jobs.tick(now=tick_at or utc_now(), limit=5)
         weekly = self._turns('care:review:weekly:')
         self.assertTrue(weekly, '周回顾应交付一条')
+        # D2 保留模型的显著性判断（不强制发布）；但夹具必须真的造出合格候选，
+        # 否则下面的逐块校验会空过。
+        care_block = next((block['care'] for block in json.loads(weekly[0].blocks or '[]')
+                           if block.get('type') == 'care'), {})
+        with db.session_scope() as s:
+            run = s.get(AgentRun, care_block.get('runId'))
+            diagnostics = (json.loads(run.conclusion) if run is not None else {}).get(
+                'personalChange') or {}
+        self.assertGreaterEqual(diagnostics.get('eligibleCandidates') or 0, 1,
+                                f'周回顾窗口内应存在超范围的合格候选：{diagnostics}')
         for block in self._change_blocks(weekly[0]):
             evidence = block['change']
             self.assertIn(evidence['direction'], ('above', 'below'))
@@ -1765,7 +1775,11 @@ class ChangeBehaviorTests(unittest.TestCase):
         self.assertTrue(item.get('note'), '证据应带服务端锚定的说明')
 
     def test_E72_absolute_facts_task_letter_has_no_comparison(self):
-        """E72 主人明确选「先记录绝对事实」：回信只给绝对事实，不做个人比较。"""
+        """E72 主人明确选「先记录绝对事实」：回信只给绝对事实，不做个人比较。
+
+        问题用中性措辞：主人的原话若本身带「比平时多」，降级信模板会原样引用它，
+        这里测的是模型回信不作个人比较，不是守卫对转述提问的处理（见 spec 验收记录）。
+        """
         deadline, _target = self._comparison_task(strategy='fact_first', neutral=True)
         from petsense.agent import jobs as agent_jobs
         # 模型输出不合法时到期重试一次（+60s）再降级：两次 tick 覆盖完整到期路径
@@ -1779,7 +1793,11 @@ class ChangeBehaviorTests(unittest.TestCase):
         self.assertFalse(_asserts_claim(reply, '比平时少'),
                          f'事实策略回信不得做个人比较：{reply}')
         with db.session_scope() as s:
+            from petsense.db.models.agent import AgentTaskDelivery
             rows = s.execute(select(AgentTaskDelivery)).scalars().all()
         payload = json.loads(rows[0].payload)
+        # 降级信天然不含比较结论：必须是真的模型回信，上面的断言才有意义
+        self.assertFalse(payload.get('degraded'),
+                         f'应为模型评估回信而不是降级信：{payload.get("text")}')
         self.assertEqual(payload.get('changeEvidence') or [], [],
                          '事实策略不得冻结个人比较证据')
