@@ -1583,24 +1583,27 @@ class ChangeBehaviorTests(unittest.TestCase):
         return local.astimezone(ZoneInfo('UTC'))
 
     def _weekly_clock(self):
-        """下一次周一 09:15 周回顾点（上海）及其前置锚点，与运行日无关。
+        """最近一个已过去的周一 09:15 周回顾点（上海）及其前置锚点，与运行日无关。
 
         weekly 回顾只在周一 09:15 调度点后开启（care.due_weekly_window），且要求
-        该调度点不早于 care 启用（首扫）时刻。因此首扫固定取其前一天（周日）
-        08:00，第二次扫描落在周一 09:15 调度点本身，tick 再 +5 分钟处理队列。
-        异常数据日取窗口内的周日（周一前一天），基线取其前 7 个有效日。
-        返回 (首扫, 周一扫描, tick, 异常日文本)。
+        该调度点不早于 care 启用（首扫）时刻；而「时段已结束」按真实时钟判定
+        （review_facts 以 utc_now 物化候选）。所以整个夹具锚定在已过去的回顾点：
+        首扫 = 该周周日 08:00（早于周一 09:15 即完成启用），周一 09:30 再扫一次，
+        tick 用真实现在处理队列（两个回顾点都已到期）。异常日取窗口内的周日
+        （周一前一天，时段早已结束），基线取其前 7 个有效日。
+        返回 (首扫, 周一扫描, tick=None→真实现在, 异常日文本)。
         """
         from datetime import time as dtime
-        today = datetime.now(SHANGHAI).date()
-        offset = (7 - today.weekday()) % 7 or 7
-        monday = today + timedelta(days=offset)
+        local_now = datetime.now(SHANGHAI)
+        monday = (local_now - timedelta(days=local_now.weekday())).date()
+        point = datetime.combine(monday, dtime(9, 15), tzinfo=SHANGHAI)
+        if local_now < point:
+            monday -= timedelta(days=7)     # 周一 09:15 还没到：用上一个回顾点
         scan0 = datetime.combine(monday - timedelta(days=1), dtime(8, 0), tzinfo=SHANGHAI)
-        scan1 = datetime.combine(monday, dtime(9, 15), tzinfo=SHANGHAI)
-        tick = datetime.combine(monday, dtime(9, 20), tzinfo=SHANGHAI)
+        scan1 = datetime.combine(monday, dtime(9, 30), tzinfo=SHANGHAI)
         change_day = (monday - timedelta(days=1)).isoformat()
         return (scan0.astimezone(ZoneInfo('UTC')), scan1.astimezone(ZoneInfo('UTC')),
-                tick.astimezone(ZoneInfo('UTC')), change_day)
+                None, change_day)
 
     def _turns(self, prefix=''):
         with db.session_scope() as s:
@@ -1698,7 +1701,8 @@ class ChangeBehaviorTests(unittest.TestCase):
         self._scan(scan0)
         self._scan(scan1)
         from petsense.agent import jobs as agent_jobs
-        agent_jobs.tick(now=tick_at, limit=5)
+        from petsense.db import utc_now
+        agent_jobs.tick(now=tick_at or utc_now(), limit=5)
         weekly = self._turns('care:review:weekly:')
         self.assertTrue(weekly, '周回顾应交付一条')
         for block in self._change_blocks(weekly[0]):
@@ -1741,9 +1745,12 @@ class ChangeBehaviorTests(unittest.TestCase):
         """E71 比较委托到期回信：真实模型评估，带冻结证据且方向与证据一致。"""
         deadline, target = self._comparison_task(strategy='wait_baseline')
         from petsense.agent import jobs as agent_jobs
+        # 正常回信一次 tick 交付；模型输出不合法时走 +60s 重试 → 第二次 tick 降级回信
         agent_jobs.tick(now=deadline + timedelta(minutes=1), limit=5)
+        agent_jobs.tick(now=deadline + timedelta(minutes=3), limit=5)
         deliveries = self._turns('task-')
         self.assertTrue(deliveries, '委托应交付回信')
+        from petsense.db.models.agent import AgentTaskDelivery
         with db.session_scope() as s:
             rows = s.execute(select(AgentTaskDelivery)).scalars().all()
         self.assertEqual(len(rows), 1, '回信恰好一条')
@@ -1760,7 +1767,9 @@ class ChangeBehaviorTests(unittest.TestCase):
         """E72 主人明确选「先记录绝对事实」：回信只给绝对事实，不做个人比较。"""
         deadline, _target = self._comparison_task(strategy='fact_first')
         from petsense.agent import jobs as agent_jobs
+        # 模型输出不合法时到期重试一次（+60s）再降级：两次 tick 覆盖完整到期路径
         agent_jobs.tick(now=deadline + timedelta(minutes=1), limit=5)
+        agent_jobs.tick(now=deadline + timedelta(minutes=3), limit=5)
         deliveries = self._turns('task-')
         self.assertTrue(deliveries, '委托应交付回信')
         reply = deliveries[0].reply
