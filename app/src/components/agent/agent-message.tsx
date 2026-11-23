@@ -359,7 +359,8 @@ function careEvidenceLines(care: AgentCareInfo): string[] {
       lines.push(`${time} ${entry.note}`.trim());
     }
   }
-  return lines;
+  // 分钟级格式化会让相邻帧产出同一行文字，重复行只会制造噪声
+  return lines.filter((line, index) => lines.indexOf(line) === index);
 }
 
 function CareCard({ care, onAskWhy }: { care: AgentCareInfo; onAskWhy?: () => void }) {
