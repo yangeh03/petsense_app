@@ -1115,9 +1115,14 @@ class BehaviorScenarioTests(unittest.TestCase):
     # ── W10 动作工具（E58–E65，agent-w10-spec.md §5；录音场景默认关停，按 D3 显式开启）──
 
     def _seed_today_walking(self, minutes=10):
-        """给上海时间今天上午种有效走动，供日记生成场景满足 1 分钟门槛。"""
+        """给上海时间今天**已过去**的时段种有效走动，供日记生成场景满足 1 分钟门槛。
+
+        不能种在固定的上午 9 点：凌晨运行时这些分钟还在未来，「今天」的查询查不到，
+        模型会如实拒绝生成。取现在往前 minutes+2 分钟，且不早于今天 0 点。
+        """
         now_sh = datetime.now(SHANGHAI)
-        start = now_sh.replace(hour=9, minute=0, second=0, microsecond=0)
+        start = max(now_sh.replace(hour=0, minute=0, second=0, microsecond=0),
+                    (now_sh - timedelta(minutes=minutes + 2)).replace(second=0, microsecond=0))
         minute = start.astimezone(ZoneInfo('UTC'))
         with db.session_scope() as s:
             for i in range(minutes):
