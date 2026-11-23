@@ -6,9 +6,10 @@ W12 的投影据此把该条目判定为个人高相关推送候选。
 
 覆盖：
 - 严格相等 `provenance == 'model_high_accepted'` + 已交付回合（宠物与运行精确匹配）
-  → 条目成为推送候选；
+  + 主题本身是回合里交付的个人变化（证据 id 精确匹配）→ 条目成为推送候选；
 - **绝不抬升**：normal / 默认高相关（legacy_default_*）/ 安静档（无交付回合）/
-  证据缺失（无运行）/ 运行与宠物不匹配 / 回合与运行不匹配 → 都不是推送候选；
+  证据缺失（无运行）/ 运行与宠物不匹配 / 回合与运行不匹配 / 同一次回顾的其它发现 /
+  主题证据不在回合的个人变化块里 → 都不是推送候选；
 - **重启后由投影恢复**：条目先建、运行与回合后到，再次投影即恢复资格；
 - 既有中心策略不受影响：warning/critical 设备告警与到期回信仍是候选。
 """
@@ -38,11 +39,21 @@ from petsense.db.models.agent import (
 )
 
 WINDOW = '2026-11-23'
+EVIDENCE_ID = 'actions:2026-11-23:1'     # W11 冻结证据的稳定引用（feature:date:slot）
 
 
 def _sha(value):
     import hashlib
     return hashlib.sha256(value.encode()).hexdigest()
+
+
+def _frozen_evidence(evidence_id=EVIDENCE_ID):
+    """W11 冻结证据的最小形态（handle_review 经 change.freeze 写入主题与回合）。"""
+    return {'evidenceId': evidence_id, 'feature': 'actions', 'dimension': '动作',
+            'date': '2026-11-23', 'slot': 1, 'slotLabel': '上午 06–12 点',
+            'value': 7000, 'direction': 'above',
+            'range': {'p10': 700, 'p50': 700, 'p90': 700},
+            'note': '动作上午 06–12 点实际 116.7 分钟，高于平时范围。'}
 
 
 class W11W12PublicationTests(unittest.TestCase):
@@ -95,36 +106,55 @@ class W11W12PublicationTests(unittest.TestCase):
             s.flush()
             return run.id
 
-    def _review_turn(self, run_id, *, pet_id=None, kind='daily', window=WINDOW, link=True):
-        """W09 已交付的回顾回合：care 块带 runId（与运行的精确链接）。"""
+    def _review_turn(self, run_id, *, pet_id=None, kind='daily', window=WINDOW, link=True,
+                     changes=(EVIDENCE_ID,)):
+        """W09 已交付的回顾回合：care 块带 runId（与运行的精确链接）。
+
+        changes 为回合里交付的个人变化证据 id（personal_change 块）；同一次回顾的
+        覆盖/观察类发现只开主题，不进这些块。
+        """
         pet_id = pet_id or self.pet_id
         with db.session_scope() as s:
             turn = AgentTurn(pet_id=pet_id, request_id='care:review:%s:%d:%s' % (kind, pet_id, window),
                              text='', target='assistant', topic_id=None, reply_to=None,
                              sources='[]', speaker='assistant', reply='回顾已送达',
                              status='complete', created_at=self.now,
-                             blocks=json.dumps([
-                                 {'type': 'text', 'speaker': 'assistant', 'text': '回顾已送达'},
-                                 {'type': 'care', 'care': {'kind': 'review', 'category': 'daily',
-                                                          'title': '周期回顾', 'status': 'info',
-                                                          'runId': run_id if link else 999999}},
-                             ], ensure_ascii=False))
+                             blocks=json.dumps(
+                                 [{'type': 'text', 'speaker': 'assistant', 'text': '回顾已送达'}]
+                                 + [{'type': 'personal_change', 'change': _frozen_evidence(item)}
+                                    for item in changes]
+                                 + [{'type': 'care', 'care': {'kind': 'review', 'category': 'daily',
+                                                             'title': '周期回顾', 'status': 'info',
+                                                             'runId': run_id if link else 999999}}],
+                                 ensure_ascii=False))
             s.add(turn)
             s.flush()
             return turn.id
 
-    def _review_topic(self, *, run_id=None, pet_id=None, window=WINDOW):
-        """W09 回顾开出的关怀主题（kind='observation'）。"""
+    def _review_topic(self, *, run_id=None, pet_id=None, window=WINDOW,
+                      category='personal_change', evidence_ids=(EVIDENCE_ID,), anchor=None):
+        """W09 回顾开出的关怀主题（kind='observation'）。
+
+        个人变化主题带冻结证据行（锚点 change:<evidenceId>）；其它类别没有冻结证据。
+        """
         self._enable()          # 启用之后创建的来源才入箱（D5）
         pet_id = pet_id or self.pet_id
         with db.session_scope() as s:
-            topic = AgentCareTopic(pet_id=pet_id, kind='observation', category='personal_change',
-                                   anchor='change:slot-1', instance=1, status='open',
-                                   severity='info', title='走动比平时多了', detail='今天比平时多走了一些',
-                                   evidence=json.dumps([{'at': '2026-11-23T09:00:00.000Z',
-                                                         'kind': 'review', 'note': '个人变化',
-                                                         'window': window}], ensure_ascii=False),
-                                   delivered=0, run_id=run_id, opened_at=self.now, updated_at=self.now)
+            rows = [{'at': '2026-11-23T09:00:00.000Z', 'kind': 'personal_change',
+                     'note': '个人变化', 'change': _frozen_evidence(item)}
+                    for item in evidence_ids]
+            rows.append({'at': '2026-11-23T09:00:00.000Z', 'kind': 'review',
+                         'note': '个人变化' if category == 'personal_change' else '其它发现',
+                         'window': window})
+            topic = AgentCareTopic(pet_id=pet_id, kind='observation', category=category,
+                                   anchor=anchor or ('change:%s' % evidence_ids[0]
+                                                     if evidence_ids else 'change:slot-1'),
+                                   instance=1, status='open',
+                                   severity='info', title='走动比平时多了',
+                                   detail='今天比平时多走了一些',
+                                   evidence=json.dumps(rows, ensure_ascii=False),
+                                   delivered=0, run_id=run_id, opened_at=self.now,
+                                   updated_at=self.now)
             s.add(topic)
             s.flush()
             return topic.id
@@ -253,6 +283,47 @@ class W11W12PublicationTests(unittest.TestCase):
         run_id = self._review_run(window='2026-11-16')
         self._review_turn(run_id, window='2026-11-16')
         self._review_topic(run_id=run_id)          # 主题窗口是 2026-11-23
+        self._project()
+        with db.session_scope() as s:
+            row = self._care_item(s)
+            self.assertEqual(row.push_candidate, 0)
+
+    def test_sibling_finding_of_same_review_is_not_elevated(self):
+        """同一次回顾的覆盖/观察类发现挂同一个 run id，但没有冻结证据 → 不抬升。
+
+        取自真实模型回顾（E66）：一次回顾同时开出「上午走动明显高于平时」
+        「昨天仅上午有数据覆盖」「声音维度仍在学习中」三个主题，只有前者是个人变化。
+        """
+        run_id = self._review_run()
+        self._review_turn(run_id)
+        self._review_topic(run_id=run_id, category='coverage', evidence_ids=(),
+                           anchor='coverage_20261123')
+        self._project()
+        with db.session_scope() as s:
+            row = self._care_item(s)
+            self.assertEqual(row.relevance, '')
+            self.assertEqual(row.frozen_evidence, 0)
+            self.assertEqual(row.delivery_approved, 0)
+            self.assertEqual(row.high_relevance, 0)
+            self.assertEqual(row.push_candidate, 0)
+            self.assertEqual(inbox.push_candidates(s, self.uid), [])
+
+    def test_change_not_delivered_in_turn_is_not_elevated(self):
+        """主题的冻结证据不在已交付回合的个人变化块里 → 主题与回合对不上，不抬升。"""
+        run_id = self._review_run()
+        self._review_turn(run_id, changes=())       # 回合没交付任何个人变化块
+        self._review_topic(run_id=run_id)
+        self._project()
+        with db.session_scope() as s:
+            row = self._care_item(s)
+            self.assertEqual(row.push_candidate, 0)
+            self.assertEqual(row.high_relevance, 0)
+
+    def test_change_of_other_slot_in_turn_is_not_elevated(self):
+        """回合交付的是另一个时段的证据，不替本主题作数。"""
+        run_id = self._review_run()
+        self._review_turn(run_id, changes=('actions:2026-11-23:2',))
+        self._review_topic(run_id=run_id)
         self._project()
         with db.session_scope() as s:
             row = self._care_item(s)
