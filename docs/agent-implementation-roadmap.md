@@ -144,4 +144,4 @@ W02 已完成（2026-11-22）：iOS 发送、收包和轨迹回放经独立补�
 
 W03–W07 集成（2026-11-23，分支 `codex/agent-w03-w07-integration`）：W03（378d43a+审计修复 3c3191c）、W04（3e139cc，集成核查补日汇总泄露控制）、W05（62d5ede）、W06（3895ec1，`PETSENSE_SEARCH_DISABLED` 生产起步关闭）、W07（816236e）全部合入；Alembic 单链 0011→0014，行为评测号段 W03 E16–E21+E6、W05 E22–E26、W04 E27–E34、W06 E35–E38+E7、W07 E39–E41。全量真实凭据行为评测与模拟器终验见各 spec §9/§10。
 
-W06 已实现并合入集成（2026-11-23 合入 3895ec1）：联网知识接入——内建 `web_search` 按轮挂载 + 确定性限次（每运行 2 次）、`read_web_page` pin-IP 防护 fetcher（trafilatura）、网页来源卡、`PETSENSE_SEARCH_DISABLED` 两阶段发布开关；服务端单测与客户端检查全过，行为评测（E35–E38，E7 为关闭态回归）与模拟器验收待真实凭据环境执行。见 [W06 spec §10.1](./agent-w06-spec.md)。
+W06 已实现并合入集成（2026-11-23 合入 3895ec1）：联网知识接入——内建 `web_search` 按轮挂载 + 确定性限次（每运行 2 次）、`read_web_page` pin-IP 防护 fetcher（trafilatura）、网页来源卡、`PETSENSE_SEARCH_DISABLED` 两阶段发布开关；行为评测（E35–E38 三轮稳定 + E7 关闭态回归）与模拟器验收已过；**2026-11-23 生产放行已执行**（负责人确认不等 OTA、D6 以限次兜底，drop-in 移除并重启，生产搜索已开启）。见 [W06 spec §10.1/§10.4](./agent-w06-spec.md)。

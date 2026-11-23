@@ -358,6 +358,6 @@ W00 已完成（2026-11-22，spec 见 [agent-w00-spec.md](./agent-w00-spec.md)�
 
 W03 已完成（spec 与验收见 [agent-w03-spec.md](./agent-w03-spec.md)：档案确认协议双路径、助手设定页、生日/体重；审计修复 3c3191c 后集成分支核验，E6 新断言真实模型子集复跑通过）。W04 已完成（[agent-w04-spec.md](./agent-w04-spec.md)：长期记忆三工具、认识卡、日/周汇总与报告导出；2026-11-23 集成核查补日汇总检索/报告泄露控制）。W05 已实现并合入集成（62d5ede，[W05 spec §9](./agent-w05-spec.md)：个人基线物化、`read_baseline`、baseline 端点、学习卡真实状态、回填核验工具）。W07 已完成（[agent-w07-spec.md](./agent-w07-spec.md) §10.1：图片上传/鉴权回读/灯箱/照片非实时约束）。
 
-W06 已实现并合入集成（2026-11-23 合入 3895ec1，spec 与验收状态见 [agent-w06-spec.md](./agent-w06-spec.md) §10.1：内建 `web_search` 按轮挂载 + 确定性限次、`read_web_page` pin-IP 防护 fetcher、网页来源卡、`PETSENSE_SEARCH_DISABLED` 两阶段发布开关；服务端单测与客户端检查全过）。待办：真实凭据行为评测（E35–E38，E7 为关闭态回归）、§8 模拟器验收、生产两阶段发布与 D6 计费核对。行为评测号段：W06 用 E35–E38，避开 W03/04/05。
+W06 已实现并合入集成（2026-11-23 合入 3895ec1，spec 与验收状态见 [agent-w06-spec.md](./agent-w06-spec.md) §10.1：内建 `web_search` 按轮挂载 + 确定性限次、`read_web_page` pin-IP 防护 fetcher、网页来源卡、`PETSENSE_SEARCH_DISABLED` 两阶段发布开关；服务端单测与客户端检查全过）。行为评测（E35–E38 三轮稳定 + E7 关闭态回归）、§8 模拟器验收均已过（spec §10.2/§10.4）；**2026-11-23 生产放行已执行**（负责人确认不等 OTA、D6 以限次兜底，drop-in 移除并重启，生产搜索已开启，spec §10.4）。行为评测号段：W06 用 E35–E38，避开 W03/04/05。
 
 行为评测号段：W03 E16–E21＋E6、W05 E22–E26、W04 E27–E34、W06 E35–E38＋E7（开关关时）、W07 E39–E41。
