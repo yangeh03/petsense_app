@@ -26,6 +26,10 @@ export const Colors = {
     info: '#5B8DEF',
     /** 在线 / 正常状态 */
     online: '#31A66D',
+    /** 在线状态胶囊底色（配 online 文字） */
+    onlineBackground: '#E4F2EA',
+    /** 等待状态胶囊底色（配 warning 文字） */
+    warningBackground: '#FBF1DD',
   },
   dark: {
     text: '#F3EAE0',
@@ -39,6 +43,8 @@ export const Colors = {
     danger: '#FF6369',
     info: '#7FA8F2',
     online: '#4CC38A',
+    onlineBackground: '#1F3A2A',
+    warningBackground: '#3B2F19',
   },
 } as const;
 
