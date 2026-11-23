@@ -1510,9 +1510,12 @@ class ChangeBehaviorTests(unittest.TestCase):
 
     def setUp(self):
         fresh_db(self)
-        from petsense.agent import care_jobs, jobs as agent_jobs
+        from petsense.agent import care_jobs, jobs as agent_jobs, tasks as agent_tasks
         agent_jobs._HANDLERS.clear()
         care_jobs.register()
+        # 委托到期回信走 task.checkpoint 作业（app.py 启动时注册；测试内等价补齐）
+        agent_jobs.register_handler(agent_tasks.CHECKPOINT_KIND,
+                                    agent_tasks.handle_checkpoint_job)
         self.addCleanup(agent_jobs._HANDLERS.clear)
         self.app = Flask(__name__)
         self.app.register_blueprint(bp)
@@ -1578,6 +1581,26 @@ class ChangeBehaviorTests(unittest.TestCase):
         local = datetime.now(SHANGHAI).replace(hour=hour, minute=minute, second=second,
                                                microsecond=0) + timedelta(days=day_offset)
         return local.astimezone(ZoneInfo('UTC'))
+
+    def _weekly_clock(self):
+        """下一次周一 09:15 周回顾点（上海）及其前置锚点，与运行日无关。
+
+        weekly 回顾只在周一 09:15 调度点后开启（care.due_weekly_window），且要求
+        该调度点不早于 care 启用（首扫）时刻。因此首扫固定取其前一天（周日）
+        08:00，第二次扫描落在周一 09:15 调度点本身，tick 再 +5 分钟处理队列。
+        异常数据日取窗口内的周日（周一前一天），基线取其前 7 个有效日。
+        返回 (首扫, 周一扫描, tick, 异常日文本)。
+        """
+        from datetime import time as dtime
+        today = datetime.now(SHANGHAI).date()
+        offset = (7 - today.weekday()) % 7 or 7
+        monday = today + timedelta(days=offset)
+        scan0 = datetime.combine(monday - timedelta(days=1), dtime(8, 0), tzinfo=SHANGHAI)
+        scan1 = datetime.combine(monday, dtime(9, 15), tzinfo=SHANGHAI)
+        tick = datetime.combine(monday, dtime(9, 20), tzinfo=SHANGHAI)
+        change_day = (monday - timedelta(days=1)).isoformat()
+        return (scan0.astimezone(ZoneInfo('UTC')), scan1.astimezone(ZoneInfo('UTC')),
+                tick.astimezone(ZoneInfo('UTC')), change_day)
 
     def _turns(self, prefix=''):
         with db.session_scope() as s:
@@ -1666,12 +1689,16 @@ class ChangeBehaviorTests(unittest.TestCase):
 
     def test_E70_weekly_cites_only_eligible_slots(self):
         """E70 部分可比周：只引用可比且确实超范围的时段。"""
-        self._ready_baseline(walk=10)
-        self._seed_minutes(self._day(-1), 1, walk=100)
-        self._scan(self._at(0, 8, 0))
-        self._scan(self._at(1, 9, 15))
+        scan0, scan1, tick_at, change_day = self._weekly_clock()
+        # 基线锚定到异常日前 7 个有效日（_ready_baseline 以今天为参照会漂出窗口）
+        base_day = datetime.strptime(change_day, '%Y-%m-%d').date()
+        for index in range(7):
+            self._seed_minutes((base_day - timedelta(days=8 - index)).isoformat(), 1, walk=10)
+        self._seed_minutes(change_day, 1, walk=100)
+        self._scan(scan0)
+        self._scan(scan1)
         from petsense.agent import jobs as agent_jobs
-        agent_jobs.tick(now=self._at(1, 9, 20), limit=5)
+        agent_jobs.tick(now=tick_at, limit=5)
         weekly = self._turns('care:review:weekly:')
         self.assertTrue(weekly, '周回顾应交付一条')
         for block in self._change_blocks(weekly[0]):
