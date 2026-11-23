@@ -1713,7 +1713,7 @@ class ChangeBehaviorTests(unittest.TestCase):
             else:
                 self.assertLess(evidence['value'], evidence['range']['p10'])
 
-    def _comparison_task(self, strategy='wait_baseline', band='above'):
+    def _comparison_task(self, strategy='wait_baseline', band='above', neutral=False):
         """固定夹具时钟的委托：确认=现在，截止=次日 20:00（上海）。
 
         观察窗口 [确认, 截止] 覆盖次日 06–12 点完整时段 → 该时段在截止时已结束，
@@ -1732,7 +1732,8 @@ class ChangeBehaviorTests(unittest.TestCase):
             pet = s.get(Pet, self.pet)
             payload = task_service.normalize_proposal_fields({
                 'action': 'create',
-                'plan': {'kind': 'comparison', 'question': '它上午走动是不是比平时多',
+                'plan': {'kind': 'comparison',
+                         'question': '它上午的走动情况怎么样' if neutral else '它上午走动是不是比平时多',
                          'feature': 'actions', 'comparison': {'band': band},
                          'baselineStrategy': strategy,
                          'startAt': start.isoformat(),
@@ -1765,7 +1766,7 @@ class ChangeBehaviorTests(unittest.TestCase):
 
     def test_E72_absolute_facts_task_letter_has_no_comparison(self):
         """E72 主人明确选「先记录绝对事实」：回信只给绝对事实，不做个人比较。"""
-        deadline, _target = self._comparison_task(strategy='fact_first')
+        deadline, _target = self._comparison_task(strategy='fact_first', neutral=True)
         from petsense.agent import jobs as agent_jobs
         # 模型输出不合法时到期重试一次（+60s）再降级：两次 tick 覆盖完整到期路径
         agent_jobs.tick(now=deadline + timedelta(minutes=1), limit=5)
