@@ -214,8 +214,10 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(response.json['turn']['sources'], [])
         tools_offered = respond.call_args.kwargs.get('tools')
         # W06 起 EXTERNAL_READ 组含 read_web_page，随 allowed scope 一并挂载
-        #（内建 web_search 由 loop 按 stance 决定是否挂载，不进 schemas）
+        #（内建 web_search 由 loop 按 stance 决定是否挂载，不进 schemas）；
+        # W09 起事实只读组另含 read_care_topics（主动提醒主题与依据）
         self.assertEqual({tool['name'] for tool in tools_offered},
                          {'query_observations', 'read_baseline', 'read_current_status', 'write_memory',
                           'search_memories', 'forget_memory', 'read_pet_profile', 'prepare_profile_update',
-                          'prepare_role_settings', 'read_web_page', 'read_task', 'propose_task_change'})
+                          'prepare_role_settings', 'read_web_page', 'read_task', 'propose_task_change',
+                          'read_care_topics'})

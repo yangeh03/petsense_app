@@ -195,3 +195,68 @@ class AgentTaskDelivery(Base):
     payload = Column(Text, nullable=False, default='{}')
     created_at = Column(UTCDatetime, nullable=False)
     __table_args__ = (UniqueConstraint('task_id', 'instance_key'),)
+
+
+class AgentCareTopic(Base):
+    """W09 主动关怀主题：设备事实、观测发现与学习完成按实例持久化（agent-w09-spec.md §2/§3）。
+
+    (pet, kind, category, anchor, instance) 唯一：anchor 为归一化事实锚点（设备规则=设备号，
+    学习完成=维度:版本，回顾发现=模型给出并经服务端归一），instance 在恢复/关闭后递增，
+    新实例须经过前一次恢复或可审计关闭（closed_reason）。相同事件实例只产生一条首发消息，
+    恢复只更新本行。evidence 为有界依据列表 JSON（帧时间、数值、来源窗口）。
+    """
+    __tablename__ = 'agent_care_topics'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    pet_id = Column(Integer, ForeignKey('pets.id'), nullable=False, index=True)
+    kind = Column(String(16), nullable=False)            # device / observation / learning
+    category = Column(String(32), nullable=False)       # battery_low / data_stale / readings_invalid / learning_ready / 回顾发现类别
+    anchor = Column(String(160), nullable=False)
+    instance = Column(Integer, nullable=False, default=1)
+    status = Column(String(16), nullable=False, default='open')   # open / ongoing / recovered / closed
+    severity = Column(String(16), nullable=False, default='warning')
+    title = Column(String(80), nullable=False, default='')
+    detail = Column(Text, nullable=False, default='')
+    evidence = Column(Text, nullable=False, default='[]')
+    delivered = Column(Integer, nullable=False, default=0)  # 已交付首发/升级消息的回合数
+    run_id = Column(Integer, nullable=True)
+    opened_at = Column(UTCDatetime, nullable=False)
+    updated_at = Column(UTCDatetime, nullable=False)
+    recovered_at = Column(UTCDatetime, nullable=True)
+    closed_reason = Column(String(120), nullable=True)
+    __table_args__ = (UniqueConstraint('pet_id', 'kind', 'category', 'anchor', 'instance'),)
+
+
+class CareDeviceState(Base):
+    """W09 硬件规则检测水位（agent-w09-spec.md §3）：一台设备一行，随合格帧推进。
+
+    语义沿用客户端配置（3 帧开启/3 帧回稳/90 帧无效≈3 分钟/失联 30 秒），帧去重由
+    ingest 侧序号门保证——只推进不同帧；缺字段不计作明确无效。owner 变化即换绑，
+    换绑时打开的主题按 closed_reason='rebind' 可审计关闭，不编造恢复。
+    """
+    __tablename__ = 'care_device_states'
+    device_id = Column(String(64), primary_key=True)
+    owner_id = Column(Integer, nullable=False)
+    battery_violation = Column(Integer, nullable=False, default=0)
+    battery_recovery = Column(Integer, nullable=False, default=0)
+    battery_first_at = Column(UTCDatetime, nullable=True)
+    battery_critical = Column(Integer, nullable=False, default=0)  # 本实例是否已升级/已发升级消息
+    invalid_streak = Column(Integer, nullable=False, default=0)
+    invalid_first_at = Column(UTCDatetime, nullable=True)
+    last_frame_at = Column(UTCDatetime, nullable=True)
+    last_battery_percent = Column(Float, nullable=True)
+    frames_seen = Column(Integer, nullable=False, default=0)
+    updated_at = Column(UTCDatetime, nullable=False)
+
+
+class CarePetState(Base):
+    """W09 宠物级水位（agent-w09-spec.md §2）：回顾首次启用水位与学习状态水位。
+
+    enabled_at 为该宠首次被调度扫描看到的时间：早于它的调度点不补跑（D4 首次启用
+    从下一调度点开始）。learning_watermark 记录上次观察到的 (维度:版本→状态)，首次
+    观察只初始化不产生事件（生产首启不把历史已就绪当新事件）。
+    """
+    __tablename__ = 'care_pet_states'
+    pet_id = Column(Integer, ForeignKey('pets.id'), primary_key=True)
+    enabled_at = Column(UTCDatetime, nullable=False)
+    learning_watermark = Column(Text, nullable=False, default='{}')
+    updated_at = Column(UTCDatetime, nullable=False)

@@ -1,6 +1,6 @@
 /**
  * W03 助手设定页（agent-w03-spec.md §4.4，modal）：四字段全直写（D3）。
- * 名字 / 称呼主人 / 语气详略 / 主动程度（W09 生效）；保存后伙伴页即时生效
+ * 名字 / 称呼主人 / 语气详略 / 主动程度（W09 起对周期回顾与设备提醒生效）；保存后伙伴页即时生效
  * （companion store 同步刷新，页头副标题与消息标签更新）。
  * 入口：我的页「伙伴」分组行、伙伴页点击助手头像/名字（成员详情）。
  */
@@ -215,7 +215,7 @@ export default function AssistantSettingsScreen() {
               </View>
               <ThemedText type="small" themeColor="textSecondary">
                 {PROACTIVITY_OPTIONS.find((option) => option.value === draft.proactivity)?.hint}
-                。主动程度将在后续版本生效。
+                。保存后即对周期回顾和设备提醒生效。
               </ThemedText>
             </View>
             {!!error && (

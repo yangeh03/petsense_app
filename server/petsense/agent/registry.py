@@ -28,6 +28,8 @@ from sqlalchemy import func, select
 
 DIALOGUE = 'dialogue'
 CHECKPOINT = 'checkpoint'  # W08 检查点形态：仅事实读取工具可用（agent-w08-spec.md §3）
+REVIEW = 'review'        # W09 周期回顾形态：只挂事实类工具（个人基线比较留给 W11）
+EVENT = 'event'          # W09 硬件事件形态：只挂事实类工具
 FACT_READ = 'fact_read'
 MEMORY = 'memory'
 PROFILE = 'profile'      # 确认门组（W03）：明确指令直写 / 候选确认卡，两路径在执行器内（agent-w03-spec.md §3.4）
@@ -109,7 +111,8 @@ register(ToolSpec(
         'granularity': {'type': 'string', 'enum': ['minute', 'summary'],
                         'description': 'minute=分钟汇总（默认）；summary=仅窗口总量'}},
         'required': ['start', 'end'], 'additionalProperties': False},
-    group=FACT_READ, forms=(DIALOGUE, CHECKPOINT), execute=_execute_query_observations))
+    group=FACT_READ, forms=(DIALOGUE, CHECKPOINT, REVIEW, EVENT),
+    execute=_execute_query_observations))
 
 
 def _execute_read_baseline(args, context):
@@ -256,7 +259,7 @@ register(ToolSpec(
         'minutes': {'type': 'integer', 'minimum': 1, 'maximum': 240,
                     'description': '回看窗口（分钟），默认30'}},
         'additionalProperties': False},
-    group=FACT_READ, forms=(DIALOGUE,), execute=_execute_current_status))
+    group=FACT_READ, forms=(DIALOGUE, REVIEW, EVENT), execute=_execute_current_status))
 
 
 def _pet_of(session, context):
@@ -379,7 +382,37 @@ register(ToolSpec(
     description='读取本宠的完整档案：名字、物种、品种、生日（带精度：精确日期或按年/月估算）与推导年龄、'
                 '最新体重与最近体重记录。档案未填写的字段返回 null，如实说明「档案里还没有」，不得猜测。',
     parameters={'type': 'object', 'properties': {}, 'additionalProperties': False},
-    group=FACT_READ, forms=(DIALOGUE,), execute=_execute_read_pet_profile))
+    group=FACT_READ, forms=(DIALOGUE, REVIEW, EVENT), execute=_execute_read_pet_profile))
+
+def _execute_read_care_topics(args, context):
+    raw_status = args.get('status')
+    status = raw_status if raw_status in ('open', 'ongoing', 'recovered', 'closed') else None
+    raw_limit = args.get('limit')
+    limit = raw_limit if isinstance(raw_limit, int) and not isinstance(raw_limit, bool) else 10
+    with session_scope() as s:
+        pet = _pet_of(s, context)
+        from petsense.agent import care
+        stmt = select(care.AgentCareTopic).where(care.AgentCareTopic.pet_id == pet.id)
+        if status:
+            stmt = stmt.where(care.AgentCareTopic.status == status)
+        rows = s.execute(stmt.order_by(care.AgentCareTopic.updated_at.desc())
+                         .limit(min(20, max(1, limit)))).scalars().all()
+        return {'topics': [care.public(row) for row in rows],
+                'note': '主动提醒主题与依据；数值与时间来自依据列表，转述时如实带时间，不得外推'}
+
+
+register(ToolSpec(
+    name='read_care_topics',
+    description='查看本宠最近的主动提醒主题（设备事实、周期发现、学习完成）及其依据：'
+                '类别、状态（打开/持续/恢复）、严重度、发生与更新时间、依据帧时间与数值。'
+                '主人问「为什么提醒我」或想了解某条提醒的来龙去脉时先用本工具查证，'
+                '按依据如实回答，检索不到就说明没有对应记录，不得编造。',
+    parameters={'type': 'object', 'properties': {
+        'status': {'type': 'string', 'enum': ['open', 'ongoing', 'recovered', 'closed'],
+                   'description': '状态过滤，可选'},
+        'limit': {'type': 'integer', 'minimum': 1, 'maximum': 20, 'description': '默认10'}},
+        'additionalProperties': False},
+    group=FACT_READ, forms=(DIALOGUE,), execute=_execute_read_care_topics))
 
 
 def _execute_prepare_profile_update(args, context):

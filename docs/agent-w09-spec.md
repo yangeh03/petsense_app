@@ -37,3 +37,33 @@
 | W09-A5 学习完成 | W05 一个真实状态转换只生成一条，预存就绪状态不补发，同维度版本切换可重新学习和交付。保留对应状态、运行与主题 ID。 |
 
 本包评测号段 E51–E57。按 AGENTS 要求保留服务端和客户端回归、真实 MiniMax 轨迹、iOS 端操作和数据来源。模拟遥测和真实设备结论分别标注。提交及证据在验收后回写。
+
+## 5. 实施记录（2026-11-23，分支 codex/agent-w09-foundation）
+
+### 5.1 交付面
+
+- **服务端新域 `server/petsense/agent/care.py`**：主题持久化（`AgentCareTopic`，(pet,kind,category,anchor,instance) 唯一，恢复更新同行、新实例须经恢复或可审计关闭）、硬件规则状态机（`observe_frame`，语义沿用客户端配置：电量 3 个不同合格帧 <20% 开启 / <10% 升级 / 3 帧 >25% 回稳，健康读数 90 连续无效帧 ≈3 分钟、缺字段不计、新有效帧恢复，帧去重由 ingest 序号门保证）、失联扫描（`detect_stale`：连接可用且稳定 ≥30s 且最后已收帧 >30s；从未在线无水位不判定）、换绑关闭（closed_reason=rebind）、学习转换（`learning_events`：水位对比 learning→ready，首扫只初始化、键=维度:版本终身一次、新版本可再学）、回顾窗口计算（`due_daily_window`/`due_weekly_window` 只取最新受影响窗口，D4）与时区解析（真实档案字段存在且有效时用之，否则 Asia/Shanghai；当前档案无时区字段，恒走缺省）。
+- **`server/petsense/agent/care_jobs.py`**：W08 作业队列上的三种 kind——`care_scan`（周期自排 60s：宠物启用水位、回顾入队、失联扫描、学习转换）、`care_review`（事实组装 → 统一循环 review 形态 → 发现校验[类别白名单/锚点归一/同主体/预算 3 条/同锚点合并] → 按主动程度交付）、`care_event`（确定性事实 → event 形态表达 → 代码按主动程度决定交付；模型不可用或 JSON 不合法时确定性事实降级文案）。交付走 W08 `deliver_background_message`（稳定 request key：`care:review:<kind>:<pet>:<key>`、`care:event:<topic>:<phase>`），blocks 含 text + care 结构块，提交后推 WS 帧；run 轨迹落 `agent_runs`（form=review/event，快照含回顾/事件事实）。
+- **统一循环后台形态 `loop.run_background`**（review/event）：复用模型往返、registry 权限矩阵、轨迹与降级记账；无对话历史/图片/流式，stance 预置 allowed（触发确定性归代码）；不挂联网搜索。registry：`query_observations`/`read_current_status`/`read_pet_profile` 开放 REVIEW/EVENT 形态（**read_baseline 不开放**——W11 前个人基线比较维持关闭）；新增 `read_care_topics`（FACT_READ、仅 DIALOGUE）支撑「为什么提醒我」追问引用真实依据；系统提示补主动提醒回答规则。
+- **telemetry 钩子**：`ingest_observation` 接受帧后调 `observe_frame_and_queue`（同事务，轻量状态机 + 作业入队，异常不破坏遥测入库）；启动 `backfill()` 重放历史帧置于回放模式——只重建检测水位，不为历史转换开题/入队/发消息（生产首启不补发历史事件）。
+- **端点**：`GET /api/app/agent/pets/<id>/care/rules`（受管理规则能力，D3）、`GET /api/app/agent/pets/<id>/care/topics`（主题追溯，状态过滤，鉴权）。alembic 0017（agent_care_topics / care_device_states / care_pet_states；本分支初接 0015，W08 的 0016 合入后集成时改接）。
+- **客户端**：`services/care-rules.ts`（能力探测 + TTL 去抖 + 失败恢复本地逻辑 + 纯过滤 `suppressManagedAlerts`：battery_low→batteryLow、data_stale→dataStale、readings_invalid→sensorOff）；`use-alerts` 订阅规则变化重算快照（未确认能力原样透传）；`use-agent-chat`/`use-observations` 在 dashboard 到达时按当前宠物探测（切宠/退出清空恢复）；聊天气泡新增 care 卡（标题/状态/依据摘要 +「为什么提醒我？」预填追问并定位主题）；设定页删除「主动程度将在后续版本生效」文案，改为「保存后即对周期回顾和设备提醒生效」。
+
+### 5.2 自动测试证据（本分支，2026-11-23）
+
+- 服务端：`python -m unittest discover -s tests`（PETSENSE_MQTT_DISABLED=1，隔离临时库）**429 例全过**（W08 基线 405 + W09 新增 24）。`tests/test_agent_w09.py` 24 例覆盖：A1（09:00/周一 09:15 边界、首启水位前的调度点不补跑、中断只补最新日/周窗口、执行一份且重启不重复、无数据零发现、模型不可用降级交付）；A2（低电开启/重复帧/升级/回稳/再发生新实例、90 帧无效与缺字段、失联连接门与新帧恢复、从未在线不判定、未绑定与换绑不编造、换绑 closed_reason=rebind、回放模式不补发历史）；A3（安静档主题可追溯不发消息、标准档尊重模型 disturb=false、日周同锚点合并、事件形态 write_memory 被矩阵拒绝且不落库、read_care_topics 返回依据）；A5（首扫初始化水位、真实转换一次、重复扫描不重发、版本切换再学）；能力端点鉴权与三规则清单、scan 自排。
+- 客户端：`npm test` **104/104**（含新增 `tools/care-rules.test.cjs` 4 例：三类抑制映射、未确认/空能力不抑制保留本地回退、探测成功/失败/切宠清空、null 不发网络请求）；`npm run typecheck`、`npm run lint`、`npm run format:check`、`npx expo export --platform web` 均通过（node_modules 按 lockfile `npm ci` 安装）。
+- 行为评测 E51–E57 已写入 `tests/agent_behavior/test_agent_behavior.py`（CareBehaviorTests）：E51 有数据日回顾诚实转述且无比平时/异常；E52 无数据零发现如实；E53 低电事件事实表达 + 追问走 read_care_topics；E54 同实例只一条首发消息；E55 安静/标准档交付门；E56 后台形态禁写（PetMemory 0 条）；E57 学习完成报告就绪事实不给参照范围。**本机无 MINIMAX 凭据，整组 skip（2 skips）——真实模型轨迹待凭据环境复跑**。
+
+### 5.3 边界与已知限制
+
+- 静音与已读同步（铃铛汇总）留 W12，推送留 W13（spec §3 既定）；旧客户端无 care 块时按 blocks 内 text 块可读降级（W08 交付边界），未探测到能力的客户端三类本地告警照常（回退已在客户端测试覆盖）。
+- 回顾「活跃目标」字段未接入（W10 未合入本分支），事实组装只含逐日统计/覆盖/缺口/学习进度/近期主题；调度资格取「绑定设备的宠物」（观测均经设备而来）。
+- 主题 ID 与对话 topicId 数值空间存在理论碰撞（现有 topicId 语义即回合 id），仅影响伙伴页主题过滤的展示边界，W12 主题汇总时统一。
+- 失联检测依赖单进程内存连接水位（`mqtt_connection_ready` 的稳定 30s 判定），多进程部署前需与 W08 检查点一并改为共享协调。
+
+### 5.4 待真实验收（后续移交）
+
+1. **真实 MiniMax 轨迹**：凭据环境复跑 E51–E57（`cd server && MINIMAX_API_KEY=… python3 -m unittest discover -s tests -p test_agent_behavior.py`），轨迹经 `agent_replay.py` 抽查事实引用。
+2. **iOS 模拟器验收（A4，由 Codex 调度）**：生产环境登录测试账号 petsense，核对开启后同一设备事实无本地重复、能力缺失时旧路径正常、其他告警仍在、care 卡渲染与「为什么提醒我」追问、设定页切档实际生效；旧 bundle 兼容按回退设计核对。
+3. **真项圈在线时段**：实机走低电/失联/无效三类事件与学习完成事件的端到端（当前生产测试设备电池耗尽离线中，与 W02/W05 同一待办）。

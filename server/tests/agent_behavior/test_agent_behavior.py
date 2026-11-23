@@ -12,7 +12,7 @@ import secrets
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -23,10 +23,15 @@ from flask import Flask
 from helpers import fresh_db
 
 from petsense import config, db
+from petsense.agent import care
+from petsense.agent import jobs as jobs_module
+from petsense.agent import proposals as proposals_module
+from petsense.agent import tasks as task_service
 from petsense.agent.routes import bp
 from petsense.db import utc_now
-from petsense.db.models import AuthSession, Pet, TelemetryEvent, TelemetryLatest, TelemetryMinute, User
-from petsense.db.models.agent import AgentRun
+from petsense.db.models import (AuthSession, Device, Pet, TelemetryEvent, TelemetryLatest,
+    TelemetryMinute, User)
+from petsense.db.models.agent import AgentProposal, AgentRun, AgentTask
 from sqlalchemy import select
 
 SHANGHAI = ZoneInfo('Asia/Shanghai')
@@ -808,6 +813,434 @@ class BehaviorScenarioTests(unittest.TestCase):
         if observed_ok:
             self.assertIn('躺', reply, f'应陈述它今天的实测（躺卧）：{reply}')
 
+    # ── W08 委托与检查点（E42–E50，场景对应 agent-w08-spec.md §4；编号区间由该包占用）
+
+    def _task_proposals(self):
+        with db.session_scope() as s:
+            rows = s.execute(select(AgentProposal).where(
+                AgentProposal.kind == 'task_change').order_by(AgentProposal.id.desc())).scalars().all()
+            return [(row.status, json.loads(row.payload)) for row in rows]
+
+    def _tasks(self):
+        from petsense.db.models.agent import AgentTask
+        with db.session_scope() as s:
+            return s.execute(select(AgentTask).where(AgentTask.pet_id == self.pet)).scalars().all()
+
+    def _confirm_latest_task_proposal(self):
+        """确认最新 pending 委托候选并返回任务 id（决策确定性代码，走服务层与 decide 同路径）。"""
+        states = self._task_proposals()
+        self.assertIn('pending', [status for status, _ in states], f'应有待确认委托候选：{states}')
+        with db.session_scope() as s:
+            pet = s.get(Pet, self.pet)
+            row = s.execute(select(AgentProposal).where(
+                AgentProposal.kind == 'task_change', AgentProposal.status == 'pending')
+                .order_by(AgentProposal.id.desc())).scalars().first()
+            proposals_module.decide(s, pet, row.id, 'confirm')
+            return s.execute(select(AgentTask.id)).scalars().first()
+
+    def test_E42_delegation_proposes_pending_card(self):
+        # 委托请求：生成待确认候选；未确认不建任务、不自称已开始观察。
+        self._seed_latest()
+        turn, run = self._send('帮我留意一下它这几天的走动，累计走动超过两小时就告诉我')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        calls = self._tool_calls(run)
+        used = [c for c in calls if c['name'] == 'propose_task_change' and c['allowed']]
+        self.assertTrue(used, json.dumps(calls, ensure_ascii=False))
+        # 断言以服务端归一化后的提案负载为准（模型原始 arguments 偶发转义毛刺）
+        states = self._task_proposals()
+        payload = next((p for status, p in states if status == 'pending'), None)
+        self.assertIsNotNone(payload, f'应生成待确认委托候选：{states}')
+        self.assertEqual(payload['action'], 'create')
+        self.assertEqual(payload['plan']['kind'], 'fact_watch',
+                         json.dumps(payload, ensure_ascii=False))
+        self.assertEqual(self._tasks(), [], '未确认不得创建委托')
+        reply = turn['reply']
+        self.assertFalse(any(k in reply for k in ('已经开始留意', '已经在留意', '已开始观察', '我会一直盯着')),
+                        f'未经确认不得声称已开始：{reply}')
+        card = [b for b in (turn['blocks'] or []) if b.get('type') == 'proposal']
+        self.assertEqual(len(card), 1, '候选应挂确认卡')
+
+    def test_E43_week_deadline_normalized(self):
+        # 「这周」期限归一化到本周日结束（Asia/Shanghai）。
+        self._seed_latest()
+        turn, run = self._send('这周帮我盯着它的叫声，单日叫超过20次就提醒我')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        calls = self._tool_calls(run)
+        used = [c for c in calls if c['name'] == 'propose_task_change' and c['allowed']]
+        self.assertTrue(used, json.dumps(calls, ensure_ascii=False))
+        states = self._task_proposals()
+        payload = next((p for status, p in states if status == 'pending'), None)
+        self.assertIsNotNone(payload, f'应生成待确认委托候选：{states}')
+        plan = payload['plan']
+        deadline = datetime.fromisoformat(plan['deadlineAt'].replace('Z', '+00:00'))
+        deadline_sh = deadline.astimezone(SHANGHAI)
+        now_sh = datetime.now(SHANGHAI)
+        days_ahead = (6 - now_sh.weekday()) or 7  # 本周日
+        sunday_end = (now_sh + timedelta(days=days_ahead)).replace(
+            hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        self.assertGreater(deadline_sh, now_sh, '截止需在未来')
+        self.assertLessEqual(deadline_sh, sunday_end + timedelta(minutes=1),
+                             f'「这周」应不晚于本周日结束：{deadline_sh.isoformat()}')
+
+    def test_E44_read_task_answers_status(self):
+        # 委托状态查询用 read_task 查证后回答，不凭记忆编造。
+        self._seed_latest()
+        turn, _ = self._send('帮我留意它这两天走动会不会明显变少，比平时少的话告诉我')
+        states = self._task_proposals()
+        self.assertIn('pending', [s for s, _ in states], f'应生成候选：{states}')
+        task_id = self._confirm_latest_task_proposal()
+        turn, run = self._send('我之前托付你留意的事情，现在怎么样了？')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        calls = self._tool_calls(run)
+        used = [c for c in calls if c['name'] == 'read_task' and c['allowed']]
+        self.assertTrue(used, json.dumps(calls, ensure_ascii=False))
+        reply = turn['reply']
+        self.assertTrue(any(k in reply for k in ('观察', '留意', '盯着', '走动')),
+                        f'应基于 read_task 结果回答委托状态：{reply}')
+
+    def test_E45_chat_pause_goes_through_card(self):
+        # 聊天里提出暂停：生成确认卡，不直接生效（D3）。
+        self._seed_latest()
+        self._send('帮我留意它今天走动，累计超过一小时就告诉我')
+        task_id = self._confirm_latest_task_proposal()
+        turn, run = self._send('先暂停一下这个观察吧')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        calls = self._tool_calls(run)
+        used = [c for c in calls if c['name'] == 'propose_task_change' and c['allowed']]
+        self.assertTrue(used, json.dumps(calls, ensure_ascii=False))
+        states = self._task_proposals()
+        payload = next((p for status, p in states if status == 'pending'), None)
+        self.assertIsNotNone(payload, f'应生成待确认暂停候选：{states}')
+        self.assertEqual(payload['action'], 'pause')
+        self.assertEqual(payload['taskId'], task_id)
+        tasks = self._tasks()
+        self.assertEqual(tasks[0].status, 'observing', '未确认的暂停不得直接生效')
+
+    def test_E46_baseline_not_ready_honesty(self):
+        # 基线未就绪的比较委托：如实说明认识中并呈现选择，不冒充已有个人比较。
+        turn, run = self._send('帮我留意它是不是比平时走得少')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        reply = turn['reply']
+        # 如实说明认识中/未就绪，并呈现选择；不得冒充已有个人比较结论
+        self.assertTrue(any(k in reply for k in ('还没就绪', '未就绪', '认识中', '学习中', '0/7', '没有「它平时')),
+                        f'应如实说明基线未就绪：{reply}')
+        self.assertFalse(any(k in reply for k in ('比平时少了', '低于它的平时范围了', '已经低于平时', '已经高于平时')),
+                        f'不得冒充已就绪的比较结论：{reply}')
+        states = self._task_proposals()
+        payload = next((p for status, p in states if status == 'pending'), None)
+        if payload and payload['plan'].get('kind') == 'comparison':
+            self.assertIn(payload['plan'].get('baselineStrategy'), ('fact_first', 'wait_baseline'))
+
+    def test_E47_checkpoint_ordinary_continues(self):
+        # 检查点普通检查（真实模型）：条件未达 → 继续观察，无交付。
+        from petsense.db.models.agent import AgentTask
+        self._seed_yesterday(walk_seconds=600)
+        with db.session_scope() as s:
+            pet = s.get(Pet, self.pet)
+            payload = task_service.normalize_proposal_fields({'action': 'create', 'plan': {
+                'kind': 'fact_watch', 'question': '它走动会不会大幅增加',
+                'feature': 'actions',
+                'condition': {'metric': 'walkSeconds', 'op': 'at_least', 'value': 36000,
+                              'scope': 'window'},
+                'deadlineAt': (datetime.now(SHANGHAI) + timedelta(days=2)).isoformat()}},
+                now=utc_now())
+            row, _ = proposals_module.create_task_proposal(s, pet, None, payload, now=utc_now())
+            proposals_module.decide(s, pet, row.id, 'confirm', now=utc_now())
+            task_id = s.execute(select(AgentTask.id)).scalars().first()
+        jobs_module.register_handler(task_service.CHECKPOINT_KIND,
+                                     task_service.handle_checkpoint_job)
+        jobs_module.tick(now=utc_now() + timedelta(minutes=5), limit=2)
+        from petsense.db.models.agent import AgentProposal, AgentRun, AgentTask, AgentTaskDelivery
+        with db.session_scope() as s:
+            task = s.get(AgentTask, task_id)
+            self.assertEqual(task.status, 'observing')
+            self.assertEqual(s.execute(select(AgentTaskDelivery).where(
+                AgentTaskDelivery.task_id == task_id)).scalars().all(), [], '条件未达不交付')
+            run = s.execute(select(AgentRun).where(
+                AgentRun.form == 'checkpoint', AgentRun.pet_id == self.pet)
+                .order_by(AgentRun.id.desc())).scalars().first()
+        self.assertIsNotNone(run, '检查点应落轨迹')
+        self.assertEqual(run.status, 'complete')
+        self.assertEqual(json.loads(run.conclusion).get('decision'), 'continue')
+
+    def _seed_recent_minutes(self, minutes, walk_per_minute=45):
+        """从当下向后种 minutes 分钟有效观测（落在确认后的观察窗口内）。"""
+        start = utc_now().replace(second=0, microsecond=0)
+        with db.session_scope() as s:
+            for i in range(minutes):
+                s.add(TelemetryMinute(owner_id=self.uid, device_id='esp32-eval',
+                                      minute=start + timedelta(minutes=i), metrics='{}',
+                                      actions=json.dumps({'走动': walk_per_minute}),
+                                      observed_seconds=60, frames=60))
+
+    def _due_letter_scenario(self, plan, seed=False, expect_keywords=None, forbid=None):
+        with db.session_scope() as s:
+            pet = s.get(Pet, self.pet)
+            payload = task_service.normalize_proposal_fields(
+                {'action': 'create', 'plan': plan}, now=utc_now())
+            row, _ = proposals_module.create_task_proposal(s, pet, None, payload, now=utc_now())
+            proposals_module.decide(s, pet, row.id, 'confirm', now=utc_now())
+            task_id = s.execute(select(AgentTask.id)).scalars().first()
+        if seed:
+            self._seed_recent_minutes(3)
+        with db.session_scope() as s:
+            task = s.get(AgentTask, task_id)
+            task.deadline_at = utc_now()
+            s.flush()
+        jobs_module.register_handler(task_service.CHECKPOINT_KIND,
+                                     task_service.handle_checkpoint_job)
+        jobs_module.tick(now=utc_now() + timedelta(seconds=5), limit=3)
+        jobs_module.tick(now=utc_now() + timedelta(seconds=70), limit=3)  # 到期重试窗口
+        from petsense.db.models.agent import AgentTaskDelivery
+        with db.session_scope() as s:
+            deliveries = s.execute(select(AgentTaskDelivery).where(
+                AgentTaskDelivery.task_id == task_id)).scalars().all()
+            self.assertEqual(len(deliveries), 1, '到期恰好一封回信')
+            self.assertIn(deliveries[0].kind, ('letter', 'degraded_letter'))
+            task = s.get(AgentTask, task_id)
+            self.assertEqual(task.status, 'completed')
+            text = json.loads(deliveries[0].payload)['text']
+        for keyword in expect_keywords or []:
+            self.assertTrue(any(k in text for k in keyword), f'回信应提及 {keyword}：{text}')
+        for keyword in forbid or []:
+            self.assertNotIn(keyword, text)
+
+    def test_E48_due_letter_with_data(self):
+        # 到期回信（真实模型检查点）：有数据 → 覆盖与数值进入回信，任务完成。
+        self._due_letter_scenario({
+            'kind': 'fact_watch', 'question': '它这两分钟走动多吗', 'feature': 'actions',
+            'condition': {'metric': 'walkSeconds', 'op': 'at_least', 'value': 60, 'scope': 'window'},
+            'deadlineAt': (datetime.now(SHANGHAI) + timedelta(days=1)).isoformat()},
+            seed=True, expect_keywords=[('走动', '分钟'), ('覆盖', '观测')],
+            forbid=('评估未能完成',))
+
+    def test_E49_due_letter_data_gap_honest(self):
+        # 数据缺口到期回信：如实说明没有观测，不推断为正常。
+        self._due_letter_scenario({
+            'kind': 'fact_watch', 'question': '它这两天走动情况怎么样', 'feature': 'actions',
+            'deadlineAt': (datetime.now(SHANGHAI) + timedelta(days=1)).isoformat()},
+            seed=False, expect_keywords=[('没有观测', '无观测', '未观测', '没有数据', '未能观测',
+                                       '没有有效', '没有记录', '无法下结论', '缺口')],
+            forbid=('一切正常', '状态正常'))
+
+    def test_E50_scheduled_review_no_data(self):
+        # 定时回顾无数据：到期仍交付，明确没有观测数据。
+        self._due_letter_scenario({
+            'kind': 'scheduled_review', 'question': '到时告诉我它这段时间的活动情况',
+            'deadlineAt': (datetime.now(SHANGHAI) + timedelta(days=1)).isoformat()},
+            seed=False, expect_keywords=[('没有观测', '无观测', '未观测', '没有数据', '未能观测',
+                                       '没有有效', '没有记录', '无法下结论', '缺口')],
+            forbid=('一切正常',))
+
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class CareBehaviorTests(unittest.TestCase):
+    """W09 周期回顾与硬件事件行为评测（E51–E57，agent-w09-spec.md §4）：真实模型后台运行。
+
+    运行方式同本文件其余场景（需 MINIMAX_API_KEY(_FILE)，无凭据整组 skip）：
+    检测与调度为确定性代码（确定性断言见 tests/test_agent_w09.py），此处验证真实
+    模型在 review/event 形态下的表达与判断：事实只读、无编造、无个人基线比较、
+    主动程度生效、追问引用真实依据。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        if not _has_credentials():
+            raise unittest.SkipTest('未配置 MINIMAX 凭据，行为评测整组 skip')
+        cls.longMessage = True
+
+    def setUp(self):
+        fresh_db(self)
+        from petsense.agent import care_jobs, jobs as agent_jobs
+        agent_jobs._HANDLERS.clear()
+        care_jobs.register()
+        self.addCleanup(agent_jobs._HANDLERS.clear)
+        self.app = Flask(__name__)
+        self.app.register_blueprint(bp)
+        self.client = self.app.test_client()
+        self.t0 = utc_now() - timedelta(hours=2)
+        with db.session_scope() as s:
+            user = User(username='care', display_name='care', password_hash='x', salt='s',
+                        avatar_emoji='🙂', bio='', created_at=db.utc_now())
+            s.add(user)
+            s.flush()
+            self.uid = user.id
+            pet = Pet(user_id=user.id, name='Nana', species='狗', breed='柯基',
+                      created_at=db.utc_now(), device_id='care-collar')
+            s.add(pet)
+            s.flush()
+            self.pet = pet.id
+            s.add(Device(device_id='care-collar', owner_id=user.id, name='',
+                         claimed_at=self.t0 - timedelta(hours=1)))
+            token = secrets.token_urlsafe(16)
+            s.add(AuthSession(token_hash=hashlib.sha256(token.encode()).hexdigest(),
+                              user_id=user.id, expires_at=db.utc_now() + timedelta(days=1)))
+            self.auth = {'X-Petsense-Session': token}
+        with db.session_scope() as s:
+            agent_jobs.enqueue(s, care_jobs.SCAN_KIND, {}, dedup_key='care:scan:loop',
+                               next_run_at=datetime(2100, 1, 1, tzinfo=timezone.utc))
+        from petsense.agent import jobs as job_module  # noqa: F401  执行器已注册
+
+    # ── 工具 ──
+
+    def _frame(self, seq, battery=76, health_valid=True):
+        from petsense.telemetry.observations import ingest_observation
+        payload = {'deviceId': 'care-collar', 'seq': seq, 'boot_id': 'b1',
+                   'battery': {'found': True, 'percent': battery},
+                   'health': {'valid': health_valid, 'heartRate': 120 if health_valid else 0}}
+        with db.session_scope() as s:
+            return ingest_observation(s, payload, self.t0 + timedelta(seconds=2 * seq))
+
+    def _scan(self, now):
+        from petsense.agent import care_jobs
+        job = {'id': 0, 'kind': care_jobs.SCAN_KIND, 'dedup_key': 'care:scan:loop',
+               'payload': {}, 'attempts': 0}
+        with patch.object(care, 'mqtt_connection_ready', side_effect=lambda n: False):
+            care_jobs.handle_scan(job, now)
+
+    def _at(self, day_offset=0, hour=8, minute=0):
+        local = datetime.now(SHANGHAI).replace(hour=hour, minute=minute, second=0, microsecond=0) \
+            + timedelta(days=day_offset)
+        return local.astimezone(ZoneInfo('UTC'))
+
+    def _care_turns(self, prefix='care:'):
+        with db.session_scope() as s:
+            rows = s.execute(select(AgentTurn).where(AgentTurn.pet_id == self.pet)
+                             .order_by(AgentTurn.id)).scalars().all()
+        return [r for r in rows if r.request_id.startswith(prefix)]
+
+    def _seed_yesterday(self, walk_minutes=45):
+        now_sh = datetime.now(SHANGHAI)
+        start = (now_sh - timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0) \
+            .astimezone(ZoneInfo('UTC'))
+        with db.session_scope() as s:
+            for i in range(120):
+                s.add(TelemetryMinute(owner_id=self.uid, device_id='care-collar',
+                                      minute=start + timedelta(minutes=i), metrics='{}',
+                                      actions=json.dumps({'走动': walk_minutes * 60 // 120}),
+                                      observed_seconds=60, frames=60))
+
+    # ── 场景 ──
+
+    def test_E51_daily_review_honest_recap(self):
+        """有数据日回顾：真实统计入文案，不推导异常、不做个人基线比较。"""
+        self._seed_yesterday(walk_minutes=45)
+        self._scan(self._at(0, 8, 0))
+        self._scan(self._at(0, 9, 30))
+        from petsense.agent import jobs as agent_jobs
+        self.assertGreaterEqual(agent_jobs.tick(now=self._at(0, 9, 30, 10), limit=5), 1)
+        daily = self._care_turns('care:review:daily:')
+        self.assertEqual(len(daily), 1, '日回顾应交付一条')
+        reply = daily[0].reply
+        self.assertIn('走', reply, f'应提到走动统计：{reply}')
+        self.assertNotIn('比平时', reply)
+        self.assertNotIn('异常', reply)
+        conclusion = json.loads(_latest_run(self.pet).conclusion)
+        self.assertNotIn('degraded:', conclusion['reason_code'])
+
+    def test_E52_no_data_review_zero_findings_honest(self):
+        """无数据回顾：可零发现；如实说明没有记录，不推断活动减少。"""
+        self._scan(self._at(0, 8, 0))
+        self._scan(self._at(0, 9, 30))
+        from petsense.agent import jobs as agent_jobs
+        agent_jobs.tick(now=self._at(0, 9, 30, 10), limit=5)
+        daily = self._care_turns('care:review:daily:')
+        reply = daily[0].reply if daily else ''
+        if daily:
+            self.assertTrue(any(word in reply for word in ('没有', '暂无', '未', '欠')),
+                            f'无数据应如实说明：{reply}')
+            self.assertNotIn('比平时', reply)
+            self.assertNotIn('减少', reply)
+
+    def test_E53_battery_event_and_why_followup(self):
+        """低电事件消息只述事实；追问「为什么提醒我」引用真实主题依据。"""
+        for seq in (1, 2, 3):
+            self._frame(seq, battery=15)
+        from petsense.agent import jobs as agent_jobs
+        agent_jobs.tick(now=self.t0 + timedelta(minutes=10), limit=5)
+        turns = self._care_turns('care:event:')
+        self.assertEqual(len(turns), 1, '首发消息一条')
+        self.assertIn('电', turns[0].reply)
+        self.assertNotIn('比平时', turns[0].reply)
+        # 对话追问：read_care_topics 引用依据回答
+        response = self.client.post(f'/api/app/agent/pets/{self.pet}/turns', headers=self.auth,
+                                    json={'text': '为什么提醒我？', 'requestId': 'why-1',
+                                          'target': 'assistant'})
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        run = _latest_run(self.pet)
+        calls = json.loads(run.tool_summary)
+        self.assertTrue(any(c['name'] == 'read_care_topics' and c['allowed'] for c in calls),
+                        f'追问应查主题依据：{json.dumps(calls, ensure_ascii=False)}')
+        reply = response.json['turn']['reply']
+        self.assertTrue(('电' in reply) or ('项圈' in reply),
+                        f'回答应围绕电量事实：{reply}')
+
+    def test_E54_open_instance_not_realerted(self):
+        """同实例持续低电只提醒一次（重复帧与持续越界不重复打扰）。"""
+        for seq in (1, 2, 3):
+            self._frame(seq, battery=15)
+        from petsense.agent import jobs as agent_jobs
+        agent_jobs.tick(now=self.t0 + timedelta(minutes=10), limit=5)
+        for seq in (4, 5, 6, 7):
+            self._frame(seq, battery=14)
+        agent_jobs.tick(now=self.t0 + timedelta(minutes=20), limit=5)
+        turns = self._care_turns('care:event:')
+        self.assertEqual(len(turns), 1, '同实例只保留首发消息')
+
+    def test_E55_proactivity_levels_gate_delivery(self):
+        """安静档不发主动消息（主题仍持久），标准档交付。"""
+        from petsense.db.models.agent import CompanionSettings
+        with db.session_scope() as s:
+            s.add(CompanionSettings(user_id=self.uid, proactivity=0, updated_at=utc_now()))
+        for seq in (1, 2, 3):
+            self._frame(seq, battery=15)
+        from petsense.agent import jobs as agent_jobs
+        agent_jobs.tick(now=self.t0 + timedelta(minutes=10), limit=5)
+        self.assertEqual(self._care_turns('care:event:'), [], '安静档不发主动会话消息')
+        with db.session_scope() as s:
+            s.get(CompanionSettings, self.uid).proactivity = 1
+            s.query(AgentTurn).filter(AgentTurn.pet_id == self.pet).delete()
+        for seq in (8, 9, 10):
+            self._frame(seq, battery=13)
+        agent_jobs.tick(now=self.t0 + timedelta(minutes=30), limit=5)
+        self.assertEqual(len(self._care_turns('care:event:')), 1, '标准档交付关键设备事实')
+
+    def test_E56_event_form_rejects_writes(self):
+        """事件形态不得写记忆/改设定：模型若尝试即被矩阵拒绝且不落库。"""
+        for seq in (1, 2, 3):
+            self._frame(seq, battery=15)
+        from petsense.agent import jobs as agent_jobs
+        agent_jobs.tick(now=self.t0 + timedelta(minutes=10), limit=5)
+        with db.session_scope() as s:
+            from petsense.db.models.memory import PetMemory
+            self.assertEqual(s.execute(select(PetMemory).where(
+                PetMemory.pet_id == self.pet)).scalars().all(), [], '后台形态不得写记忆')
+
+    def test_E57_learning_ready_message(self):
+        """学习完成：报告就绪事实（7 天），不给个人参照范围（W11 前）。"""
+        from petsense.db.models.agent import AgentLearningDay
+        for offset in range(6):
+            day = (datetime.now(SHANGHAI) - timedelta(days=offset + 1)).strftime('%Y-%m-%d')
+            with db.session_scope() as s:
+                s.add(AgentLearningDay(pet_id=self.pet, device_id='care-collar',
+                                       feature='actions', version='v9', day=day,
+                                       seconds=30000, last_seen_at=utc_now(), slots='[0, 2]'))
+        self._scan(self._at(0, 12, 0))
+        day = datetime.now(SHANGHAI).strftime('%Y-%m-%d')
+        with db.session_scope() as s:
+            s.add(AgentLearningDay(pet_id=self.pet, device_id='care-collar',
+                                   feature='actions', version='v9', day=day,
+                                   seconds=30000, last_seen_at=utc_now(), slots='[0, 2]'))
+        self._scan(self._at(0, 12, 1))
+        from petsense.agent import jobs as agent_jobs
+        agent_jobs.tick(now=self._at(0, 12, 2), limit=5)
+        turns = self._care_turns('care:event:')
+        self.assertEqual(len(turns), 1, '学习完成事件一条')
+        reply = turns[0].reply
+        self.assertTrue(('认识' in reply) or ('日常' in reply) or ('7' in reply),
+                        f'应报告就绪事实：{reply}')
+        self.assertNotIn('p10', reply)
+        self.assertNotIn('参照范围', reply)

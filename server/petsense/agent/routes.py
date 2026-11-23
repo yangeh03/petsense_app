@@ -17,9 +17,10 @@ from sqlalchemy.exc import IntegrityError
 from petsense.auth.routes import require_app_user
 from petsense.db import session_scope, utc_now, iso_z
 from petsense.db.models import Pet
-from petsense.db.models.agent import AgentProposal, AgentTurn
+from petsense.db.models.agent import AgentCareTopic, AgentProposal, AgentTurn
 from petsense.agent.observations import query
 from petsense.agent import baseline as baseline_service
+from petsense.agent import care
 from petsense.agent import attachments, loop, runs, snapshot
 from petsense.agent import proposals as proposal_service
 from petsense.agent import settings as settings_service
@@ -417,3 +418,39 @@ def agent_task_proposal_edit(pet_id):
             if stale_turn is not None and stale_turn.pet_id == pet_id:
                 ws.push_turn(user['id'], pet_id, public(stale_turn))  # 旧卡翻「已有新候选」
     return result
+
+
+@bp.get('/pets/<int:pet_id>/care/rules')
+def care_rules(pet_id):
+    """W09 受管理规则能力（D3）：新 App 据此抑制同类本地重复提醒。
+
+    旧客户端忽略本端点继续本地告警；请求失败/404 时 App 恢复原逻辑。
+    """
+    user, error = require_app_user()
+    if error:
+        return error
+    with session_scope() as s:
+        pet = s.get(Pet, pet_id)
+        if pet is None or pet.user_id != user['id']:
+            return {'message': '宠物不存在'}, 404
+    return {'capability': 'care-v1', 'managedRules': list(care.MANAGED_RULES)}
+
+
+@bp.get('/pets/<int:pet_id>/care/topics')
+def care_topics(pet_id):
+    """W09 主题追溯：伙伴页按状态查看主动提醒主题与依据（含已恢复/关闭）。"""
+    user, error = require_app_user()
+    if error:
+        return error
+    status = request.args.get('status')
+    if status not in (None, 'open', 'ongoing', 'recovered', 'closed'):
+        return {'message': '状态过滤无效'}, 400
+    with session_scope() as s:
+        pet = s.get(Pet, pet_id)
+        if pet is None or pet.user_id != user['id']:
+            return {'message': '宠物不存在'}, 404
+        stmt = select(AgentCareTopic).where(AgentCareTopic.pet_id == pet_id)
+        if status:
+            stmt = stmt.where(AgentCareTopic.status == status)
+        rows = s.execute(stmt.order_by(AgentCareTopic.updated_at.desc()).limit(50)).scalars().all()
+        return {'topics': [care.public(row) for row in rows]}
