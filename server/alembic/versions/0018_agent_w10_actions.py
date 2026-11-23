@@ -1,13 +1,12 @@
 """Agent W10: action receipts for device recording, diary and social drafts.
 
-down_revision 指向 0014（本 worktree 的当前 head，本地可验证）；集成时由统筹者
-改接 W09 迁移后的实际 head，全链只保留一个 head（W10 spec 提交说明）。
+接 W09 的 0017（单 head：0014 → 0015 → 0016 → 0017 → 0018）。
 """
 from alembic import op
 import sqlalchemy as sa
 from petsense.db.base import UTCDatetime
-revision = '0017'
-down_revision = '0014'
+revision = '0018'
+down_revision = '0017'
 branch_labels = None
 depends_on = None
 

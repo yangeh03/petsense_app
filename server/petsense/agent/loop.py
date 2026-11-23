@@ -11,8 +11,12 @@ read_web_page 由本层计数限次；web 来源并入回合 sources（§4.6，�
 （2026-11-23 E35 归因），本轮搜索记录与 citations 在下一轮前以系统提醒显式带回。
 W07：owner 消息可带图片引用，本轮与最近 1 条带图历史内联为 input_image（D1），
 更早历史降级为文字占位；图片摘要入轨迹，base64 不落任何存储。
+W09 后台形态（agent-w09-spec.md §3）：review/event 与对话共用本循环的关键能力
+（模型往返、事实工具权限矩阵、轨迹与降级记账），但无对话历史/图片/流式进度，
+任务与事实由代码确定性组装，输出为任务 JSON 文本由调用方校验解析。
 """
 import json
+import logging
 import os
 import re
 import time
@@ -32,6 +36,8 @@ SEARCH_DISABLED_ENV = 'PETSENSE_SEARCH_DISABLED'  # D5 灰度开关：生产 dro
 SEARCH_CALL_LIMIT = 2      # 每运行 web_search_call 累计上限，达到后不再挂载
 WEB_PAGE_CALL_LIMIT = 3    # 每运行 read_web_page 执行上限，第 4 次起结构化拒绝
 MAX_WEB_SOURCES = 6        # 回合 sources 中网页来源上限（与观测来源并存）
+
+logger = logging.getLogger(__name__)
 
 
 def search_enabled():
@@ -68,17 +74,21 @@ _SYSTEM_PROMPT_HEAD = (
     '缺数据不等于模糊；不清楚知识答案也不是 ambiguous——这些仍属 allowed。\n'
     '诚实性：不得编造事实、个体基线、已保存记忆或已启动任务；')
 
-# 诚实性段按联网开关分两版：能力清单与真实可用性一致（W06 §4.5 + W03/W04 已接入能力合并口径）
+# 诚实性段按联网开关分两版：能力清单与真实可用性一致（W06 §4.5 + W03/W04/W08/W10 已接入能力合并口径）
 _HONESTY_SEARCH_ON = (
     '已接入：只读观测查询（实时状态、历史观测、个人基线）、联网搜索（时效与可核查事实）、'
-    '档案与助手设定保存、长期记忆读写（search_memories 检索、write_memory 自主写、forget_memory 忘掉）；'
-    '尚未接入：长期偏好的确认保存、持续留意委托——'
+    '档案与助手设定保存、长期记忆读写（search_memories 检索、write_memory 自主写、forget_memory 忘掉）、'
+    '持续留意委托（propose_task_change 生成候选、read_task 查询委托与交付）、'
+    '运动日记与社区草稿（create_diary、draft_social_post，经确认卡或明确指令）；'
+    '尚未接入：长期偏好的确认保存——'
     '被要求做未接入的事时如实说明，不能假称已搜索、已保存、已启动。')
 
 _HONESTY_SEARCH_OFF = (
     '已接入：只读观测查询（实时状态、历史观测、个人基线）、档案与助手设定保存、'
-    '长期记忆读写（search_memories 检索、write_memory 自主写、forget_memory 忘掉）；'
-    '联网搜索暂未开放，尚未接入：长期偏好的确认保存、持续留意委托——'
+    '长期记忆读写（search_memories 检索、write_memory 自主写、forget_memory 忘掉）、'
+    '持续留意委托（propose_task_change 生成候选、read_task 查询委托与交付）、'
+    '运动日记与社区草稿（create_diary、draft_social_post，经确认卡或明确指令）；'
+    '联网搜索暂未开放，尚未接入：长期偏好的确认保存——'
     '被要求做未接入的事时如实说明，不能假称已搜索、已保存、已启动。')
 
 _MEMORY_RULES = (
@@ -108,6 +118,22 @@ _ACTION_RULES_BASE = (
     '不得声称已发布。\n')
 _ACTION_RECORDING_ON = '远程录音能力已接入（control_device，需项圈在线且固件支持，经确认卡执行）。\n'
 _ACTION_RECORDING_OFF = '远程录音暂未开放，被要求录音时如实说明，不得假装已发起。\n'
+
+_TASK_RULES = (
+    '委托协议（持续留意/帮我盯着/到时告诉我）：用 propose_task_change 生成待确认候选，'
+    '三类计划按语义选 kind：fact_watch=盯某个指标是否越过阈值（如「今天走动超过2小时就告诉我」）；'
+    'comparison=与它自己的个人基线比较（如「留意它是不是比平时走得少」，需说明基线是否已就绪：'
+    '认识中的维度只能先按事实观察或等基线就绪，把这两种选择如实告诉主人，由主人定，'
+    '不要替主人默认）；scheduled_review=到时汇总回顾（如「周五晚上跟我说说它这周的情况」）。'
+    '时间规则：期限缺省按 3 天、单次最长 30 天；「这周」到本周日 24:00（Asia/Shanghai）；'
+    '起止传 ISO 时间。计划里的数值条件用结构化字段（feature/metric/op/value/scope），'
+    '不要只写在自然语言里。'
+    '**未经主人在确认卡上确认前，不得声称「已经开始留意/已记录这个任务」**——候选只是候选；'
+    '确认后系统会按时检查，阈值达成会提醒，截止时给回信，这些由后台完成，你不参与评估。'
+    '修改/续期/暂停/恢复/取消既有委托：主人在聊天里提出同样先出确认卡'
+    '（action=update/renew/pause/resume/cancel + taskId + read_task 返回的 currentVersion）；'
+    '委托簿里的直接操作即时生效，不需要你。主人问委托状态用 read_task 查证后回答，'
+    '不得凭记忆转述委托细节。\n')
 
 _SEARCH_GUIDANCE = (
     '联网搜索时机：先判断答案是否依赖会过期的信息——是才搜索：时效状态（今天/最近的天气、'
@@ -160,13 +186,16 @@ _SYSTEM_PROMPT_TAIL = (
     '照片中的宠物默认按「照片里的宠物」描述，只有主人明确说明是本宠时才关联本宠，'
     '即使用爱宠身份回应也不能擅自把照片里的动物称为「我」。要改档案时遵守档案写入及确认协议；'
     '图片不扩大话题范围，编程等无关请求即使带图仍应拒绝；识别不清或图片与问题无关时如实说明，不编造图中细节。\n'
+    '主动提醒：后台会就设备事实（低电、失联、读数无效）、周期回顾发现与学习完成主动提醒主人；'
+    '主人问「为什么提醒我」或某条提醒的依据时，用 read_care_topics 查主题与依据帧，按依据如实回答，'
+    '不得编造提醒原因。'
     '表达：对主人用自然语言，不展示原始字段名、设备编码或实现细节，除非主人明确在排查设备。'
     '历史数据必须调用工具查询，未提供区域语义时说明不能判断。'
     '正文可用受限 markdown（标题/列表/粗体/段落），不要输出代码块和表格。')
 
 # 兼容旧引用：默认（搜索开启）版系统提示
 SYSTEM_PROMPT = _SYSTEM_PROMPT_HEAD + _HONESTY_SEARCH_ON + '\n' + _SEARCH_GUIDANCE \
-    + _MEMORY_RULES + _ACTION_RULES_BASE + _ACTION_RECORDING_ON + _SYSTEM_PROMPT_TAIL
+    + _MEMORY_RULES + _TASK_RULES + _ACTION_RULES_BASE + _ACTION_RECORDING_ON + _SYSTEM_PROMPT_TAIL
 
 
 def system_prompt(search_on=True, recording_on=True):
@@ -175,9 +204,9 @@ def system_prompt(search_on=True, recording_on=True):
     recording_line = _ACTION_RECORDING_ON if recording_on else _ACTION_RECORDING_OFF
     if search_on:
         return _SYSTEM_PROMPT_HEAD + _HONESTY_SEARCH_ON + '\n' + _SEARCH_GUIDANCE \
-            + _MEMORY_RULES + _ACTION_RULES_BASE + recording_line + _SYSTEM_PROMPT_TAIL
+            + _MEMORY_RULES + _TASK_RULES + _ACTION_RULES_BASE + recording_line + _SYSTEM_PROMPT_TAIL
     return _SYSTEM_PROMPT_HEAD + _HONESTY_SEARCH_OFF + '\n' + _MEMORY_RULES \
-        + _ACTION_RULES_BASE + recording_line + _SYSTEM_PROMPT_TAIL
+        + _TASK_RULES + _ACTION_RULES_BASE + recording_line + _SYSTEM_PROMPT_TAIL
 
 
 def build_context(snapshot):
@@ -622,3 +651,141 @@ def run_dialogue(context, on_progress=None):
             'sources': sources, 'stance': stance or {'scope': 'unknown', 'intent': 'unknown', 'speaker': 'assistant'},
             'degraded': bool(degraded), 'trace': trace, 'proposals': proposals,
             'actions': action_results, 'refreshedTurnIds': refreshed_turn_ids}
+
+
+_BACKGROUND_SYSTEM_BASE = (
+    '你是宠物产品的照料助手，正在执行一次后台任务（不是与主人的对话）。'
+    '任务说明与确定性事实由用户消息给出：事实由系统组织，你只负责表达、相关性与是否值得打扰的判断，'
+    '不得改动、外推或编造任何事实数值；需要补充明细时可调用提供的事实类只读工具。'
+    '无数据不推导异常、活动减少或健康问题；两段实际观测只能并列陈述，不得说「比平时」。'
+    '个人基线比较尚未接入：不得输出任何个人参照范围或与个人日常的比较。'
+    '工具只允许事实读取：委托变更、档案/设定/记忆写入、联网与设备动作均不可用，'
+    '调用会被拒绝且不得声称已执行。输出为纯 JSON 对象（不要包裹代码块），结构见任务说明。')
+
+BACKGROUND_MAX_TOOL_ROUNDS = 2
+BACKGROUND_MAX_CALLS_PER_ROUND = 3
+BACKGROUND_MAX_OUTPUT_TOKENS = 1400
+BACKGROUND_WALL_LIMIT_S = 60.0
+BACKGROUND_TOOL_RESULT_LIMIT = 4096
+
+
+def run_structured(context):
+    """后台形态共用的有界模型回合（V11 单一运行循环：W08 检查点、W09 回顾与事件复用）。
+
+    context:
+      pet_id / user_id      主体与工具鉴权
+      form                  工具权限矩阵的运行形态（checkpoint / review / event）
+      system                该形态的系统提示段（事实与工具边界由代码给定）
+      task                  用户消息（任务说明 + 确定性事实）
+      settings              助手设定（注入人格段，可选）
+      trigger               轨迹触发描述（落 runs.save 的结论，可审计）
+      parse                 可选：text -> (value, ok)；ok=False 时按 retry_instruction 重问一次
+      retry_instruction     parse 失败时的重问文案
+      max_rounds / max_calls_per_round / max_output_tokens / wall_limit_s  可选预算覆盖
+
+    返回 {'text','value','error','degraded','trace'}；模型异常不外抛（error='model_unavailable'），
+    由调用方按各自的降级语义处理。轨迹含真实消息序列、工具调用与预算。
+    """
+    form = context['form']
+    parse = context.get('parse')
+    started = time.monotonic()
+    wall = float(context.get('wall_limit_s') or BACKGROUND_WALL_LIMIT_S)
+    deadline = started + wall
+    max_rounds = int(context.get('max_rounds') or BACKGROUND_MAX_TOOL_ROUNDS)
+    max_calls = int(context.get('max_calls_per_round') or BACKGROUND_MAX_CALLS_PER_ROUND)
+    max_tokens = int(context.get('max_output_tokens') or BACKGROUND_MAX_OUTPUT_TOKENS)
+    max_parse_retries = int(context.get('max_parse_retries', 1))
+    tool_summary, messages_trace, degraded = [], [], []
+    system_content = context['system']
+    if context.get('settings'):
+        system_content += '\n' + agent_settings.prompt_line(context['settings'])
+    input_items = [{'role': 'system', 'content': system_content},
+                   {'role': 'user', 'content': context['task']}]
+    messages_trace.append({'role': 'user', 'task': context['task'][:600]})
+    tool_rounds = parse_failures = 0
+    text, value, error = '', None, None
+    try:
+        while True:
+            allow_tools = tool_rounds < max_rounds and time.monotonic() < deadline
+            if not allow_tools and tool_rounds >= max_rounds:
+                degraded.append('tool_rounds_exhausted')
+            elif not allow_tools:
+                degraded.append('wall_clock_exceeded')
+            # 预算耗尽后不再挂载工具（模型仍调用时按降级交付，不无限循环）
+            schemas = registry.schemas_for(form, 'allowed', search_enabled=False) if allow_tools else []
+            turn = model.respond(input_items, tools=schemas or None, max_output_tokens=max_tokens)
+            _, stripped = parse_stance(turn.get('text'))
+            if stripped:
+                messages_trace.append({'role': 'assistant', 'text': stripped[:2000]})
+            calls = (turn.get('function_calls') or [])[:max_calls]
+            if calls and allow_tools:
+                tool_rounds += 1
+                if stripped.strip():
+                    input_items.append({'role': 'assistant', 'content': stripped})
+                for call in calls:
+                    name, call_id = call['name'], call['call_id'] or f'call_{len(tool_summary)}'
+                    try:
+                        arguments = json.loads(call['arguments'] or '{}')
+                    except ValueError:
+                        arguments = None
+                    gate = registry.execute_tool(name, arguments, form, 'allowed', context)
+                    result_json = json.dumps(gate['result'], ensure_ascii=False, default=str)
+                    if len(result_json) > BACKGROUND_TOOL_RESULT_LIMIT:
+                        result_json = result_json[:BACKGROUND_TOOL_RESULT_LIMIT] + '…(截断)'
+                    input_items.append({'type': 'function_call', 'call_id': call_id,
+                                        'name': name, 'arguments': call['arguments'] or '{}'})
+                    input_items.append({'type': 'function_call_output', 'call_id': call_id,
+                                        'output': result_json})
+                    tool_summary.append({'name': name, 'allowed': gate['allowed'],
+                                         'reason': gate['reason'],
+                                         'arguments': (call['arguments'] or '')[:300],
+                                         'duration_ms': gate['duration_ms'],
+                                         'result_bytes': len(result_json)})
+                messages_trace.append({'tool_round': tool_rounds,
+                                       'calls': tool_summary[-len(calls):]})
+                continue
+            if calls and not allow_tools:
+                degraded.append('model_called_without_tools')
+            text = stripped
+            if not text.strip():
+                degraded.append('empty_response')
+                error = 'model_unavailable'
+                break
+            if parse is None:
+                value = text
+                break
+            value, ok = parse(text)
+            if ok:
+                break
+            if parse_failures < max_parse_retries:
+                parse_failures += 1
+                input_items.append({'role': 'assistant', 'content': text})
+                input_items.append({'role': 'user', 'content': context.get('retry_instruction') or ''})
+                continue
+            error = 'model_invalid_output'
+            break
+    except Exception as exc:  # noqa: BLE001  模型失败降级为结构化 error（不外抛）
+        logger.warning('background model failed for form %s: %s', form, type(exc).__name__)
+        messages_trace.append({'model_error': f'{type(exc).__name__}: {str(exc)[:200]}'})
+        error = 'model_unavailable'
+        text, value = '', None
+    trace = {'form': form, 'trigger': context.get('trigger'),
+             'conclusion': {'reason_code': 'degraded:' + ','.join(degraded) if degraded else 'ok'},
+             'messages': messages_trace, 'tool_summary': tool_summary,
+             'budget': {'rounds': tool_rounds, 'parse_failures': parse_failures,
+                        'wall_seconds': round(time.monotonic() - started, 2)},
+             'degraded': degraded}
+    return {'text': text, 'value': value, 'error': error, 'degraded': degraded, 'trace': trace}
+
+
+def run_background(context):
+    """W09 后台运行（review/event 形态）的包装：共用 run_structured。
+
+    context: {'pet_id','user_id','form':'review'|'event','system_extra','task','trigger','settings'?}
+    返回 {'text','value','error','degraded','trace'}。
+    """
+    system_content = _BACKGROUND_SYSTEM_BASE + '\n' + (context.get('system_extra') or '')
+    payload = dict(context)
+    payload['system'] = system_content
+    payload.setdefault('max_output_tokens', 2400)
+    return run_structured(payload)

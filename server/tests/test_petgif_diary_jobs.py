@@ -152,6 +152,23 @@ class PetgifDiaryJobTests(unittest.TestCase):
         with db.session_scope() as session:
             self.assertEqual(session.get(PetgifDiaryJob, response.json['jobId']).status, 'running')
 
+    def test_repeat_submit_resumes_unknown_job_without_nested_transaction(self):
+        """同一幂等键重提且上游结果不明时续跑；不得在本体事务内嵌套 session_scope
+        （W02 教训：嵌套作用域会关闭外层事务；W10 数据层加嵌套保护后必须显式拆开）。"""
+        with patch.object(diary_jobs, 'enqueue_diary_job'):
+            first = self.submit()
+        with db.session_scope() as session:
+            job = session.get(PetgifDiaryJob, first.json['jobId'])
+            job.upstream_diary_id = 'already-created'
+            job.status = 'unknown'
+        with patch.object(diary_jobs, 'enqueue_diary_job') as enqueue:
+            repeated = self.submit()
+        self.assertEqual(repeated.status_code, 202)
+        self.assertEqual(repeated.json['jobId'], first.json['jobId'])
+        enqueue.assert_called_once_with(first.json['jobId'])
+        with db.session_scope() as session:
+            self.assertEqual(session.get(PetgifDiaryJob, first.json['jobId']).status, 'running')
+
     def test_recover_resumes_unknown_jobs_only_when_upstream_id_is_known(self):
         with patch.object(diary_jobs, 'enqueue_diary_job'):
             first = self.submit(key='unknown-no-id')

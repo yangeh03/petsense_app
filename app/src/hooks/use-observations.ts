@@ -3,6 +3,7 @@ import { useCallback, useRef, useState } from 'react';
 
 import { useAuth } from '@/hooks/use-auth';
 import { fetchDashboard } from '@/services/api';
+import { refreshCareRules } from '@/services/care-rules';
 import { observationsForPet } from '@/services/observation-view';
 import { fetchObservations } from '@/services/observations';
 import type { ObservationPeriod, Observations } from '@/types/observations';
@@ -36,6 +37,10 @@ export function useObservations(period: ObservationPeriod, enabled = true) {
     ]);
     clearTimeout(timeout);
     if (requestId !== sequence.current) return;
+    if (dashboard.status === 'fulfilled') {
+      // W09：受管理告警规则随宠物探测（TTL 去抖；失败恢复本地告警）
+      void refreshCareRules(dashboard.value.pet?.id ?? null);
+    }
     setResult((old) => ({
       userId: user.id,
       dashboard:
