@@ -20,11 +20,13 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, select
 
 from petsense.agent import jobs
+from petsense.agent import change as change_service
 from petsense.agent.baseline import dimension_states
 from petsense.agent.observations import query as observations_query, walk_seconds
 from petsense.db import iso_z, session_scope, utc_now
 from petsense.db.models import Pet, TelemetryMinute
-from petsense.db.models.agent import (AgentTask, AgentTaskDelivery, AgentTaskPlan, AgentTurn)
+from petsense.db.models.agent import (AgentTask, AgentTaskDelivery, AgentTaskPlan, AgentTurn,
+                                       PetBaseline)
 
 # 三类计划（spec §2）；「待确认」为 AgentProposal(pending) 态，不在本表状态集内
 KIND_FACT_WATCH = 'fact_watch'
@@ -278,6 +280,7 @@ def materialize(session, pet, task, plan, end):
                 'effectiveWindows': [], 'pausedSeconds': 0, 'gapSeconds': 0,
                 'observedSeconds': 0, 'walkSeconds': 0, 'soundEventCount': 0,
                 'actionSeconds': {}, 'daily': [], 'dataThrough': None, 'baseline': None,
+                'changeSlots': [],
                 'comparisonStarted': task.observing_since is not None}
     if end <= start:
         return evidence
@@ -338,7 +341,61 @@ def materialize(session, pet, task, plan, end):
             evidence['baseline'] = {'date': baseline.get('date'), 'dimensions': baseline.get('dimensions')}
         except ValueError:
             evidence['baseline'] = {'error': 'baseline_unavailable'}
+        # W11：逐日逐时段个人比较（只算有效观察窗口：排除确认前、等待期与暂停期）
+        evidence['changeSlots'] = change_slots(session, pet, plan, windows, end)
     return evidence
+
+
+def _absolute_only(plan):
+    """该计划是否「只给绝对事实」。
+
+    只有主人在确认卡上明确选了「先记录绝对事实」的计划才只给绝对事实
+    （W11 D3/D5）。归一化默认值 fact_first 与旧计划沿用 W08 的实际语义：
+    先按事实观察，基线就绪后仍会做个人比较——避免默认悄悄改变已确认计划。
+    """
+    return plan.get('baselineStrategy') == 'fact_first' and bool(plan.get('baselineStrategyExplicit'))
+
+
+def change_slots(session, pet, plan, windows, now=None):
+    """委托窗口内的逐日逐时段个人比较（比较单元 = 维度 × 日期 × 粗时段）。
+
+    有效观察窗口已排除确认前、等待基线期与暂停期；样本只取各日期之前的基线有效日。
+    基线未就绪时不产出个人比较（等待策略到期交付覆盖与学习状态）；事实策略
+    （fact_first）全程只给绝对事实，不把原比较目标当作达成（D5）。
+    """
+    feature = plan.get('feature')
+    if not feature or _absolute_only(plan):
+        return []
+    states = dimension_states(session, pet)
+    state_row = next((s for s in states if s['dimension'] == feature and s.get('active')), None)
+    if state_row is None or state_row['state'] != 'ready':
+        return []
+    version = state_row['version']
+    tz = ZoneInfo(plan.get('timezone') or DEFAULT_TZ)
+    buckets = change_service.slot_observations(session, pet, feature, version, windows)
+    dates = []
+    for a, b in windows:
+        if b <= a:
+            continue
+        cursor = a.astimezone(tz).date()
+        last = (b - timedelta(seconds=1)).astimezone(tz).date()
+        while cursor <= last:
+            if cursor.isoformat() not in dates:
+                dates.append(cursor.isoformat())
+            cursor += timedelta(days=1)
+    records = []
+    for date in sorted(dates)[:31]:
+        values = [0] * 4
+        cover = [0] * 4
+        for slot in range(4):
+            bucket = buckets.get((date, slot))
+            if bucket:
+                values[slot] = bucket['value']
+                cover[slot] = bucket['cover']
+        records.extend(change_service.compare_day(
+            session, pet, date, now=now, features=[feature],
+            targets={feature: {'values': values, 'cover': cover}}))
+    return records
 
 
 def condition_state(plan, evidence, now=None):
@@ -359,27 +416,40 @@ def condition_state(plan, evidence, now=None):
         return {'met': bool(met), 'value': value, 'metric': metric,
                 'threshold': condition['value'], 'op': condition['op']}
     if kind == KIND_COMPARISON:
-        dimensions = (evidence.get('baseline') or {}).get('dimensions') or []
-        dim = next((d for d in dimensions if d.get('feature') == plan.get('feature')), None)
-        if not dim:
-            return {'met': False, 'reason': 'baseline_unavailable'}
-        target = ((dim.get('day') or {}).get('target') or {})
-        if not target.get('comparable'):
-            return {'met': False, 'reason': 'not_comparable',
-                    'note': target.get('note') or '当日覆盖不足或样本不足，暂不可比'}
-        return {'met': target.get('band') == plan['comparison']['band'],
-                'band': target.get('band'), 'wanted': plan['comparison']['band'],
-                'value': target.get('value'), 'range': (dim.get('day') or {}).get('range'),
-                'version': dim.get('version')}
+        if _absolute_only(plan):
+            return {'met': False, 'reason': 'fact_first_strategy',
+                    'note': '主人选择先记录绝对事实，本委托不作个人比较'}
+        wanted = plan['comparison']['band']
+        slots = evidence.get('changeSlots') or []
+        eligible = [s for s in slots if s.get('eligible') and s.get('direction') == wanted]
+        if eligible:
+            first = eligible[0]
+            return {'met': True, 'band': wanted, 'wanted': wanted, 'value': first.get('value'),
+                    'range': first.get('range'), 'version': first.get('version'),
+                    'evidenceId': first.get('evidenceId'), 'evidence': first}
+        if any(s.get('status') == change_service.STATUS_LEARNING for s in slots):
+            return {'met': False, 'reason': 'baseline_unavailable', 'note': '个人基线尚未就绪'}
+        comparable = [s for s in slots if s.get('comparable')]
+        if comparable:
+            return {'met': False, 'reason': 'within_range', 'comparedSlots': len(comparable),
+                    'note': '可比时段都在平时范围内，没有超出 p10–p90'}
+        return {'met': False, 'reason': 'not_comparable', 'comparedSlots': 0,
+                'note': '观察窗口内没有覆盖达标且样本足够的时段，不作个人比较'}
     return {'met': False, 'reason': 'no_condition'}
 
 
 def baseline_ready(session, pet, plan):
+    """所选宠物的最新个人基线是否就绪（物化当期基线后再判断，不看候选里的旧状态）。"""
     if plan.get('feature') is None or pet is None:
         return False
+    from petsense.agent import baseline as baseline_service
+    baseline_service.ensure_baseline(session, pet)
     states = dimension_states(session, pet)
     row = next((s for s in states if s['dimension'] == plan['feature'] and s.get('active')), None)
-    return bool(row and row['state'] == 'ready')
+    if not row or row['state'] != 'ready':
+        return False
+    materialized = session.get(PetBaseline, (pet.id, plan['feature'], row['version']))
+    return bool(materialized is not None and materialized.state == 'ready')
 
 
 # ── 状态机：确认生效与委托簿直接操作 ─────────────────────────────────────────
@@ -393,20 +463,22 @@ def _topic_of(session, turn_id):
     return turn.topic_id or turn.id
 
 
-def apply_proposal(session, pet, row, now=None):
+def apply_proposal(session, pet, row, now=None, baseline_strategy=None):
     """确认 task_change 提案后生效（proposals.decide 分派；spec §3 状态转换绑定预期版本）。"""
     payload = json.loads(row.payload)
     action = payload['action']
     now = now or utc_now()
     if action == 'create':
-        return _create_task(session, pet, row, payload['plan'], now)
+        return _create_task(session, pet, row, payload['plan'], now,
+                            baseline_strategy=baseline_strategy)
     task = session.get(AgentTask, payload['taskId'])
     if task is None or task.pet_id != pet.id:
         raise TaskError('委托不存在', status=404)
     if task.current_version != payload['expectedVersion']:
         raise TaskError('委托计划已更新，请基于最新版本重新操作', status=409)
     if action in ('update', 'renew'):
-        return _append_version(session, task, row, payload['plan'], now, renew=(action == 'renew'))
+        return _append_version(session, task, row, payload['plan'], now, renew=(action == 'renew'),
+                               baseline_strategy=baseline_strategy)
     if action == 'pause':
         return _transition(session, task, 'pause', now)
     if action == 'resume':
@@ -414,7 +486,31 @@ def apply_proposal(session, pet, row, now=None):
     return _transition(session, task, 'cancel', now)
 
 
-def _create_task(session, pet, row, plan, now):
+def _apply_baseline_strategy(plan, baseline_strategy):
+    """确认时的基线策略选择（W11 D3/D5）。
+
+    基线未就绪时新版候选必须由主人明确选择「等基线就绪」或「先记录绝对事实」，
+    缺少明确选择不静默生效；旧候选与旧客户端沿用兼容解析（用计划里的既定策略）。
+    两种选择都沿用原确认的截止时间，本函数不改 startAt/deadlineAt。
+    """
+    if plan.get('kind') != KIND_COMPARISON:
+        return plan
+    if baseline_strategy is not None:
+        if baseline_strategy not in ('fact_first', 'wait_baseline'):
+            raise TaskError('基线策略需为 fact_first / wait_baseline')
+        plan = dict(plan)
+        plan['baselineStrategy'] = baseline_strategy
+        plan['baselineStrategyChoiceRequired'] = False
+        # 主人明确选过 → 事实策略才只给绝对事实（默认与旧计划沿用 W08 语义）
+        plan['baselineStrategyExplicit'] = True
+        return plan
+    if plan.get('baselineStrategyChoiceRequired'):
+        raise TaskError('个人基线尚未就绪：请先选择「等基线就绪」或「先记录绝对事实」')
+    return plan
+
+
+def _create_task(session, pet, row, plan, now, baseline_strategy=None):
+    plan = _apply_baseline_strategy(plan, baseline_strategy)
     task = AgentTask(pet_id=pet.id, task_key=secrets.token_hex(8), current_version=1,
                      timezone=plan['timezone'], status='observing',
                      deadline_at=iso_z_parse(plan['deadlineAt']),
@@ -436,7 +532,8 @@ def _create_task(session, pet, row, plan, now):
     return task
 
 
-def _append_version(session, task, row, plan, now, renew):
+def _append_version(session, task, row, plan, now, renew, baseline_strategy=None):
+    plan = _apply_baseline_strategy(plan, baseline_strategy)
     if task.status == 'cancelled':
         raise TaskError('委托已取消，不能修改或续期；可重新发起一条新委托', status=409)
     if task.status == 'completed' and not renew:
@@ -664,7 +761,10 @@ def _deliver(session, pet, task, plan, *, kind, text, evidence, run_id, now, rea
     if existing is not None:
         return existing
     content = text or _degraded_letter_text(plan, evidence, reason, now)
-    payload = {'text': content, 'windowStart': evidence.get('windowStart'),
+    change_evidence = [change_service.freeze(s) for s in (evidence.get('changeSlots') or [])
+                       if s.get('eligible')]
+    payload = {'text': content, 'changeEvidence': change_evidence,
+               'windowStart': evidence.get('windowStart'),
                'windowEnd': evidence.get('windowEnd'),
                'observedSeconds': evidence.get('observedSeconds'),
                'gapSeconds': evidence.get('gapSeconds'),
@@ -683,13 +783,21 @@ def _deliver(session, pet, task, plan, *, kind, text, evidence, run_id, now, rea
                 'startAt': evidence.get('windowStart'), 'endAt': evidence.get('windowEnd'),
                 'observedSeconds': evidence.get('observedSeconds'),
                 'soundEventCount': evidence.get('soundEventCount')}] if kind != 'reminder' else []
+    # W11：冻结证据逐条给出匹配的来源下钻（时段窗口），与证据里的 note 对应
+    for item in change_evidence:
+        sources.append({'type': 'observations', 'deviceId': pet.device_id,
+                        'startAt': item.get('slotStartAt'), 'endAt': item.get('slotEndAt'),
+                        'observedSeconds': item.get('coverageSeconds'),
+                        'soundEventCount': (item.get('value')
+                                            if item.get('feature') == 'sounds' else None)})
     blocks = [{'type': 'text', 'speaker': 'assistant', 'text': content},
               {'type': 'task_result', 'task': {'taskId': task.id, 'deliveryId': delivery.id,
                                                'kind': kind, 'title': plan.get('title'),
                                                'planKind': plan['kind'],
                                                'version': task.current_version,
                                                'deadlineAt': iso_z(task.deadline_at),
-                                               'degraded': kind == 'degraded_letter'}}]
+                                               'degraded': kind == 'degraded_letter',
+                                               'changeEvidence': change_evidence}}]
     turn, _created = deliver_service.deliver_background_message(
         session, pet.id, f'task-{delivery.id}', blocks, topic_id=task.topic_id,
         sources=sources, now=now)
@@ -777,6 +885,7 @@ def delivery_public(row):
             'walkSeconds': payload.get('walkSeconds'),
             'soundEventCount': payload.get('soundEventCount'),
             'condition': payload.get('condition'), 'degraded': bool(payload.get('degraded')),
+            'changeEvidence': payload.get('changeEvidence') or [],
             'turnId': row.turn_id, 'runId': row.run_id, 'archivedMemoryId': row.archived_memory_id,
             'createdAt': iso_z(row.created_at)}
 

@@ -190,6 +190,10 @@ def ensure_baseline(session, pet, now=None):
         row.computed_at = utc_now()
 
 
+# 公开别名：W11 历史参照与 W05 基线共用同一取数与裁剪规则
+window_values = _window_values
+
+
 def _target_day(session, pet, feature, version, date):
     """当日（或指定日）逐时段与全天事实：值、覆盖、可比性与相对范围的落带。"""
     start, end = _day_bounds(date)
@@ -228,6 +232,97 @@ def _band(value, p10, p90):
     return 'within'
 
 
+# 公开别名：W11 个人比较与 W05 共用同一条落带规则（边界值等于 p10/p90 视为范围内）
+band = _band
+
+
+def valid_days_before(session, pet, feature, version, date):
+    """目标日期之前的有效日（升序，唯一）：历史参照窗口的输入。"""
+    rows = session.execute(select(AgentLearningDay).where(
+        AgentLearningDay.pet_id == pet.id, AgentLearningDay.device_id == pet.device_id,
+        AgentLearningDay.feature == feature, AgentLearningDay.version == version,
+        AgentLearningDay.day < date)).scalars().all()
+    return sorted({row.day for row in rows
+                   if row.seconds >= 21600 and len(json.loads(row.slots)) >= 2})
+
+
+def states_before(session, pet, date):
+    """目标日期「当时」的维度状态（历史口径）。
+
+    只统计 day < date 的学习日：后来才凑够的有效日不得回头让过去的日期变成
+    「已就绪」；活跃版本也按当时的最后观测时间判定（与 progress 的口径一致，
+    只是限定在目标日期之前）。返回结构与 dimension_states 对齐。
+    """
+    rows = session.execute(select(AgentLearningDay).where(
+        AgentLearningDay.pet_id == pet.id, AgentLearningDay.device_id == pet.device_id,
+        AgentLearningDay.day < date)).scalars().all()
+    versions = {}
+    for row in rows:
+        value = versions.setdefault((row.feature, row.version),
+                                    {'days': 0, 'last': row.last_seen_at})
+        if row.seconds >= 21600 and len(json.loads(row.slots)) >= 2:
+            value['days'] += 1
+        value['last'] = max(value['last'], row.last_seen_at)
+    ordered = sorted(versions.items(), key=lambda item: (item[1]['last'], item[0][1]),
+                     reverse=True)
+    active = {}
+    for (feature, version), _value in ordered:
+        active.setdefault(feature, version)
+    result = []
+    for (feature, version), value in ordered:
+        result.append({'dimension': feature, 'version': version,
+                       'validDays': value['days'], 'lastObservedAt': iso_z(value['last']),
+                       'observedSeconds': 0, 'requiredDays': REQUIRED_DAYS,
+                       'state': 'ready' if value['days'] >= REQUIRED_DAYS else 'learning',
+                       'active': active[feature] == version})
+    return result
+
+
+def reference_before(session, pet, feature, version, date):
+    """目标日期之前的参照样本（历史口径）。
+
+    与 W05 同规则：只取 date 之前的有效日，按最近 28 个有效日物化；明细已过
+    保留期而裁剪的有效日计入进度、不入样本（sampleDays 如实反映）。
+    返回逐时段的分位统计与样本起止日期，供 W11 冻结证据引用。
+    """
+    valid = valid_days_before(session, pet, feature, version, date)
+    window = valid[-WINDOW_DAYS:]
+    day_values = _window_values(session, pet, feature, version, window)
+    slots = {}
+    for slot in range(4):
+        values = [item['slots'][str(slot)] for item in day_values.values()
+                  if str(slot) in item['slots']]
+        sample_days = sorted(day for day, item in day_values.items() if str(slot) in item['slots'])
+        slots[slot] = {'stats': _stats(values), 'sampleDays': sample_days}
+    return {'validDaysBefore': len(valid), 'windowDays': WINDOW_DAYS,
+            'sampleDays': sorted(day_values), 'slots': slots}
+
+
+def slot_samples(session, pet, feature, version, date):
+    """逐时段的参照样本（只取 date 之前的有效日，目标日期自身不入样本）。
+
+    返回 {slot: {'stats': 分位统计|None, 'sampleDays': [日期…]}}，与 W05 的时段
+    样本口径一致（覆盖达标才算样本）；供 W11 个人比较与冻结证据复用。
+    """
+    row = session.get(PetBaseline, (pet.id, feature, version))
+    if row is None:
+        return {}
+    day_values = {day: item for day, item in json.loads(row.day_values).items() if day < date}
+    result = {}
+    for slot in range(4):
+        values = [item['slots'][str(slot)] for item in day_values.values()
+                  if str(slot) in item['slots']]
+        sample_days = sorted(day for day, item in day_values.items() if str(slot) in item['slots'])
+        result[slot] = {'stats': _stats(values), 'sampleDays': sample_days}
+    return result
+
+
+def target_slots(session, pet, feature, version, date):
+    """当日逐时段实际值与覆盖（秒）：{'values': [4], 'cover': [4]}。"""
+    values, cover = _target_day(session, pet, feature, version, date)
+    return {'values': values, 'cover': cover}
+
+
 def _dimension_payload(session, pet, state_row, date, today, now):
     feature, version = state_row['dimension'], state_row['version']
     label = DIMENSION_LABELS.get(feature, feature)
@@ -248,11 +343,12 @@ def _dimension_payload(session, pet, state_row, date, today, now):
     day_stats = _stats([item['day'] for item in day_values.values()]) or {'samples': 0}
     day_ready = day_stats['samples'] >= DAY_RANGE_MIN_SAMPLES
     slot_stats = []
+    samples = slot_samples(session, pet, feature, version, date)
     for slot in range(4):
-        stats = _stats([item['slots'][str(slot)] for item in day_values.values()
-                        if str(slot) in item['slots']])
+        stats = (samples.get(slot) or {}).get('stats')
         slot_stats.append({'slot': slot, **stats} if stats else {'slot': slot, 'samples': 0})
-    values, cover = _target_day(session, pet, feature, version, date)
+    target = target_slots(session, pet, feature, version, date)
+    values, cover = target['values'], target['cover']
     now_sh = shanghai_now(now)
     slots_payload = []
     for slot in range(4):

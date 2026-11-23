@@ -11,6 +11,7 @@
 import json
 import logging
 
+from petsense.agent import change as change_service
 from petsense.agent import loop, registry, runs
 from petsense.db import iso_z
 
@@ -129,6 +130,17 @@ def evaluate(ctx, now):
     if decision is not None and ctx['mode'] == 'ordinary' and decision['decision'] == 'letter':
         # 普通检查不交付回信（spec §3：到期才回信），按继续观察记录
         decision = {'decision': 'continue', 'text': ''}
+    if decision is not None and decision.get('text'):
+        # W11：回信里的个人比较必须有已验证证据支撑——方向与已接受证据相反或
+        # 完全没有合格证据时，判为不合法输出（走有界重试与降级回信），不得交付。
+        eligible = [slot for slot in (evidence.get('changeSlots') or []) if slot.get('eligible')]
+        claimed = change_service.claim_directions(decision['text'])
+        if change_service.claims_personal_change(decision['text']):
+            allowed = {slot.get('direction') for slot in eligible}
+            if not eligible or (claimed and not claimed <= allowed):
+                decision = None
+                if error is None:
+                    error = 'comparison_without_evidence'
     if decision is not None and ctx['mode'] == 'due' and decision['decision'] != 'letter':
         decision = None  # due 必须 letter
         if error is None:

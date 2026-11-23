@@ -641,12 +641,20 @@ class W09CareTests(unittest.TestCase):
         self.assertTrue(gate['result']['topics'][0]['evidence'], '依据帧随主题交付')
 
     def test_background_form_schema_excludes_writes(self):
-        """review/event 形态 schema 只含事实读取工具（不含基线/记忆/写入/外读）。"""
+        """review/event 形态 schema 只含事实读取工具（不含记忆/写入/外读）。
+
+        W11 起回顾形态额外开放 read_baseline（个人变化合流需要个人参照范围）；
+        事件形态权限不扩大，仍不含基线。
+        """
         from petsense.agent import registry
-        for form in (registry.REVIEW, registry.EVENT):
-            names = {t['name'] for t in registry.schemas_for(form, 'allowed', search_enabled=False)}
-            self.assertEqual(names, {'query_observations', 'read_current_status', 'read_pet_profile'},
-                             '%s 形态工具面' % form)
+        names = {t['name'] for t in registry.schemas_for(registry.REVIEW, 'allowed',
+                                                          search_enabled=False)}
+        self.assertEqual(names, {'query_observations', 'read_current_status', 'read_pet_profile',
+                                  'read_baseline'}, 'review 形态工具面')
+        event_names = {t['name'] for t in registry.schemas_for(registry.EVENT, 'allowed',
+                                                                search_enabled=False)}
+        self.assertEqual(event_names, {'query_observations', 'read_current_status',
+                                       'read_pet_profile'}, 'event 形态工具面')
 
     def test_scan_reschedules_itself(self):
         now = _at(0, 12, 0)

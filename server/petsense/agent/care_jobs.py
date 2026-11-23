@@ -21,7 +21,7 @@ from datetime import timedelta
 
 from sqlalchemy import select
 
-from petsense.agent import care, deliver, jobs, loop, registry, runs
+from petsense.agent import care, change as change_service, deliver, jobs, loop, registry, runs
 from petsense.agent import settings as settings_service
 from petsense.agent.observations import query as observations_query, walk_seconds
 from petsense.db import iso_z, session_scope, utc_now
@@ -46,9 +46,13 @@ _REVIEW_SYSTEM = (
     '按主人设置的主动程度把握分寸。'
     '输出 JSON：{"say": "给主人看的回顾消息（没事可说时为空字符串）", '
     '"level": "high或normal", '
-    '"findings": [{"category": "walk_volume|sound_events|coverage|observation|other", '
+    '"findings": [{"category": "walk_volume|sound_events|coverage|observation|personal_change|other", '
     '"anchor": "同一事件的自然键（小写英文与数字；跨天指同一件事时保持一致）", '
     '"title": "短标题", "text": "这条发现的一句说明"}]}。'
+    '个人变化（category=personal_change）只能在 personalChange.candidates 里 status 为 '
+    'below/above 的时段上成立，并且必须带上该候选的 evidenceId（direction 与 value 与候选一致）；'
+    '候选 status 为 within 时只能说在平时范围内，不能说比平时多或少；没有合格候选时'
+    '只能陈述绝对事实，不要提「比平时」。'
     'say 中不要罗列全部数字，挑值得说的说。'
     'level=high 表示值得现在打扰主人（异常、里程碑、主人关心的事）；'
     'level=normal 是一般发现，只有多提醒档才会主动发出。'
@@ -173,12 +177,37 @@ def review_facts(session, pet, window_start, window_end):
         AgentCareTopic.pet_id == pet.id,
         AgentCareTopic.status.in_(('open', 'ongoing', 'recovered')))
         .order_by(AgentCareTopic.updated_at.desc()).limit(5)).scalars().all()
+    change = change_service.review_candidates(session, pet, window_start, window_end,
+                                               now=utc_now(), tz=tz)
     return {'window': {'startAt': iso_z(window_start), 'endAt': iso_z(window_end)},
             'days': days, 'coveredDays': len(covered), 'totalDays': len(days),
             'activeTasks': _active_task_facts(session, pet),
+            'personalChange': _change_facts(change),
             'openTopics': [{'id': t.id, 'category': t.category, 'title': t.title,
                             'status': t.status, 'anchor': t.anchor,
                             'updatedAt': iso_z(t.updated_at)} for t in topics]}
+
+
+def _change_facts(change):
+    """个人变化候选的提示词视图（只给可引用的事实，模型按 evidenceId 引用）。"""
+    items = []
+    for record in change.get('candidates') or []:
+        entry = {'evidenceId': record['evidenceId'], 'feature': record.get('feature'),
+                 'dimension': record.get('dimension'),
+                 'metric': record.get('metric'), 'unit': record.get('unit'),
+                 'date': record['date'], 'slot': record['slot'], 'slotLabel': record.get('slotLabel'),
+                 'status': record['status'], 'value': record.get('value'),
+                 'comparable': record.get('comparable'), 'eligible': record.get('eligible'),
+                 'coverageMinutes': record.get('coverageMinutes'),
+                 'samples': record.get('samples'), 'sampleStartDay': record.get('sampleStartDay'),
+                 'sampleEndDay': record.get('sampleEndDay'), 'version': record.get('version'),
+                 'revision': record.get('revision'), 'range': record.get('range'),
+                 'direction': record.get('direction'), 'note': record.get('note')}
+        items.append(entry)
+    return {'dates': change.get('dates') or [], 'counts': change.get('counts') or {},
+            'candidates': items,
+            'note': '只有 status=below/above（严格超出 p10–p90）且覆盖达标的时段才可作为'
+                    '个人变化主题；引用时必须带 evidenceId；status 为 within 时不得说比平时多或少。'}
 
 
 def _active_task_facts(session, pet):
@@ -227,7 +256,7 @@ def _observation_topic(session, pet_id, anchor):
         AgentCareTopic.status.in_(('open', 'ongoing')))).scalars().first()
 
 
-def _validate_findings(payload, pet_id, session, now=None):
+def _validate_findings(payload, pet_id, session, now=None, candidates=None):
     """校验模型发现：类别白名单、锚点归一、同锚点去重与交付预算。
 
     返回 (new_findings, merged_anchors)：new_findings 为开了新主题的发现（授权证据），
@@ -246,6 +275,36 @@ def _validate_findings(payload, pet_id, session, now=None):
         text = str(item.get('text') or '').strip()[:300]
         if not anchor or not text:
             continue
+        if category == 'personal_change':
+            # W11：个人变化必须引用真实的时段证据；方向与数值必须显式给出且与证据相符
+            # （缺失或不符一律拒绝——避免模型用自由措辞表达相反结论）
+            evidence_id = str(item.get('evidenceId') or '').strip()
+            record = (candidates or {}).get(evidence_id)
+            if record is None or not record.get('eligible'):
+                continue
+            direction = item.get('direction')
+            if direction not in ('above', 'below') or direction != record.get('direction'):
+                continue
+            value = item.get('value')
+            if value != record.get('value'):
+                continue
+            anchor = f"change:{evidence_id}"
+            evidence = change_service.freeze(record)
+            if any(f['anchor'] == anchor for f in findings) or anchor in merged:
+                continue
+            existing = _observation_topic(session, pet_id, anchor)
+            if existing is not None:
+                merged.append(anchor)
+                care.append_evidence(existing, {'at': iso_z(now), 'kind': 'review',
+                                                'note': text[:120], 'evidence': evidence})
+                continue
+            findings.append({'category': category, 'anchor': anchor,
+                             'title': str(item.get('title') or record.get('dimension') or '个人变化')[:80],
+                             'text': evidence['note'], 'modelText': text,
+                             'evidence': evidence, 'evidenceId': evidence_id})
+            if len(findings) >= FINDING_BUDGET:
+                break
+            continue
         if any(f['anchor'] == anchor for f in findings) or anchor in merged:
             continue
         existing = _observation_topic(session, pet_id, anchor)
@@ -259,6 +318,17 @@ def _validate_findings(payload, pet_id, session, now=None):
         if len(findings) >= FINDING_BUDGET:
             break
     return findings, merged
+
+
+def _publication_provenance(payload, relevance):
+    """发布溯源：区分「模型判定高相关 + 发现被接受 + 经 W09 发布」与旧的默认高相关。
+
+    W13 后续据此区分主动消息来源（旧客户端路径没有这条记录）。
+    """
+    model_level = (payload or {}).get('level') if isinstance(payload, dict) else None
+    if model_level in ('high', 'normal'):
+        return 'model_%s_accepted' % model_level
+    return 'legacy_default_%s' % relevance
 
 
 def _relevance(payload, findings):
@@ -317,10 +387,29 @@ def handle_review(job, now):
     else:
         say = str(payload_json.get('say') or '').strip()
         with session_scope() as s:
-            findings, merged = _validate_findings(payload_json, pet.id, s, now=now)
+            findings, merged = _validate_findings(
+                payload_json, pet.id, s, now=now,
+                candidates=change_service.eligible_map(facts.get('personalChange', {}).get('candidates') or []))
         relevance = _relevance(payload_json, findings)
         # 授权证据 = 开了新主题的发现（与既有主题同锚点的重复提报不再发消息）
         authorized = bool(findings)
+        # W11 兜底：比较必须有已验证证据支撑。
+        # a) 没有任何通过校验的个人变化证据 → 回退绝对事实描述；
+        # b) 模型措辞的方向与已接受证据相反 → 用服务端锚定的比较句替换
+        #    （比较仍被锚定，绝对事实叙述保留）。
+        accepted = [f for f in findings if f['category'] == 'personal_change']
+        if change_service.claims_personal_change(say):
+            if not accepted:
+                degraded.append('personal_change_without_evidence')
+                say = _review_fallback_text(facts)
+                authorized = facts['coveredDays'] > 0
+            else:
+                allowed = {f['evidence'].get('direction') for f in accepted}
+                claimed = change_service.claim_directions(say)
+                if claimed and not claimed <= allowed:
+                    degraded.append('personal_change_narrative_corrected')
+                    anchored = '\n'.join(f['evidence']['note'] for f in accepted)
+                    say = f'{anchored}\n{_review_fallback_text(facts)}'
     deliverable = bool(say) and authorized and proactivity > 0 and (
         proactivity >= 2 or relevance == 'high')
     status = 'degraded' if degraded else 'complete'
@@ -328,6 +417,14 @@ def handle_review(job, now):
     trace['degraded'] = degraded
     trace['conclusion'] = {'reason_code': 'degraded:' + ','.join(degraded) if degraded else 'ok',
                            'window': payload['key'], 'findings': len(findings),
+                           'publication': {'provenance': _publication_provenance(payload_json,
+                                                                                relevance),
+                                           'relevance': relevance,
+                                           'modelLevel': (payload_json or {}).get('level'),
+                                           'acceptedFindings': len(findings),
+                                           'acceptedChanges': len([f for f in findings
+                                                                  if f['category'] == 'personal_change'])},
+                           'deliveredBy': 'w09_review',
                            'mergedAnchors': merged, 'proactivity': proactivity,
                            'relevance': relevance, 'authorized': bool(authorized),
                            'delivered': bool(deliverable),
@@ -337,20 +434,39 @@ def handle_review(job, now):
     delivered = None
     with session_scope() as s:
         for finding in findings:
+            evidence_rows = [{'at': iso_z(now), 'kind': 'review',
+                              'note': finding['text'][:120], 'window': payload['key']}]
+            if finding.get('evidence'):
+                evidence_rows.insert(0, {'at': iso_z(now), 'kind': 'personal_change',
+                                         'note': finding['text'][:120],
+                                         'change': finding['evidence']})
             care.open_topic(s, pet.id, 'observation', finding['category'], finding['anchor'],
                             severity='info', title=finding['title'], detail=finding['text'],
-                            evidence=[{'at': iso_z(now), 'kind': 'review', 'note': finding['text'][:120],
-                                       'window': payload['key']}], now=now)
+                            evidence=evidence_rows, now=now)
         if deliverable:
-            blocks = [{'type': 'text', 'speaker': 'assistant', 'text': say},
-                      {'type': 'care', 'care': {'kind': 'review', 'category': payload['kind'],
-                                                'title': '周期回顾', 'status': 'info',
-                                                'windowStart': payload['windowStart'],
-                                                'windowEnd': payload['windowEnd'],
-                                                'runId': run_id}}]
+            blocks = [{'type': 'text', 'speaker': 'assistant', 'text': say}]
+            for finding in findings:
+                if finding.get('category') == 'personal_change' and finding.get('evidence'):
+                    blocks.append({'type': 'personal_change',
+                                   'change': finding['evidence']})
+            blocks.append({'type': 'care', 'care': {'kind': 'review', 'category': payload['kind'],
+                                                    'title': '周期回顾', 'status': 'info',
+                                                    'windowStart': payload['windowStart'],
+                                                    'windowEnd': payload['windowEnd'],
+                                                    'runId': run_id}})
+            sources = []
+            for finding in findings:
+                evidence = finding.get('evidence')
+                if not evidence:
+                    continue
+                sources.append({'type': 'observations', 'startAt': evidence.get('slotStartAt'),
+                                'endAt': evidence.get('slotEndAt'),
+                                'observedSeconds': evidence.get('coverageSeconds'),
+                                'soundEventCount': (evidence.get('value')
+                                                    if evidence.get('feature') == 'sounds' else None)})
             turn, created = deliver.deliver_background_message(
                 s, pet.id, 'care:review:%s:%d:%s' % (payload['kind'], pet.id, payload['key']),
-                blocks, sources=[], now=now)
+                blocks, sources=sources, now=now)
             if created:
                 delivered = (pet.user_id, turn)
     if delivered:

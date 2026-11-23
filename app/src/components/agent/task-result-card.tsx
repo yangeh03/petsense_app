@@ -10,6 +10,7 @@ import { useRouter } from 'expo-router';
 import { ThemedText } from '@/components/themed-text';
 import { useTheme } from '@/hooks/use-theme';
 import type { AgentTaskResultBlock } from '@/services/agent';
+import { evidenceRows } from '@/services/agent-change';
 
 const KIND_LABELS: Record<AgentTaskResultBlock['kind'], string> = {
   reminder: '委托提醒',
@@ -65,6 +66,24 @@ export function TaskResultCard({ block }: { block: AgentTaskResultBlock }) {
           这封回信未完成评估，只包含覆盖与缺口说明，不代表它的状态正常或异常。
         </ThemedText>
       ) : null}
+      {(block.changeEvidence ?? []).map((evidence) => (
+        <View key={evidence.evidenceId} style={styles.evidence}>
+          <ThemedText type="smallBold">
+            {evidence.dimension ?? '个人变化'}
+            {evidence.slotLabel ? ` · ${evidence.slotLabel}` : ''} · {evidence.date}
+          </ThemedText>
+          {evidenceRows(evidence).map((row) => (
+            <View key={row.label} style={styles.row}>
+              <ThemedText type="small" themeColor="textSecondary">
+                {row.label}
+              </ThemedText>
+              <ThemedText type="small" style={styles.rowValue}>
+                {row.value}
+              </ThemedText>
+            </View>
+          ))}
+        </View>
+      ))}
       <Pressable
         accessibilityRole="link"
         onPress={() => router.push('/agent-tasks')}
@@ -84,6 +103,9 @@ export function TaskResultCard({ block }: { block: AgentTaskResultBlock }) {
 }
 
 const styles = StyleSheet.create({
+  evidence: { gap: 4 },
+  row: { flexDirection: 'row', gap: 10, alignItems: 'flex-start' },
+  rowValue: { flex: 1, textAlign: 'right' },
   card: { borderWidth: 1, borderRadius: 12, padding: 10, gap: 8 },
   head: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   headBody: { flex: 1, gap: 2 },

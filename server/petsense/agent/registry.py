@@ -151,7 +151,7 @@ register(ToolSpec(
                     'description': '维度：actions=动作（走动），sounds=声音（叫声等事件）'},
         'date': {'type': 'string', 'description': '对比日期，上海日期 YYYY-MM-DD，缺省今天'}},
         'additionalProperties': False},
-    group=FACT_READ, forms=(DIALOGUE, CHECKPOINT), execute=_execute_read_baseline))
+    group=FACT_READ, forms=(DIALOGUE, CHECKPOINT, REVIEW), execute=_execute_read_baseline))
 
 
 def _bucket_actions(rows, start):
@@ -627,6 +627,14 @@ def _execute_propose_task_change(args, context):
             if task.current_version != payload['expectedVersion']:
                 return {'error': '委托计划已更新，请用 read_task 读取最新版本后重试。',
                         'currentVersion': task.current_version}
+    if payload['action'] in ('create', 'update', 'renew') \
+            and payload.get('plan', {}).get('kind') == 'comparison':
+        # W11 D3：基线未就绪时，确认卡须由主人明确选择「等基线 / 先记录绝对事实」
+        with session_scope() as s:
+            pet = _pet_of(s, context)
+            from petsense.agent import tasks as task_service
+            if not task_service.baseline_ready(s, pet, payload['plan']):
+                payload['plan']['baselineStrategyChoiceRequired'] = True
     try:
         with session_scope() as s:
             pet = _pet_of(s, context)
