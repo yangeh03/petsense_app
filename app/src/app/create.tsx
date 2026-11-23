@@ -78,7 +78,7 @@ export default function CreateScreen() {
               onPress={() => router.push('/login')}
               style={[styles.primaryButton, { backgroundColor: theme.tint }]}
             >
-              <ThemedText type="smallBold" style={{ color: '#ffffff' }}>
+              <ThemedText type="smallBold" themeColor="onTint">
                 去登录
               </ThemedText>
             </Pressable>
@@ -404,7 +404,7 @@ function PostForm({ diaryJobId }: { diaryJobId?: string }) {
                 }}
                 style={[styles.petChip, selected && { backgroundColor: theme.tint }]}
               >
-                <ThemedText type="small" style={selected ? { color: '#ffffff' } : undefined}>
+                <ThemedText type="small" themeColor={selected ? 'onTint' : undefined}>
                   {pet.avatar_emoji} {pet.name}
                 </ThemedText>
               </Pressable>
@@ -456,7 +456,7 @@ function PostForm({ diaryJobId }: { diaryJobId?: string }) {
             }}
             style={[styles.agentDraftApply, { backgroundColor: theme.tint }]}
           >
-            <ThemedText type="smallBold" style={{ color: '#ffffff' }}>
+            <ThemedText type="smallBold" themeColor="onTint">
               填入到正文
             </ThemedText>
           </Pressable>
@@ -504,10 +504,7 @@ function PostForm({ diaryJobId }: { diaryJobId?: string }) {
               { backgroundColor: audience === item ? theme.tint : theme.backgroundSelected },
             ]}
           >
-            <ThemedText
-              type="smallBold"
-              style={{ color: audience === item ? '#ffffff' : theme.text }}
-            >
+            <ThemedText type="smallBold" themeColor={audience === item ? 'onTint' : undefined}>
               {item === 'public' ? '公开' : '仅粉丝可见'}
             </ThemedText>
           </Pressable>
@@ -535,9 +532,9 @@ function PostForm({ diaryJobId }: { diaryJobId?: string }) {
         ]}
       >
         {sending ? (
-          <ActivityIndicator color="#ffffff" />
+          <ActivityIndicator color={theme.onTint} />
         ) : (
-          <ThemedText type="smallBold" style={{ color: '#ffffff' }}>
+          <ThemedText type="smallBold" themeColor="onTint">
             分享
           </ThemedText>
         )}

@@ -5,7 +5,15 @@
  */
 
 import { useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { Image } from 'expo-image';
 import { SymbolView } from 'expo-symbols';
 import { ThemedText } from '@/components/themed-text';
@@ -33,6 +41,9 @@ type Props = {
   onRetryAttachment: (key: string) => void;
   onRemoveAttachment: (key: string) => void;
 };
+
+const MIN_INPUT_HEIGHT = 40;
+const MAX_INPUT_HEIGHT = 108;
 
 function AttachmentThumb({
   item,
@@ -235,17 +246,34 @@ export function AgentComposer({
             size={18}
           />
         </Pressable>
-        <TextInput
-          value={draft}
-          onChangeText={onDraft}
-          multiline
-          maxLength={4000}
-          editable={!busy}
-          placeholder={inTopic ? '继续说这件事…' : '说给伙伴听…'}
-          placeholderTextColor={theme.textSecondary}
-          style={[styles.input, { color: theme.text }]}
-          accessibilityLabel="给伙伴的消息"
-        />
+        <View style={styles.inputColumn}>
+          {Platform.OS !== 'web' && (
+            // 原生输入框在 JS 恢复草稿时不一定发出内容尺寸事件，由同列文本决定高度。
+            <Text
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+              pointerEvents="none"
+              style={[styles.input, styles.inputMeasure]}
+            >
+              {`${draft}\u200b`}
+            </Text>
+          )}
+          <TextInput
+            value={draft}
+            onChangeText={onDraft}
+            multiline
+            maxLength={4000}
+            editable={!busy}
+            placeholder={inTopic ? '继续说这件事…' : '说给伙伴听…'}
+            placeholderTextColor={theme.textSecondary}
+            style={[
+              styles.input,
+              { color: theme.text },
+              Platform.OS !== 'web' && StyleSheet.absoluteFill,
+            ]}
+            accessibilityLabel="给伙伴的消息"
+          />
+        </View>
         <Pressable
           disabled={!canSend}
           onPress={onSend}
@@ -321,14 +349,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  input: {
+  inputColumn: {
     flex: 1,
-    minHeight: 40,
-    maxHeight: 108,
+    minHeight: MIN_INPUT_HEIGHT,
+    maxHeight: MAX_INPUT_HEIGHT,
+    overflow: 'hidden',
+  },
+  input: {
+    minHeight: MIN_INPUT_HEIGHT,
+    maxHeight: MAX_INPUT_HEIGHT,
+    paddingHorizontal: 0,
     paddingVertical: 9,
     fontSize: 16,
     lineHeight: 22,
+    textAlignVertical: 'top',
   },
+  inputMeasure: { opacity: 0 },
   send: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
   pill: { borderRadius: 20, paddingHorizontal: 12, paddingVertical: 8, alignSelf: 'center' },
 });

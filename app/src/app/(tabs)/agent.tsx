@@ -129,9 +129,10 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
     setDraft(turn.text);
     setTarget(turn.target);
     // 失败回合的图片已在服务端，按完成态放回输入区（失败不丢图，重试免重传）
+    const chat = useAgentChatStore.getState();
+    chat.clearAttachments();
     if (turn.images?.length) {
-      useAgentChatStore.getState().clearAttachments();
-      useAgentChatStore.getState().addAttachments(
+      chat.addAttachments(
         turn.images.map((meta) => ({
           key: `restore-${meta.id}`,
           localUri: null,

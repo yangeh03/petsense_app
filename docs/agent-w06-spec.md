@@ -279,3 +279,9 @@ fb58f50 合入集成分支（合并提交 2141cbf，含 W03/W04/W05/W07 与修�
 **生产放行执行（2026-11-23 21:22 CST）**：负责人确认不等 OTA、接受计费风险（D6 以限次机制兜底；若后续控制台核对发现异常计费，恢复 drop-in 即回退、不需回滚代码），已移除 `50-search-rollout.conf`、daemon-reload 并重启服务。验证：`systemctl show` 合并环境已无 `PETSENSE_SEARCH_DISABLED`（90-petsense-deploy.conf 经核对只含 ExecStart，不涉此变量），服务 active、HTTP 200、启动日志无错误——**生产搜索已开启，W06 全部待办闭环**。
 
 **生产端到端验收（2026-11-23 21:42 CST，放行后）**：独立模拟器（新建设备「W06-验收」+ 独立 Metro 8084，`EXPO_PUBLIC_API_BASE_URL` 指向生产）+ 生产账号 `petsense` 发送「今天广州天气怎么样，适合遛狗吗？」。服务端证据：`POST /api/app/agent/pets/1/turns` 200；AgentRun #30 `web_search` 真实执行 1 次（查询「广州今天天气 2026年11月23日 气温 降雨」，1968B 结果、10 条 citations、预算 webSearchCalls=1、14.1s complete）；turn 43 正文带气象台时效口径（「广州市气象台 11月23日 17时发布」）并按快照提示项圈离线 3 天，`sources` 落库 4 条 web 来源（tqyb.com.cn、羊城晚报、gz.gov.cn 等，带 checkedAt）。天然对照：同账号 turn 42（关闭期）回复「联网搜索暂未开放」，开关放行后行为随设计切换。UI 侧负责人亲测确认网页来源卡渲染正常（来源卡点击拉起系统浏览器已于 §8 验收覆盖，本轮未重复）。验收通道：功能=journalctl+运行轨迹铁证，视觉=负责人 UI 亲测。
+
+
+### 2026-11-23 视觉补验
+
+浅色伙伴历史消息中的来源卡沿用交接前截图；本轮重点复查伙伴消息排版。生产联网与系统浏览器操作沿用 §10.4 记录。
+详见 [W01–W10 视觉验收与证据](agent-visual-acceptance-handoff-20261123.md#6-接手后验收记录2026-11-23)。
