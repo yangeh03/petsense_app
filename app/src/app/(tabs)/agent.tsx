@@ -118,6 +118,13 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
     setTopic(turn.topicId ?? turn.id);
     setReplyTo(turn.id);
   };
+  /** W09：主动关怀卡追问入口——定位该主题并预填问题（照料助手用 read_care_topics 引用依据回答） */
+  const onAskWhy = (turn: AgentTurn) => {
+    setTopic(turn.topicId ?? turn.id);
+    setReplyTo(turn.id);
+    setTarget('assistant');
+    setDraft('为什么提醒我？');
+  };
   const onRetry = (turn: AgentTurn) => {
     setDraft(turn.text);
     setTarget(turn.target);
@@ -166,6 +173,20 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
             </ThemedText>
           ) : null}
         </View>
+        {petId ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="查看委托簿"
+            onPress={() => router.push('/agent-tasks')}
+            style={[styles.pill, { backgroundColor: theme.backgroundSelected }]}
+          >
+            <SymbolView
+              name={{ ios: 'checklist', android: 'checklist', web: 'checklist' }}
+              tintColor={theme.tint}
+              size={18}
+            />
+          </Pressable>
+        ) : null}
         {loadedFor === (user?.id ?? -1) && learningDays !== null ? (
           <Pressable
             onPress={() => setShowLearning(!showLearning)}
@@ -308,6 +329,7 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
             petName={petName}
             onContinueTopic={onContinueTopic}
             onRetry={onRetry}
+            onAskWhy={onAskWhy}
           />
         ))}
         {busy && !visible.some((turn) => turn.status === 'pending') ? (

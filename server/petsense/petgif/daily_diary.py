@@ -76,44 +76,118 @@ def _snapshot(session, pet, start, now):
     }
 
 
-@bp.route('/<int:pet_id>', methods=['GET', 'POST'])
-def daily_diaries(pet_id):
+def _today_start(now=None):
+    now = now or utc_now()
+    return now, now.astimezone(SHANGHAI).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _owned_pet(session, user_id, pet_id):
+    pet = session.get(Pet, pet_id)
+    if pet is None or pet.user_id != user_id:
+        return None
+    return pet
+
+
+def _latest_daily_job(session, user_id, pet_id, date):
+    prefix = f'daily:{date}:ai:'
+    return session.scalar(select(PetgifDiaryJob).where(
+        PetgifDiaryJob.user_id == user_id, PetgifDiaryJob.pet_id == pet_id,
+        PetgifDiaryJob.idempotency_key.startswith(prefix),
+    ).order_by(PetgifDiaryJob.created_at.desc()).limit(1))
+
+
+def read_daily(user_id, pet_id, now=None):
+    """W10 共用读取入口：当日任务现状（与路由 GET 同口径，Agent op=read 直接复用）。
+
+    返回 (payload, http_status)，与 submit_daily_ai 一致。
+    """
     from petsense.petgif import diary_jobs
 
-    user, error = require_app_user()
-    if error:
-        return error
-    now = utc_now()
-    start = now.astimezone(SHANGHAI).replace(hour=0, minute=0, second=0, microsecond=0)
+    now, start = _today_start(now)
     date = start.date().isoformat()
     with session_scope() as session:
-        pet = session.get(Pet, pet_id)
-        if pet is None or pet.user_id != user['id']:
+        if _owned_pet(session, user_id, pet_id) is None:
             return {'message': '宠物档案不存在'}, 404
-        ownership = (
-            PetgifDiaryJob.user_id == user['id'], PetgifDiaryJob.pet_id == pet_id,
-        )
+        jobs = session.scalars(select(PetgifDiaryJob).where(
+            PetgifDiaryJob.user_id == user_id, PetgifDiaryJob.pet_id == pet_id,
+            PetgifDiaryJob.idempotency_key.startswith('daily:'),
+            PetgifDiaryJob.created_at >= now - timedelta(days=diary_jobs.JOB_TTL_DAYS),
+        ).order_by(PetgifDiaryJob.created_at.desc()).limit(30)).all()
+        return {'date': date, 'aiAvailable': bool(_shared_pet_id()),
+                'jobs': [diary_jobs.job_dict(job) for job in jobs]}, 200
+
+
+def precheck_generate(user_id, pet_id, now=None):
+    """生成前置校验（不做副作用）：返回 (message, status) 或 None（可发起）。"""
+    with session_scope() as session:
+        pet = _owned_pet(session, user_id, pet_id)
+        if pet is None:
+            return '宠物档案不存在', 404
+        if not _shared_pet_id():
+            return 'AI 海报暂未开放', 409
+        if not pet.avatar_image:
+            return '请先在宠物档案添加照片', 422
+    return None
+
+
+def today_snapshot(user_id, pet_id, now=None):
+    """确认卡数据：当日走动/步数估算 + 提案字段（date/replaceJobId/avatar 等，spec §4）。"""
+    now, start = _today_start(now)
+    with session_scope() as session:
+        pet = _owned_pet(session, user_id, pet_id)
+        if pet is None:
+            return None
+        snapshot = _snapshot(session, pet, start, now)
+        latest = _latest_daily_job(session, user_id, pet_id, snapshot['date'])
+    proposal_fields = {
+        'petId': pet_id,
+        'date': snapshot['date'],
+        'replaceJobId': latest.id if latest else None,
+        'avatar': snapshot['avatar'],
+        'walkingSeconds': snapshot['walkingSeconds'],
+        'observedSeconds': snapshot['observedSeconds'],
+        'steps': snapshot['steps'],
+        'estimator': snapshot['estimator'],
+    }
+    return {'snapshot': snapshot, 'latestJobId': latest.id if latest else None,
+            'proposal_fields': proposal_fields}
+
+
+def verify_generate_context(user_id, pet_id, proposal_fields, now=None):
+    """确认时复核（spec §4）：日期仍为今天、档案照未变、目标任务未被新任务替代。"""
+    now, start = _today_start(now)
+    with session_scope() as session:
+        pet = _owned_pet(session, user_id, pet_id)
+        if pet is None:
+            return '宠物档案不存在，日记无法发起'
+        if proposal_fields.get('date') != start.date().isoformat():
+            return '确认时已跨天，请重新发起今天的日记'
+        if proposal_fields.get('avatar') != pet.avatar_image:
+            return '宠物档案照片已变化，请重新确认'
+        latest = _latest_daily_job(session, user_id, pet_id, start.date().isoformat())
+        expected = proposal_fields.get('replaceJobId')
+        if (latest.id if latest else None) != expected:
+            return '今天的海报任务已更新，请重新发起'
+    return None
+
+
+def submit_daily_ai(user_id, pet_id, replace_job_id, now=None):
+    """共用提交入口（W10 spec §4）：路由与 Agent 确认执行共用同一按宠物、日期、样式和
+    替换任务标识的唯一规则。返回 (payload, http_status)，与原路由响应一一对应。"""
+    from petsense.petgif import diary_jobs
+
+    now, start = _today_start(now)
+    date = start.date().isoformat()
+    with session_scope() as session:
+        pet = _owned_pet(session, user_id, pet_id)
+        if pet is None:
+            return {'message': '宠物档案不存在'}, 404
         upstream_id = _shared_pet_id()
-        if request.method == 'GET':
-            jobs = session.scalars(select(PetgifDiaryJob).where(
-                *ownership, PetgifDiaryJob.idempotency_key.startswith('daily:'),
-                PetgifDiaryJob.created_at >= now - timedelta(days=diary_jobs.JOB_TTL_DAYS),
-            ).order_by(PetgifDiaryJob.created_at.desc()).limit(30)).all()
-            return {'date': date, 'aiAvailable': bool(upstream_id),
-                    'jobs': [diary_jobs.job_dict(job) for job in jobs]}
-        body = request.get_json(silent=True)
-        if not isinstance(body, dict):
-            return {'message': '请求格式无效'}, 400
-        if body.get('mode', 'ai') != 'ai':
-            return {'message': '请更新 App 后生成 AI 海报'}, 409
         prefix = f'daily:{date}:ai:'
-        latest = session.scalar(select(PetgifDiaryJob).where(
-            *ownership, PetgifDiaryJob.idempotency_key.startswith(prefix),
-        ).order_by(PetgifDiaryJob.created_at.desc()).limit(1))
-        replace_id = body.get('replaceJobId')
-        if latest and (replace_id != latest.id or latest.status not in ('completed', 'failed')):
+        latest = _latest_daily_job(session, user_id, pet_id, date)
+        if latest and (replace_job_id != latest.id or latest.status not in ('completed', 'failed')):
             return diary_jobs.job_dict(latest), 202
-        if replace_id is not None and latest is None:
+        if replace_job_id is not None and latest is None:
             return {'message': '只能更新今天的 AI 海报'}, 409
         if not upstream_id:
             return {'message': 'AI 海报暂未开放'}, 409
@@ -132,13 +206,30 @@ def daily_diaries(pet_id):
     except ValueError as exc:
         return {'message': str(exc)}, 422
     try:
-        job, reused = diary_jobs.create_job(user['id'], pet_id, upstream_id, key, fields, paths)
+        job, reused = diary_jobs.create_job(user_id, pet_id, upstream_id, key, fields, paths)
     except Exception:
         diary_jobs.remove_photos(paths)
         raise
     if not reused:
         diary_jobs.enqueue_diary_job(job.id)
     return diary_jobs.job_dict(job), 202
+
+
+@bp.route('/<int:pet_id>', methods=['GET', 'POST'])
+def daily_diaries(pet_id):
+    user, error = require_app_user()
+    if error:
+        return error
+    if request.method == 'GET':
+        payload, status = read_daily(user['id'], pet_id)
+        return payload, status
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return {'message': '请求格式无效'}, 400
+    if body.get('mode', 'ai') != 'ai':
+        return {'message': '请更新 App 后生成 AI 海报'}, 409
+    payload, status = submit_daily_ai(user['id'], pet_id, body.get('replaceJobId'))
+    return payload, status
 
 
 @bp.route('/poster/<uuid:job_id>')

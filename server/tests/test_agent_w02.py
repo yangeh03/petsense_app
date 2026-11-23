@@ -115,7 +115,7 @@ class SnapshotTests(unittest.TestCase):
         with patch('petsense.agent.snapshot.SNAPSHOT_CHAR_LIMIT', 200):
             with db.session_scope() as s:
                 snap = snapshot.assemble(s, pet, utc_now())
-        self.assertEqual(snap['meta']['trimmed'], ['learning', 'memory', 'current.secondary'])
+        self.assertEqual(snap['meta']['trimmed'], ['learning', 'tasks', 'memory', 'current.secondary'])
         current = snap['sections']['current']
         for key in ('action', 'online', 'ageSeconds'):
             self.assertIn(key, current)
@@ -239,7 +239,10 @@ class CurrentStatusToolTests(unittest.TestCase):
         self.assertEqual(gate['reason'], 'scope_not_allowed')
         gate = registry.execute_tool('read_current_status', {}, 'dialogue', None, self.context)
         self.assertEqual(gate['reason'], 'stance_missing')
+        # W09：事实工具在 review 形态开放（后台事实子集），写入类仍被形态门拒绝
         gate = registry.execute_tool('read_current_status', {}, 'review', 'allowed', self.context)
+        self.assertIsNone(gate['reason'])
+        gate = registry.execute_tool('forget_memory', {'memoryId': 1}, 'review', 'allowed', self.context)
         self.assertEqual(gate['reason'], 'form_not_allowed')
 
     def test_registered_in_dialogue_schemas(self):

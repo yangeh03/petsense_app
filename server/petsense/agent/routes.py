@@ -14,15 +14,18 @@ from datetime import datetime, timedelta
 from flask import Blueprint, request, current_app, send_file
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from petsense.auth.routes import require_app_user
+from petsense.auth.routes import app_user_from_request, require_app_user
 from petsense.db import session_scope, utc_now, iso_z
 from petsense.db.models import Pet
-from petsense.db.models.agent import AgentProposal, AgentTurn
+from petsense.db.models.agent import AgentAction, AgentCareTopic, AgentProposal, AgentTurn
 from petsense.agent.observations import query
 from petsense.agent import baseline as baseline_service
+from petsense.agent import care, jobs
 from petsense.agent import attachments, loop, runs, snapshot
+from petsense.agent import actions as actions_service
 from petsense.agent import proposals as proposal_service
 from petsense.agent import settings as settings_service
+from petsense.agent import tasks as task_service
 from petsense.agent import ws  # noqa: F401  import 即注册 /api/app/agent/ws 路由
 
 bp = Blueprint('agent', __name__, url_prefix='/api/app/agent')
@@ -87,6 +90,55 @@ def serve_image(image_id):
     # private：鉴权端点（D3 仅本人可读），内容寻址故 immutable，但不进共享缓存
     response.headers['Cache-Control'] = 'private, max-age=31536000, immutable'
     return response
+
+
+@bp.route('/recordings/<int:action_id>/audio')
+def serve_recording_audio(action_id):
+    """W10 录音鉴权读取（D5）：验证账号、宠物与动作引用；仅用户播放时按需读取。
+
+    WAV 存 agent-recordings/（独立目录），不经旧 /audio/ 公共路由暴露（spec §3）。
+    支持 ?token= 查询鉴权：RN WebView/audio 标签发不了自定义 header（同 /ws 模式）。
+    """
+    from petsense.auth.routes import user_for_token
+    user = app_user_from_request() or user_for_token(request.args.get('token', ''))
+    if not user:
+        return {'message': '请先登录'}, 401
+    path = actions_service.recording_audio_path(user['id'], action_id)
+    if path is None:
+        return {'message': '录音不存在'}, 404
+    response = send_file(path, mimetype='audio/wav', conditional=True)
+    response.headers['Cache-Control'] = 'private, no-store'
+    return response
+
+
+@bp.route('/pets/<int:pet_id>/social-draft', methods=['GET', 'DELETE'])
+def social_draft(pet_id):
+    """W10 私有社区草稿槽（D2）：发布页独立加载/移除；原有手写草稿不受影响。"""
+    user, error = require_app_user()
+    if error:
+        return error
+    with session_scope() as s:
+        pet = s.get(Pet, pet_id)
+        if pet is None or pet.user_id != user['id']:
+            return {'message': '宠物不存在'}, 404
+        row = s.execute(select(AgentAction).where(
+            AgentAction.pet_id == pet_id, AgentAction.user_id == user['id'],
+            AgentAction.kind == actions_service.KIND_DRAFT,
+            AgentAction.status == 'completed'
+        ).order_by(AgentAction.id.desc())).scalars().first()
+        if request.method == 'DELETE':
+            if row is not None:
+                row.status = 'dismissed'
+                row.updated_at = utc_now()
+                row.finished_at = utc_now()
+            return {'success': True, 'draft': None}
+        if row is None:
+            return {'success': True, 'draft': None}
+        result = json.loads(row.result_json or '{}')
+        return {'success': True, 'draft': {
+            'actionId': row.id, 'caption': (result.get('draft') or {}).get('caption'),
+            'location': (result.get('draft') or {}).get('location'),
+            'savedAt': iso_z(row.created_at)}}
 
 
 @bp.route('/pets/<int:pet_id>/observations')
@@ -214,6 +266,13 @@ def turns(pet_id):
             # W03 确认卡：挂最后一张（同回合多次写入调用时后一张已替代前一张 pending）
             blocks = list(blocks or []) + [{'type': 'proposal',
                                             'proposal': outcome['proposals'][-1]}]
+        seen_action_ids = set()
+        for action_payload in outcome.get('actions') or []:
+            # W10 直写动作回执（明确保存草稿等）；确认类动作的回执在决策后由 actions 写回
+            if action_payload.get('id') in seen_action_ids:
+                continue
+            seen_action_ids.add(action_payload.get('id'))
+            blocks = list(blocks or []) + [{'type': 'action', 'action': action_payload}]
         run_status = 'degraded' if outcome['degraded'] else 'complete'
         runs.save(pet_id, turn_id, outcome['trace'], run_status)
     except Exception as exc:
@@ -280,14 +339,32 @@ def assistant_settings():
         return {'message': str(exc)}, 400
     with session_scope() as s:
         row = settings_service.persist(s, user['id'], patch)
-        return {'settings': settings_service.public(row)}
+        settings = settings_service.public(row)
+        # 主动程度切档后实际生效（W09 §4 A4）：已开题但还没发出首发消息的事件
+        # 按新档位补排作业（消息本身仍按 request key 去重，同实例只发一条）
+        if any(column == 'proactivity' for column, _ in patch):
+            level = settings['proactivity']
+            pets = s.execute(select(Pet).where(Pet.user_id == user['id'])).scalars().all()
+            for pet in pets:
+                topics = s.execute(select(AgentCareTopic).where(
+                    AgentCareTopic.pet_id == pet.id,
+                    AgentCareTopic.kind.in_(('device', 'learning')),
+                    AgentCareTopic.status.in_(('open', 'ongoing')),
+                    AgentCareTopic.delivered == 0)).scalars().all()
+                for topic in topics:
+                    jobs.enqueue(s, 'care_event', {'topic': topic.id, 'phase': 'open'},
+                                 dedup_key=care.event_job_key(topic.id, 'open', level),
+                                 next_run_at=utc_now())
+        return {'settings': settings}
 
 
 @bp.post('/pets/<int:pet_id>/proposals/<int:proposal_id>/decision')
 def proposal_decision(pet_id, proposal_id):
-    """确认卡决策（W03 §3.7）：confirm 落库 / reject 仅翻转状态；幂等，异态 409。
+    """确认卡决策（W03 §3.7；W08 task_change 与 W10 动作类经 kind 分派）：confirm 落库 / reject 仅翻转状态；幂等，异态 409。
 
     决策为确定性代码（不触发模型运行）；卡片状态即回执，重写 blocks 后按 id 推 turn 帧刷新。
+    W10 动作类提案在状态翻转提交后交 actions.execute_confirmed 执行（复核、MQTT、回执），
+    执行后再次重写 blocks 并以最终回执为准推送。
     """
     user, error = require_app_user()
     if error:
@@ -297,12 +374,15 @@ def proposal_decision(pet_id, proposal_id):
     if action not in ('confirm', 'reject'):
         return {'message': '决策动作无效'}, 400
     result = None
+    changed = False
+    kind = None
     with session_scope() as s:
         pet = s.get(Pet, pet_id)
         if pet is None or pet.user_id != user['id']:
             return {'message': '宠物不存在'}, 404
         try:
-            row, turn_id = proposal_service.decide(s, pet, proposal_id, action)
+            row, turn_id, changed = proposal_service.decide(s, pet, proposal_id, action)
+            kind = row.kind
         except proposal_service.ProposalError as exc:
             # 409（已被替代/已处理过）带当前提案与其回合快照：App 按响应覆盖，卡片翻终态禁按钮（§5）
             body = {'message': exc.message}
@@ -316,6 +396,148 @@ def proposal_decision(pet_id, proposal_id):
         turn = s.get(AgentTurn, turn_id) if turn_id else None
         result = {'proposal': proposal_service.public(row),
                   'turn': public(turn) if turn else None}
+    if changed and action == 'confirm' and kind in actions_service.CONFIRM_KINDS:
+        # 提交后执行（spec §2）：重复确认被 execute_confirmed 幂等挡住，不重复提交外部系统
+        actions_service.execute_confirmed(pet_id, proposal_id)
+        with session_scope() as s:
+            fresh = s.get(AgentProposal, proposal_id)
+            result['proposal'] = proposal_service.public(fresh)
+            if fresh and fresh.turn_id:
+                fresh_turn = s.get(AgentTurn, fresh.turn_id)
+                result['turn'] = public(fresh_turn) if fresh_turn else result['turn']
     if result['turn']:
         ws.push_turn(user['id'], pet_id, result['turn'])
     return result
+
+
+@bp.route('/pets/<int:pet_id>/tasks')
+def agent_tasks_list(pet_id):
+    """委托簿（W08，agent-w08-spec.md §2）：状态、当前计划、提醒与回信计数、深链主题。"""
+    user, error = require_app_user()
+    if error:
+        return error
+    with session_scope() as s:
+        pet = s.get(Pet, pet_id)
+        if pet is None or pet.user_id != user['id']:
+            return {'message': '宠物不存在'}, 404
+        return {'tasks': task_service.list_tasks(s, pet)}
+
+
+@bp.route('/pets/<int:pet_id>/tasks/<int:task_id>')
+def agent_task_detail(pet_id, task_id):
+    user, error = require_app_user()
+    if error:
+        return error
+    with session_scope() as s:
+        pet = s.get(Pet, pet_id)
+        if pet is None or pet.user_id != user['id']:
+            return {'message': '宠物不存在'}, 404
+        task = s.get(task_service.AgentTask, task_id)
+        if task is None or task.pet_id != pet.id:
+            return {'message': '委托不存在'}, 404
+        return {'task': task_service.public(s, task, include_detail=True)}
+
+
+@bp.post('/pets/<int:pet_id>/tasks/<int:task_id>/ops')
+def agent_task_op(pet_id, task_id):
+    """委托簿直接操作（D3：暂停/恢复/取消直接生效）；幂等，非法转换 409 带当前状态。"""
+    user, error = require_app_user()
+    if error:
+        return error
+    data = request.get_json(silent=True)
+    op = data.get('op') if isinstance(data, dict) else None
+    if op not in ('pause', 'resume', 'cancel'):
+        return {'message': 'op 需为 pause / resume / cancel'}, 400
+    with session_scope() as s:
+        pet = s.get(Pet, pet_id)
+        if pet is None or pet.user_id != user['id']:
+            return {'message': '宠物不存在'}, 404
+        try:
+            task = task_service.task_op(s, pet, task_id, op, now=utc_now())
+        except task_service.TaskError as exc:
+            body = {'message': exc.message}
+            task = s.get(task_service.AgentTask, task_id)
+            if task is not None and task.pet_id == pet.id:
+                body['task'] = task_service.public(s, task)  # 409 带当前状态（App 按响应覆盖）
+            return body, exc.status
+        return {'task': task_service.public(s, task)}
+
+
+@bp.post('/pets/<int:pet_id>/task-proposals')
+def agent_task_proposal_edit(pet_id):
+    """确认卡上编辑并重新提交归一化计划（spec §2）：基于 pending task_change 候选生成新版本。"""
+    user, error = require_app_user()
+    if error:
+        return error
+    data = request.get_json(silent=True)
+    base_id = data.get('baseProposalId') if isinstance(data, dict) else None
+    plan_fields = data.get('plan') if isinstance(data, dict) else None
+    if isinstance(base_id, bool) or not isinstance(base_id, int) or not isinstance(plan_fields, dict):
+        return {'message': '请提供 baseProposalId 与修改后的 plan'}, 400
+    with session_scope() as s:
+        pet = s.get(Pet, pet_id)
+        if pet is None or pet.user_id != user['id']:
+            return {'message': '宠物不存在'}, 404
+        base = s.get(AgentProposal, base_id)
+        if base is None or base.pet_id != pet.id or base.kind != proposal_service.KIND_TASK \
+                or base.status != 'pending':
+            return {'message': '候选已处理或不存在，请刷新确认卡'}, 409
+        base_payload = json.loads(base.payload)
+        if base_payload.get('action') not in ('create', 'update', 'renew'):
+            return {'message': '该候选不包含可编辑的计划'}, 400
+        merged = dict(base_payload.get('plan') or {})
+        merged.update(plan_fields)
+        arguments = {'action': base_payload['action'], 'plan': merged}
+        if base_payload.get('taskId') is not None:
+            arguments.update({'taskId': base_payload['taskId'],
+                              'expectedVersion': base_payload['expectedVersion']})
+        try:
+            payload = task_service.normalize_proposal_fields(arguments)
+        except task_service.TaskError as exc:
+            return {'message': exc.message}, 400
+        row, refreshed = proposal_service.create_task_proposal(
+            s, pet, base.turn_id, payload, now=utc_now())
+        result = {'proposal': proposal_service.public(row)}
+        refreshed_ids = [tid for tid in refreshed if tid != base.turn_id]
+    for stale_turn_id in [base.turn_id] + refreshed_ids:
+        with session_scope() as s:
+            stale_turn = s.get(AgentTurn, stale_turn_id) if stale_turn_id else None
+            if stale_turn is not None and stale_turn.pet_id == pet_id:
+                ws.push_turn(user['id'], pet_id, public(stale_turn))  # 旧卡翻「已有新候选」
+    return result
+
+
+@bp.get('/pets/<int:pet_id>/care/rules')
+def care_rules(pet_id):
+    """W09 受管理规则能力（D3）：新 App 据此抑制同类本地重复提醒。
+
+    旧客户端忽略本端点继续本地告警；请求失败/404 时 App 恢复原逻辑。
+    """
+    user, error = require_app_user()
+    if error:
+        return error
+    with session_scope() as s:
+        pet = s.get(Pet, pet_id)
+        if pet is None or pet.user_id != user['id']:
+            return {'message': '宠物不存在'}, 404
+    return {'capability': 'care-v1', 'managedRules': list(care.MANAGED_RULES)}
+
+
+@bp.get('/pets/<int:pet_id>/care/topics')
+def care_topics(pet_id):
+    """W09 主题追溯：伙伴页按状态查看主动提醒主题与依据（含已恢复/关闭）。"""
+    user, error = require_app_user()
+    if error:
+        return error
+    status = request.args.get('status')
+    if status not in (None, 'open', 'ongoing', 'recovered', 'closed'):
+        return {'message': '状态过滤无效'}, 400
+    with session_scope() as s:
+        pet = s.get(Pet, pet_id)
+        if pet is None or pet.user_id != user['id']:
+            return {'message': '宠物不存在'}, 404
+        stmt = select(AgentCareTopic).where(AgentCareTopic.pet_id == pet_id)
+        if status:
+            stmt = stmt.where(AgentCareTopic.status == status)
+        rows = s.execute(stmt.order_by(AgentCareTopic.updated_at.desc()).limit(50)).scalars().all()
+        return {'topics': [care.public(row) for row in rows]}

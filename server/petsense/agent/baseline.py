@@ -26,6 +26,18 @@ DAY_COVERAGE_S = 21600          # 当天可比门槛：与有效日同口径（6
 DAY_RANGE_MIN_SAMPLES = 7       # D2：全天范围就绪样本门槛
 SLOT_RANGE_MIN_SAMPLES = 4      # D2：时段范围就绪样本门槛
 WALK_LABEL = '走动'
+# 读法纪元：走动秒数改为同时识别英文标签（walking/走动，2026-11-23）后 +1。
+# 旧缓存（label_epoch 为 NULL）即使水位不变也须重算一次，否则保留按单一中文
+# 标签算出的错误范围；只作废旧派生缓存，不动遥测与学习累计。
+LABEL_EPOCH = 2
+
+
+def walk_seconds(actions):
+    """走动秒数：遥测按英文标签入库（walking），Agent 侧统一中文口径，两种都识别。"""
+    if not isinstance(actions, dict):
+        return 0
+    return sum(value for key, value in actions.items()
+               if key in (WALK_LABEL, 'walking'))
 
 DIMENSION_LABELS = {'actions': '动作', 'sounds': '声音'}
 SLOT_LABELS = {0: '夜间 00–06 点', 1: '上午 06–12 点', 2: '下午 12–18 点', 3: '晚间 18–24 点'}
@@ -117,7 +129,7 @@ def _window_values(session, pet, feature, version, window_days):
                                   else minute.sound_observed_seconds)
         if feature == 'actions':
             actions = json.loads(minute.actions) if minute.actions else {}
-            day['value'][slot] += actions.get(WALK_LABEL, 0) if isinstance(actions, dict) else 0
+            day['value'][slot] += walk_seconds(actions) if isinstance(actions, dict) else 0
     for event in events:
         day = entry(event.started_at.astimezone(SHANGHAI).strftime('%Y-%m-%d'))
         day['value'][event.started_at.astimezone(SHANGHAI).hour // 6] += 1
@@ -136,6 +148,7 @@ def ensure_baseline(session, pet, now=None):
     """惰性重算入口（D4）：水位（最新有效日、有效日数）变化才重算落库，幂等。
 
     由 read_baseline 与快照组装触发；W08 执行器上线后可换调度物化，语义不变。
+    水位不变但读法纪元落后（读口径修复部署后的旧缓存）也重算一次。
     """
     if not pet.device_id:
         return
@@ -148,7 +161,8 @@ def ensure_baseline(session, pet, now=None):
         ordered = sorted(days, reverse=True)
         watermark = (ordered[0], len(ordered))
         row = stored.get((feature, version))
-        if row is not None and (row.window_last_day, row.valid_days) == watermark:
+        if (row is not None and row.label_epoch == LABEL_EPOCH
+                and (row.window_last_day, row.valid_days) == watermark):
             continue
         # 比较基准只含今天（上海）之前的有效日；当天永不入样（spec §3.4）
         cutoff = (shanghai_now(now or utc_now()).date() + timedelta(days=1)).isoformat()
@@ -167,6 +181,7 @@ def ensure_baseline(session, pet, now=None):
         row.state = 'ready' if len(ordered) >= REQUIRED_DAYS else 'learning'
         row.valid_days = len(ordered)
         row.window_last_day = ordered[0]
+        row.label_epoch = LABEL_EPOCH
         row.sample_days = json.dumps(sorted(day_values))
         row.day_values = json.dumps(day_values, ensure_ascii=False)
         row.day_stats = json.dumps(day_stats, ensure_ascii=False)
@@ -192,7 +207,7 @@ def _target_day(session, pet, feature, version, date):
                            else minute.sound_observed_seconds)
         if feature == 'actions':
             actions = json.loads(minute.actions) if minute.actions else {}
-            value[slot] += actions.get(WALK_LABEL, 0) if isinstance(actions, dict) else 0
+            value[slot] += walk_seconds(actions) if isinstance(actions, dict) else 0
     if feature == 'sounds':
         events = session.execute(select(TelemetryEvent).where(
             TelemetryEvent.owner_id == pet.user_id, TelemetryEvent.device_id == pet.device_id,

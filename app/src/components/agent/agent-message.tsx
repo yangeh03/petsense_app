@@ -4,6 +4,8 @@
  * 到单发言人 + 标记剥离，保证历史回合展示不劣化。图片点击进灯箱。
  * W03：blocks 另含确认提案卡（type=proposal）；点击角色头像进入成员详情
  * （宠物 → 档案页，照料助手 → 助手设定页）；助手显示名从设定读取。
+ * W09：blocks 另含主动关怀卡（type=care，设备事件/周期回顾/学习完成），
+ * 附依据摘要与「为什么提醒我」追问入口（下钻走对话与主题依据）。
  */
 
 import { useCallback, useState } from 'react';
@@ -12,7 +14,10 @@ import { Image } from 'expo-image';
 import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
 import AgentImageViewer from '@/components/agent/agent-image-viewer';
+import { ActionCard } from '@/components/agent/action-card';
 import { ProposalCard } from '@/components/agent/proposal-card';
+import { TaskProposalCard } from '@/components/agent/task-proposal-card';
+import { TaskResultCard } from '@/components/agent/task-result-card';
 import { WebSourceCard } from '@/components/agent/web-source-card';
 import { ThemedText } from '@/components/themed-text';
 import { Shadows } from '@/constants/theme';
@@ -20,6 +25,7 @@ import { useTheme } from '@/hooks/use-theme';
 import {
   agentImageSource,
   fetchAgentObservation,
+  type AgentCareInfo,
   type AgentImageMeta,
   type AgentObservation,
   type AgentSource,
@@ -34,6 +40,8 @@ type Props = {
   petName: string | null;
   onContinueTopic: (turn: AgentTurn) => void;
   onRetry: (turn: AgentTurn) => void;
+  /** W09：主动关怀卡追问入口（预填「为什么提醒我？」并定位到该主题） */
+  onAskWhy?: (turn: AgentTurn) => void;
 };
 
 type DatedSource = AgentWindowSource & { startAt: string; endAt: string };
@@ -321,6 +329,84 @@ function OwnerImage({
   );
 }
 
+/** W09 主动关怀卡：标题 + 状态 + 依据摘要 + 「为什么提醒我」追问（证据下钻走对话） */
+const CARE_STATUS_LABELS: Record<string, string> = {
+  open: '提醒中',
+  ongoing: '持续关注',
+  recovered: '已恢复',
+  closed: '已关闭',
+};
+
+function careEvidenceLines(care: AgentCareInfo): string[] {
+  const lines: string[] = [];
+  for (const entry of (care.evidence ?? []).slice(-2).reverse()) {
+    const time = Number.isFinite(Date.parse(entry.at))
+      ? new Intl.DateTimeFormat('zh-CN', {
+          timeZone: SH_TZ,
+          month: 'numeric',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+        }).format(new Date(entry.at))
+      : '';
+    if (typeof entry.battery === 'number') {
+      lines.push(`${time} 电量 ${Math.round(entry.battery)}%`);
+    } else if (entry.healthValid === false) {
+      lines.push(`${time} 读数无效`);
+    } else if (entry.note) {
+      lines.push(`${time} ${entry.note}`.trim());
+    }
+  }
+  return lines;
+}
+
+function CareCard({ care, onAskWhy }: { care: AgentCareInfo; onAskWhy?: () => void }) {
+  const theme = useTheme();
+  const lines = careEvidenceLines(care);
+  const windowLabel =
+    care.windowStart && care.windowEnd
+      ? ` · ${formatWindow(care.windowStart, care.windowEnd)}`
+      : '';
+  return (
+    <View
+      style={[
+        styles.care,
+        { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
+      ]}
+    >
+      <View style={styles.careHead}>
+        <SymbolView
+          name={{ ios: 'bell.fill', android: 'notifications', web: 'notifications' }}
+          tintColor={theme.tint}
+          size={16}
+        />
+        <ThemedText type="smallBold" style={styles.careTitle}>
+          {care.title || '主动提醒'}
+        </ThemedText>
+        {CARE_STATUS_LABELS[care.status] ? (
+          <ThemedText type="small" themeColor="textSecondary">
+            {CARE_STATUS_LABELS[care.status]}
+            {windowLabel}
+          </ThemedText>
+        ) : null}
+      </View>
+      {lines.map((line, index) => (
+        <ThemedText key={`${index}-${line}`} type="small" themeColor="textSecondary">
+          依据 · {line}
+        </ThemedText>
+      ))}
+      {onAskWhy ? (
+        <Pressable accessibilityRole="button" style={styles.careWhy} onPress={onAskWhy}>
+          <ThemedText type="small" style={{ color: theme.tint }}>
+            为什么提醒我？
+          </ThemedText>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
 /** 主人气泡图片：1 张按宽高比自适应，2–3 张两列方格（W07 §4.3） */
 function OwnerImages({
   images,
@@ -353,7 +439,7 @@ function OwnerImages({
   );
 }
 
-export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry }: Props) {
+export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry, onAskWhy }: Props) {
   const theme = useTheme();
   const router = useRouter();
   const settings = useCompanionSettingsStore((state) => state.settings);
@@ -376,17 +462,38 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry }:
       ];
   const textSegments = blocks.filter((block) => block.type === 'text');
   const proposals = blocks.filter((block) => block.type === 'proposal');
-  const hasUnknownBlocks = blocks.length > textSegments.length + proposals.length;
+  const actions = blocks.filter((block) => block.type === 'action');
+  const taskResults = blocks.filter((block) => block.type === 'task_result');
+  const careBlocks = blocks.filter(
+    (block): block is { type: 'care'; care: AgentCareInfo } => block.type === 'care',
+  );
+  const hasUnknownBlocks =
+    blocks.length >
+    textSegments.length +
+      proposals.length +
+      actions.length +
+      taskResults.length +
+      careBlocks.length;
+  // 来源去重只算一次：可展示卡（web/带日期）与未知来源回退分别派生（UI 一致性调整）。
+  const uniqueSources = [...new Map((turn.sources ?? []).map((s) => [sourceKey(s), s]))];
+  const cardSources = uniqueSources.filter(
+    ([, source]) => source.type === 'web' || isDatedSource(source),
+  );
+  const unknownSources = uniqueSources.filter(
+    ([, source]) => source.type !== 'web' && !isDatedSource(source),
+  );
 
   const openMember = (speaker: 'pet' | 'assistant') =>
     router.push(speaker === 'pet' ? '/pet' : '/assistant-settings');
 
   return (
     <View style={styles.exchange}>
-      <View style={[styles.ownerBubble, { backgroundColor: theme.tintBackground }]}>
-        {images.length ? <OwnerImages images={images} onOpen={openViewer} /> : null}
-        {turn.text ? <ThemedText>{turn.text}</ThemedText> : null}
-      </View>
+      {turn.text || images.length ? (
+        <View style={[styles.ownerBubble, { backgroundColor: theme.tintBackground }]}>
+          {images.length ? <OwnerImages images={images} onOpen={openViewer} /> : null}
+          {turn.text ? <ThemedText>{turn.text}</ThemedText> : null}
+        </View>
+      ) : null}
       {images.length ? (
         <AgentImageViewer
           images={images.map((meta) => agentImageSource(meta.id))}
@@ -439,28 +546,55 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry }:
             </View>
           </View>
         ))}
-        {hasUnknownBlocks ? (
-          <ThemedText type="small" themeColor="textSecondary">
-            这条消息里有暂不支持的内容。
-          </ThemedText>
+        {hasUnknownBlocks ||
+        proposals.length ||
+        actions.length ||
+        taskResults.length ||
+        careBlocks.length ||
+        cardSources.length ? (
+          // 结构化卡与正文同列：左缘统一缩进到头像右侧的文本列（34 头像 + 9 间距 = 43，
+          // 与 replyFootnote 同值），右缘沿用列宽；来源回退文本留在脚注区。
+          <View style={styles.replyCards}>
+            {hasUnknownBlocks ? (
+              <ThemedText type="small" themeColor="textSecondary">
+                这条消息里有暂不支持的内容。
+              </ThemedText>
+            ) : null}
+            {proposals.map((block) =>
+              block.proposal.kind === 'task_change' ? (
+                <TaskProposalCard key={block.proposal.id} petId={petId} proposal={block.proposal} />
+              ) : (
+                <ProposalCard key={block.proposal.id} petId={petId} proposal={block.proposal} />
+              ),
+            )}
+            {taskResults.map((block, index) => (
+              <TaskResultCard key={`${block.task.deliveryId}-${index}`} block={block.task} />
+            ))}
+            {careBlocks.map((block, index) => (
+              <CareCard
+                key={`${block.care.topicId ?? 'x'}-${index}`}
+                care={block.care}
+                onAskWhy={() => onAskWhy?.(turn)}
+              />
+            ))}
+            {actions.map((block) => (
+              <ActionCard key={block.action.id} action={block.action} petId={petId} />
+            ))}
+            {cardSources.map(([key, source]) =>
+              source.type === 'web' ? (
+                <WebSourceCard key={key} source={source} />
+              ) : isDatedSource(source) ? (
+                <SourceCard key={key} source={source} petId={petId} />
+              ) : null,
+            )}
+          </View>
         ) : null}
-        {proposals.map((block) => (
-          <ProposalCard key={block.proposal.id} petId={petId} proposal={block.proposal} />
-        ))}
         <View style={styles.replyFootnote}>
-          {[...new Map((turn.sources ?? []).map((source) => [sourceKey(source), source]))].map(
-            ([key, source]) => {
-              if (source.type === 'web') return <WebSourceCard key={key} source={source} />;
-              if (isDatedSource(source)) {
-                return <SourceCard key={key} source={source} petId={petId} />;
-              }
-              return (
-                <ThemedText key={key} type="small" themeColor="textSecondary">
-                  {source.type === 'baseline' ? '个人基线暂无可比样本' : '暂不支持展示的来源'}
-                </ThemedText>
-              );
-            },
-          )}
+          {unknownSources.map(([key, source]) => (
+            <ThemedText key={key} type="small" themeColor="textSecondary">
+              {source.type === 'baseline' ? '个人基线暂无可比样本' : '暂不支持展示的来源'}
+            </ThemedText>
+          ))}
           {turn.status !== 'pending' ? (
             <Pressable
               accessibilityRole="button"
@@ -503,10 +637,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  /** 结构化卡与正文共用的对齐列：左缘缩进到文本列（与 replyFootnote 同 43），卡片间距沿用消息列的 10 */
+  replyCards: { paddingLeft: 43, gap: 10 },
   source: {
     borderWidth: 1,
     borderRadius: 12,
-    marginTop: 4,
     overflow: 'hidden',
     boxShadow: Shadows.chip,
   },
@@ -520,6 +655,10 @@ const styles = StyleSheet.create({
   sourceHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   sourceText: { flex: 1 },
   sourceDetail: { borderTopWidth: StyleSheet.hairlineWidth, padding: 10, paddingTop: 8, gap: 4 },
+  care: { borderWidth: 1, borderRadius: 12, padding: 10, gap: 6, marginTop: 4 },
+  careHead: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  careTitle: { flex: 1 },
+  careWhy: { alignSelf: 'flex-start', paddingVertical: 2 },
   sourceLink: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingTop: 2 },
   replyAction: { alignSelf: 'flex-start', paddingVertical: 4 },
 });

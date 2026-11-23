@@ -3,6 +3,8 @@
 明确指令直写（explicit）+ 模糊候选确认卡（pending → confirm/reject）两条生效路径；
 结构校验为落库前复核第二层（模型结构化提案 + 业务复核，P00 §4）。
 决策幂等：终态同 action 重复返回当前态；superseded / 异 action → 409。
+W08 起按 kind 分派归一化与生效处理器：profile_update 走档案写入，
+task_change 走 agent/tasks.apply_proposal（spec §3 复用状态、鉴权与决定入口）。
 """
 import json
 from datetime import date
@@ -15,6 +17,7 @@ from petsense.db.models.agent import AgentProposal, AgentTurn
 from petsense.pets import profile as pet_profile
 
 KIND_PROFILE = 'profile_update'
+KIND_TASK = 'task_change'
 PROPOSAL_FIELDS = ('name', 'breed', 'birthDate', 'birthDatePrecision', 'birthYear',
                    'weightKg', 'weightMeasuredOn', 'weightRawText')
 
@@ -149,7 +152,11 @@ def create(session, pet, turn_id, fields, explicit, kind=KIND_PROFILE, now=None)
     归一化失败抛 ProposalError（errors 字典带字段级原因），不建提案不落库。
     旧 pending 提案置 superseded 时同步重写其所属回合 blocks（旧卡翻「已有新候选」态），
     返回被刷新的回合 id 列表，调用方提交后据此推 WS turn 帧（agent-w03-spec.md §3.5）。
+    task_change 提案一律走确认卡（D3），经 create_task_proposal 创建。
     """
+    if kind == KIND_TASK:
+        raise ProposalError('task_change 提案没有 explicit 直写路径（D3 一律经确认卡），'
+                            '请使用 create_task_proposal')
     payload = normalize_fields(fields)
     now = now or utc_now()
     row = AgentProposal(pet_id=pet.id, turn_id=turn_id, kind=kind,
@@ -159,6 +166,30 @@ def create(session, pet, turn_id, fields, explicit, kind=KIND_PROFILE, now=None)
                         created_at=now, decided_at=now if explicit else None)
     session.add(row)
     session.flush()
+    refreshed_turn_ids = _supersede_pending(session, pet, kind, row)
+    updated = _apply_writes(session, pet, payload) if explicit else {}
+    return row, updated, refreshed_turn_ids
+
+
+def create_task_proposal(session, pet, turn_id, payload, now=None):
+    """创建 task_change 待确认提案（W08，agent-w08-spec.md §3）。
+
+    payload 为 tasks.normalize_proposal_fields 的产物（已归一化并校验 taskId/版本引用）。
+    新 pending 自动替代同 kind 旧 pending（编辑改版走 supersede，D3/A1）。
+    """
+    now = now or utc_now()
+    row = AgentProposal(pet_id=pet.id, turn_id=turn_id, kind=KIND_TASK,
+                        payload=json.dumps(payload, ensure_ascii=False),
+                        version=_next_version(session, pet.id, KIND_TASK),
+                        status='pending', created_at=now, decided_at=None)
+    session.add(row)
+    session.flush()
+    refreshed_turn_ids = _supersede_pending(session, pet, KIND_TASK, row)
+    return row, refreshed_turn_ids
+
+
+def _supersede_pending(session, pet, kind, row):
+    """旧 pending 提案翻「已有新候选」并重写其回合 blocks；返回被刷新的回合 id。"""
     refreshed_turn_ids = []
     for old in session.execute(select(AgentProposal).where(
             AgentProposal.pet_id == pet.id, AgentProposal.kind == kind,
@@ -169,14 +200,19 @@ def create(session, pet, turn_id, fields, explicit, kind=KIND_PROFILE, now=None)
         if old.turn_id and old.turn_id not in refreshed_turn_ids:
             refreshed_turn_ids.append(old.turn_id)
     session.flush()
-    updated = _apply_writes(session, pet, payload) if explicit else {}
-    return row, updated, refreshed_turn_ids
+    return refreshed_turn_ids
 
 
 def decide(session, pet, proposal_id, action, now=None):
     """主人决策：confirm 落库 / reject 仅翻转状态；幂等，异态 409。
 
-    返回 (提案行, 需刷新 blocks 的 turn_id)；turn 为 None 表示提案不挂回合。
+    confirm 按 kind 分派生效处理器：profile_update 写档案；task_change 走
+    tasks.apply_proposal（W08，spec §3 复用决定入口分派到受控业务处理器）；
+    W10 动作类（录音/日记/草稿）只翻状态，实际执行由 routes 在事务提交后交给
+    agent.actions.execute_confirmed（录音/日记的复核与副作用都在自带会话中执行，
+    agent-w10-spec.md §2）。
+    返回 (提案行, 需刷新 blocks 的 turn_id, 本次是否发生状态翻转)；
+    turn 为 None 表示提案不挂回合。
     """
     if action not in ('confirm', 'reject'):
         raise ProposalError('决策动作无效', status=400)
@@ -184,12 +220,20 @@ def decide(session, pet, proposal_id, action, now=None):
     if row is None or row.pet_id != pet.id:
         raise ProposalError('提案不存在', status=404)
     now = now or utc_now()
+    changed = False
     if row.status == 'pending':
-        if action == 'confirm':
+        if action == 'confirm' and row.kind == KIND_PROFILE:
             payload = json.loads(row.payload)
             _apply_writes(session, pet, payload)
+        elif action == 'confirm' and row.kind == KIND_TASK:
+            from petsense.agent import tasks as task_service
+            try:
+                task_service.apply_proposal(session, pet, row, now=now)
+            except task_service.TaskError as exc:
+                raise ProposalError(exc.message, status=exc.status)
         row.status = 'confirmed' if action == 'confirm' else 'rejected'
         row.decided_at = now
+        changed = True
         session.flush()
         _refresh_turn_blocks(session, row)
     elif row.status == ('confirmed' if action == 'confirm' else 'rejected'):
@@ -198,7 +242,7 @@ def decide(session, pet, proposal_id, action, now=None):
         raise ProposalError('提案已被新版本替代，请确认最新候选', status=409)
     else:
         raise ProposalError('提案已处理过另一种决策', status=409)
-    return row, row.turn_id
+    return row, row.turn_id, changed
 
 
 def _refresh_turn_blocks(session, row):

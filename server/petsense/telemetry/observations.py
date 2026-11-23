@@ -145,6 +145,10 @@ def ingest_observation(session, payload, received_at):
     # Raw payload was validated by ingress; tolerate nonfinite legacy values only in aggregates.
     cursor.payload = json.dumps(payload)
     cursor.received_at = received_at
+    # W09 硬件规则检测：只在已接受的新帧上推进（上方序号/靴子门已拒绝旧帧与重复帧）；
+    # 轻量状态机同事务执行，事件运行经持久作业走调度线程，不阻塞实时分发。
+    from petsense.agent.care import observe_frame_and_queue
+    observe_frame_and_queue(session, device, owner, payload, received_at)
     return True
 
 
@@ -156,6 +160,15 @@ def prune(session, now):
 
 def backfill():
     """At startup before MQTT subscription. Checkpoints make repeated runs harmless."""
+    from petsense.agent.care import set_replay_mode
+    set_replay_mode(True)  # W09：历史重放只重建检测水位，不为旧转换开题/发消息
+    try:
+        _backfill_frames()
+    finally:
+        set_replay_mode(False)
+
+
+def _backfill_frames():
     with session_scope() as session:
         rows = session.execute(select(Reading).where(Reading.device_id.is_not(None)).order_by(Reading.id)).scalars().all()
         for row in rows:

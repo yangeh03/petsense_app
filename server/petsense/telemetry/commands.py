@@ -52,6 +52,11 @@ def api_audio_recording():
     body = request.get_json(silent=True) or {}
     enabled = bool(body.get('enabled'))
     duration_sec = max(1, min(10, int(body.get('durationSec', 5) or 5)))
+    if enabled:
+        # W10 单设备录音互斥（spec §3）：Agent 录音未终态时旧入口不再下发新指令
+        from petsense.agent import actions as agent_actions
+        if agent_actions.active_recording(device_id):
+            return {'success': False, 'message': '设备有正在进行的远程录音，请稍后再试'}, 409
     control_topic = f'petsense/device/{device_id}/command'
     if control_debounced(f'audio:{device_id}:{enabled}'):
         packet = dict(state)

@@ -225,18 +225,24 @@ def app_petgif_diary_job_create(pet_id):
             PetgifDiaryJob.idempotency_key == key,
         )).scalar_one_or_none()
         if existing is not None:
-            if existing.status == 'unknown' and existing.upstream_diary_id:
-                diary_jobs._update_job(existing.id, status='running')
-                diary_jobs.enqueue_diary_job(existing.id)
-                existing = diary_jobs._read_job(existing.id)
-            return {'success': True, **diary_jobs.job_dict(existing)}, 202
-        preset_ids = {value['petgif_id'] for value in PETGIF_AVATAR_TEMPLATES.values()}
-        if not pet.petgif_id or pet.petgif_id in preset_ids:
-            return {'success': False, 'message': '运动日记需要你自己的 PetGIF 数字形象'}, 409
-        identity = session.get(PetgifIdentity, pet.petgif_id)
-        if identity is None or identity.user_id != user['id']:
-            return {'success': False, 'message': '当前宠物没有可验证归属的个人 PetGIF 形象'}, 409
-        petgif_id = pet.petgif_id
+            existing_id = existing.id
+            existing_status = existing.status
+            upstream_id = existing.upstream_diary_id
+        else:
+            preset_ids = {value['petgif_id'] for value in PETGIF_AVATAR_TEMPLATES.values()}
+            if not pet.petgif_id or pet.petgif_id in preset_ids:
+                return {'success': False, 'message': '运动日记需要你自己的 PetGIF 数字形象'}, 409
+            identity = session.get(PetgifIdentity, pet.petgif_id)
+            if identity is None or identity.user_id != user['id']:
+                return {'success': False, 'message': '当前宠物没有可验证归属的个人 PetGIF 形象'}, 409
+            petgif_id = pet.petgif_id
+    if existing is not None:
+        # 自开事务的日记任务读写必须在本体事务之外（W02 教训：嵌套作用域会关闭外层事务）
+        if existing_status == 'unknown' and upstream_id:
+            diary_jobs._update_job(existing_id, status='running')
+            diary_jobs.enqueue_diary_job(existing_id)
+            existing = diary_jobs._read_job(existing_id)
+        return {'success': True, **diary_jobs.job_dict(existing)}, 202
     source = request.form if request.mimetype == 'multipart/form-data' else (request.get_json(silent=True) or {})
     try:
         fields = diary_jobs.validate_input(source)

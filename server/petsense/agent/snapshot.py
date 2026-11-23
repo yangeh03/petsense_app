@@ -69,7 +69,7 @@ def _learning_line(session, pet):
 
 
 def _trim(sections, limit=None):
-    """超限裁剪（W02 §3.4 + W04 §3.9）：learning → memory → current 次要字段；核心项永不裁。"""
+    """超限裁剪（W02 §3.4 + W04 §3.9 + W08 tasks 行）：learning → tasks → memory → current 次要字段。"""
     limit = limit if limit is not None else SNAPSHOT_CHAR_LIMIT
     trimmed = []
 
@@ -80,6 +80,9 @@ def _trim(sections, limit=None):
         trimmed.append('learning')
         sections.pop('learning', None)
     if size() > limit:
+        trimmed.append('tasks')
+        sections.pop('tasks', None)
+    if size() > limit:
         trimmed.append('memory')
         sections.pop('memory', None)
     if size() > limit and isinstance(sections.get('current'), dict):
@@ -87,6 +90,16 @@ def _trim(sections, limit=None):
         for key in ('batteryPercent', 'receivedAt'):
             sections['current'].pop(key, None)
     return trimmed
+
+
+def _tasks_line(session, pet):
+    """活跃目标摘要行（W08，spec §2）：无活跃委托时不设该节。"""
+    from petsense.agent import tasks as task_service
+    summaries = task_service.active_summaries(session, pet.id)
+    if not summaries:
+        return None
+    more = f' 等 {len(summaries)} 项' if len(summaries) == 3 else ''
+    return f"主人托付的目标：{'、'.join(summaries)}{more}"[:150]
 
 
 def assemble(session, pet, now):
@@ -111,6 +124,9 @@ def assemble(session, pet, now):
     except Exception:
         sections['memory'] = '认识卡暂不可用'
         degraded.append('memory')
+    tasks_line = _tasks_line(session, pet)  # W08 活跃目标行：无委托不设节
+    if tasks_line is not None:
+        sections['tasks'] = tasks_line
     sections['now'] = {'shanghai': shanghai_now(now).isoformat(timespec='seconds'),
                        'utc': iso_z(now)}
     trimmed = _trim(sections)

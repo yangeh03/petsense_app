@@ -10,10 +10,15 @@ from petsense.db.models.agent import AgentRun
 def save(pet_id, turn_id, trace, status, error=None):
     """落库一次运行轨迹；trace 由 loop 产出（messages/tool_summary/budget/conclusion/snapshot）。"""
     snapshot = trace.get('snapshot')
+    # 触发原因（为什么在此时跑这个形态）随结论落库，不被静默丢弃（可审计）
+    conclusion = dict(trace.get('conclusion') or {})
+    trigger = trace.get('trigger')
+    if trigger is not None:
+        conclusion.setdefault('trigger', trigger)
     with session_scope() as s:
         run = AgentRun(pet_id=pet_id, turn_id=turn_id, form=trace.get('form', 'dialogue'),
                        status=status, error=error, created_at=utc_now(),
-                       conclusion=json.dumps(trace.get('conclusion', {}), ensure_ascii=False),
+                       conclusion=json.dumps(conclusion, ensure_ascii=False),
                        messages=json.dumps(trace.get('messages', []), ensure_ascii=False, default=str),
                        tool_summary=json.dumps(trace.get('tool_summary', []), ensure_ascii=False, default=str),
                        budget=json.dumps(trace.get('budget', {}), ensure_ascii=False, default=str),
