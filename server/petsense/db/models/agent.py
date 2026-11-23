@@ -90,6 +90,28 @@ class CompanionSettings(Base):
     updated_at = Column(UTCDatetime, nullable=False)
 
 
+class AgentJob(Base):
+    """通用持久作业行（W08，agent-w08-spec.md §3；W09 事件运行复用）。
+
+    SQLite 队列：dedup_key 为稳定结果键（唯一），status 覆盖 pending/working/done/dead；
+    lease_until 为领取租约，启动恢复把遗留 working 回置 pending。payload 由 kind 对应
+    执行器解释；执行器经 agent/jobs.py 注册，不在本层分支。
+    """
+    __tablename__ = 'agent_jobs'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    kind = Column(String(32), nullable=False)
+    dedup_key = Column(String(120), nullable=False, unique=True)
+    payload_json = Column(Text, nullable=False, default='{}')
+    status = Column(String(16), nullable=False, default='pending')
+    attempts = Column(Integer, nullable=False, default=0)
+    max_attempts = Column(Integer, nullable=False, default=5)
+    next_run_at = Column(UTCDatetime, nullable=False)
+    lease_until = Column(UTCDatetime, nullable=True)
+    last_error = Column(Text, nullable=True)
+    created_at = Column(UTCDatetime, nullable=False)
+    updated_at = Column(UTCDatetime, nullable=False)
+
+
 class AgentProposal(Base):
     """W03 确认提案：确认门服务的持久对象（agent-w03-spec.md §3.3），W08 计划/W10 设备控制复用。
 
