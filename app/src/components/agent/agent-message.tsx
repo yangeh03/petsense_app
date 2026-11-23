@@ -546,35 +546,40 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry, o
             </View>
           </View>
         ))}
-        {hasUnknownBlocks ? (
-          <ThemedText type="small" themeColor="textSecondary">
-            这条消息里有暂不支持的内容。
-          </ThemedText>
-        ) : null}
-        {proposals.map((block) =>
-          block.proposal.kind === 'task_change' ? (
-            <TaskProposalCard key={block.proposal.id} petId={petId} proposal={block.proposal} />
-          ) : (
-            <ProposalCard key={block.proposal.id} petId={petId} proposal={block.proposal} />
-          ),
-        )}
-        {taskResults.map((block, index) => (
-          <TaskResultCard key={`${block.task.deliveryId}-${index}`} block={block.task} />
-        ))}
-        {careBlocks.map((block, index) => (
-          <CareCard
-            key={`${block.care.topicId ?? 'x'}-${index}`}
-            care={block.care}
-            onAskWhy={() => onAskWhy?.(turn)}
-          />
-        ))}
-        {actions.map((block) => (
-          <ActionCard key={block.action.id} action={block.action} petId={petId} />
-        ))}
-        {cardSources.length ? (
-          // 来源卡与其他结构化卡同层：与提案/任务/关怀/动作卡共用对齐的内容列，
-          // 不再走缩进的脚注区，保证同一回合内卡片左右边缘一致（UI 一致性调整）。
-          <View style={styles.sourceColumn}>
+        {hasUnknownBlocks ||
+        proposals.length ||
+        actions.length ||
+        taskResults.length ||
+        careBlocks.length ||
+        cardSources.length ? (
+          // 结构化卡与正文同列：左缘统一缩进到头像右侧的文本列（34 头像 + 9 间距 = 43，
+          // 与 replyFootnote 同值），右缘沿用列宽；来源回退文本留在脚注区。
+          <View style={styles.replyCards}>
+            {hasUnknownBlocks ? (
+              <ThemedText type="small" themeColor="textSecondary">
+                这条消息里有暂不支持的内容。
+              </ThemedText>
+            ) : null}
+            {proposals.map((block) =>
+              block.proposal.kind === 'task_change' ? (
+                <TaskProposalCard key={block.proposal.id} petId={petId} proposal={block.proposal} />
+              ) : (
+                <ProposalCard key={block.proposal.id} petId={petId} proposal={block.proposal} />
+              ),
+            )}
+            {taskResults.map((block, index) => (
+              <TaskResultCard key={`${block.task.deliveryId}-${index}`} block={block.task} />
+            ))}
+            {careBlocks.map((block, index) => (
+              <CareCard
+                key={`${block.care.topicId ?? 'x'}-${index}`}
+                care={block.care}
+                onAskWhy={() => onAskWhy?.(turn)}
+              />
+            ))}
+            {actions.map((block) => (
+              <ActionCard key={block.action.id} action={block.action} petId={petId} />
+            ))}
             {cardSources.map(([key, source]) =>
               source.type === 'web' ? (
                 <WebSourceCard key={key} source={source} />
@@ -632,8 +637,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  /** 来源卡与其他结构化卡共用的对齐列：同宽、同左右边缘（不缩进到头像列） */
-  sourceColumn: { gap: 6 },
+  /** 结构化卡与正文共用的对齐列：左缘缩进到文本列（与 replyFootnote 同 43），卡片间距沿用消息列的 10 */
+  replyCards: { paddingLeft: 43, gap: 10 },
   source: {
     borderWidth: 1,
     borderRadius: 12,
