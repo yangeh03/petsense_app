@@ -73,6 +73,7 @@ class PetBaseline(Base):
     day_stats = Column(Text, nullable=False, default='{}')
     slot_stats = Column(Text, nullable=False, default='[]')
     revision = Column(Integer, nullable=False, default=0)
+    label_epoch = Column(Integer, nullable=True)  # 读法纪元；NULL=修复前旧缓存，须重算
     computed_at = Column(UTCDatetime, nullable=False)
 
 

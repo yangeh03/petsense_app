@@ -26,6 +26,10 @@ DAY_COVERAGE_S = 21600          # 当天可比门槛：与有效日同口径（6
 DAY_RANGE_MIN_SAMPLES = 7       # D2：全天范围就绪样本门槛
 SLOT_RANGE_MIN_SAMPLES = 4      # D2：时段范围就绪样本门槛
 WALK_LABEL = '走动'
+# 读法纪元：走动秒数改为同时识别英文标签（walking/走动，2026-11-23）后 +1。
+# 旧缓存（label_epoch 为 NULL）即使水位不变也须重算一次，否则保留按单一中文
+# 标签算出的错误范围；只作废旧派生缓存，不动遥测与学习累计。
+LABEL_EPOCH = 2
 
 
 def walk_seconds(actions):
@@ -144,6 +148,7 @@ def ensure_baseline(session, pet, now=None):
     """惰性重算入口（D4）：水位（最新有效日、有效日数）变化才重算落库，幂等。
 
     由 read_baseline 与快照组装触发；W08 执行器上线后可换调度物化，语义不变。
+    水位不变但读法纪元落后（读口径修复部署后的旧缓存）也重算一次。
     """
     if not pet.device_id:
         return
@@ -156,7 +161,8 @@ def ensure_baseline(session, pet, now=None):
         ordered = sorted(days, reverse=True)
         watermark = (ordered[0], len(ordered))
         row = stored.get((feature, version))
-        if row is not None and (row.window_last_day, row.valid_days) == watermark:
+        if (row is not None and row.label_epoch == LABEL_EPOCH
+                and (row.window_last_day, row.valid_days) == watermark):
             continue
         # 比较基准只含今天（上海）之前的有效日；当天永不入样（spec §3.4）
         cutoff = (shanghai_now(now or utc_now()).date() + timedelta(days=1)).isoformat()
@@ -175,6 +181,7 @@ def ensure_baseline(session, pet, now=None):
         row.state = 'ready' if len(ordered) >= REQUIRED_DAYS else 'learning'
         row.valid_days = len(ordered)
         row.window_last_day = ordered[0]
+        row.label_epoch = LABEL_EPOCH
         row.sample_days = json.dumps(sorted(day_values))
         row.day_values = json.dumps(day_values, ensure_ascii=False)
         row.day_stats = json.dumps(day_stats, ensure_ascii=False)

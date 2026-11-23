@@ -768,6 +768,8 @@ class ObservationLabelTests(W08TestCase):
             evidence = task_service.materialize(s, pet, task, plan, self.now + timedelta(hours=1))
         self.assertEqual(evidence['walkSeconds'], 1200, '委托证据的走动秒数须来自真实标签')
         self.assertEqual(evidence['observedSeconds'], 30 * 60)
+
+
 class CheckpointSchedulingRegressionTests(W08TestCase):
     """W08 评审修复的确定性回归：续期重排、在途换版、幂等入队与计划异常保作业。"""
 

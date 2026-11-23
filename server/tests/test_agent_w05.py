@@ -57,13 +57,13 @@ class BaselineTestBase(unittest.TestCase):
                                        slots=slots))
 
     def seed_minutes(self, day, slot, count=70, walk=30, observed=60, version='v1',
-                     features=('actions',)):
+                     features=('actions',), walk_label='走动'):
         with db.session_scope() as s:
             start = sh_local(day, slot * 6)
             for i in range(count):
                 s.add(TelemetryMinute(owner_id=self.uid, device_id=self.device,
                                       minute=start + timedelta(minutes=i), metrics='{}',
-                                      actions=json.dumps({'走动': walk} if 'actions' in features else {}),
+                                      actions=json.dumps({walk_label: walk} if 'actions' in features else {}),
                                       observed_seconds=observed if 'actions' in features else 0,
                                       sound_observed_seconds=observed if 'sounds' in features else 0,
                                       source_versions=json.dumps([f'{f}:{version}' for f in features])))
@@ -181,6 +181,54 @@ class RecomputeTests(BaselineTestBase):
             self.assertEqual(row.revision, first_revision + 1)
             self.assertEqual(row.window_last_day, new_day)
             self.assertEqual(row.state, 'ready')
+
+    def test_legacy_cache_recomputed_on_unchanged_watermark(self):
+        """读法修复部署后的旧缓存：水位不变也须重算，英文标签计入走动秒数。"""
+        days = [sh_day(-9 + i) for i in range(7)]
+        self.seed_learning(days)
+        for day in days:
+            self.seed_minutes(day, 1, walk_label='walking')  # 生产遥测实际存英文标签
+        pet = self._pet()
+        with db.session_scope() as s:
+            # 模拟修复前旧缓存：水位与当前一致，但按只认「走动」的旧读法算出全零范围
+            s.add(PetBaseline(pet_id=self.pet_id, feature='actions', version='v1',
+                              state='ready', valid_days=7, window_last_day=days[-1],
+                              sample_days='[]', day_values='{}',
+                              day_stats=json.dumps({'samples': 0}),
+                              slot_stats='[]', revision=3, computed_at=utc_now()))
+        with db.session_scope() as s:
+            baseline.ensure_baseline(s, pet)
+            row = s.get(PetBaseline, (self.pet_id, 'actions', 'v1'))
+            self.assertEqual(row.label_epoch, baseline.LABEL_EPOCH, '重算后落当前读法纪元')
+            self.assertEqual(row.revision, 4, '水位不变仍须重算一次')
+            self.assertGreater(json.loads(row.day_stats)['p50'], 0,
+                               '英文 walking 标签须计入走动秒数')
+        with db.session_scope() as s:  # 纪元已最新且水位不变：回到幂等跳过
+            baseline.ensure_baseline(s, pet)
+            row = s.get(PetBaseline, (self.pet_id, 'actions', 'v1'))
+            self.assertEqual(row.revision, 4)
+
+    def test_epoch_guard_does_not_touch_learning(self):
+        """旧缓存失效只重算派生行：学习累计与遥测明细不动。"""
+        days = [sh_day(-9 + i) for i in range(7)]
+        self.seed_learning(days)
+        for day in days:
+            self.seed_minutes(day, 1)
+        pet = self._pet()
+        with db.session_scope() as s:
+            row = PetBaseline(pet_id=self.pet_id, feature='actions', version='v1',
+                              state='learning', valid_days=7, window_last_day=days[-1],
+                              sample_days='[]', day_values='{}', day_stats='{}',
+                              slot_stats='[]', revision=1, computed_at=utc_now())
+            s.add(row)
+        with db.session_scope() as s:
+            baseline.ensure_baseline(s, pet)
+        with db.session_scope() as s:
+            self.assertEqual(s.execute(
+                select(AgentLearningDay).where(AgentLearningDay.pet_id == self.pet_id)
+            ).scalars().all().__len__(), 7, '学习累计行不变')
+            row = s.get(PetBaseline, (self.pet_id, 'actions', 'v1'))
+            self.assertEqual(json.loads(row.day_stats)['samples'], 7, '按明细复算样本')
 
     def test_window_capped_at_28_days(self):
         days = [sh_day(-30 + i) for i in range(30)]

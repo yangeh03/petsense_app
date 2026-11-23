@@ -687,6 +687,8 @@ class W09ProactivitySwitchTests(W09CareTests):
                 _json_out({'say': '又来一次。', 'disturb': True})])):
             jobs.tick(now=self.t0 + timedelta(minutes=31), limit=5)
         self.assertEqual(len(self._turns('care:event:')), 1, '同一事件实例只发一条首发消息')
+
+
 class W09ReviewIntegrationTests(W09CareTests):
     """W09 评审修复的确定性回归：消息去重、主动程度门槛、调度资格、WS 交付与轨迹。"""
 
