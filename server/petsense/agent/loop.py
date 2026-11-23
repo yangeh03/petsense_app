@@ -703,6 +703,7 @@ def run_structured(context):
                    {'role': 'user', 'content': context['task']}]
     messages_trace.append({'role': 'user', 'task': context['task'][:600]})
     tool_rounds = parse_failures = 0
+    empty_retries = 0
     text, value, error = '', None, None
     try:
         while True:
@@ -713,7 +714,10 @@ def run_structured(context):
                 degraded.append('wall_clock_exceeded')
             # 预算耗尽后不再挂载工具（模型仍调用时按降级交付，不无限循环）
             schemas = registry.schemas_for(form, 'allowed', search_enabled=False) if allow_tools else []
-            turn = model.respond(input_items, tools=schemas or None, max_output_tokens=max_tokens)
+            # 空响应（推理耗尽输出预算等）放宽 token 上限重试，与对话形态同口径；
+            # 重试成功不算降级，只在轨迹与预算里留痕，重试耗尽才判失败。
+            budget_tokens = max_tokens if empty_retries == 0 else max_tokens * (2 ** empty_retries)
+            turn = model.respond(input_items, tools=schemas or None, max_output_tokens=budget_tokens)
             _, stripped = parse_stance(turn.get('text'))
             if stripped:
                 messages_trace.append({'role': 'assistant', 'text': stripped[:2000]})
@@ -748,6 +752,11 @@ def run_structured(context):
                 degraded.append('model_called_without_tools')
             text = stripped
             if not text.strip():
+                empty_retries += 1
+                if empty_retries <= 2 and time.monotonic() < deadline:
+                    messages_trace.append({'empty_response_retry': empty_retries,
+                                           'max_output_tokens': budget_tokens})
+                    continue
                 degraded.append('empty_response')
                 error = 'model_unavailable'
                 break
@@ -773,6 +782,7 @@ def run_structured(context):
              'conclusion': {'reason_code': 'degraded:' + ','.join(degraded) if degraded else 'ok'},
              'messages': messages_trace, 'tool_summary': tool_summary,
              'budget': {'rounds': tool_rounds, 'parse_failures': parse_failures,
+                        'empty_retries': empty_retries,
                         'wall_seconds': round(time.monotonic() - started, 2)},
              'degraded': degraded}
     return {'text': text, 'value': value, 'error': error, 'degraded': degraded, 'trace': trace}

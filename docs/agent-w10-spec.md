@@ -51,11 +51,11 @@
 ### 6.1 已实现范围
 
 - 服务端 `server/petsense/agent/actions.py`：三个动作共用的 `AgentAction` 回执（稳定动作 ID + 结构化结果）、录音 psrec01 协议接入、日记共用提交入口、私有草稿槽。
-- 注册表 `registry.py`：`control_device`（DEVICE_CONTROL 组，D3 开关关闭时进 schemas）、`create_diary`、`draft_social_post`（ACTION 组）。三个工具 `forms=(DIALOGUE,)`，后台检查点／回顾／事件形态不可调用。
+- 注册表 `registry.py`：`control_device`（DEVICE_CONTROL 组，D3 开关关闭时**不**进 schemas）、`create_diary`、`draft_social_post`（ACTION 组）。三个工具 `forms=(DIALOGUE,)`，后台检查点／回顾／事件形态不可调用。
 - 提案确认门复用 W03：`proposals.decide` 改为返回 `(row, turn_id, changed)`，W10 动作类只在确认时翻状态，实际执行由 `routes.proposal_decision` 在事务提交后交给 `actions.execute_confirmed`。
 - 固件 `agent_audio_protocol.{h,cpp}`（两目标同源，host 可测）+ 两份 `.ino` 接入：命令解析、凭据校验、去重表、限时停止、设备作用域回传、容量不足如实拒绝；遥测 envelope 上报 `agentAudio` 能力。
 - App：动作回执卡 `action-card.tsx`（录音按需播放、日记详情入口、草稿发布页入口）、录音播放 `action-audio.native.tsx`（WebView 内建 audio，无新增原生模块）、`proposal-card.tsx` 的 W10 候选卡形态、`create.tsx` 的独立私有草稿槽（不触碰本地手写草稿）。
-- 迁移 `server/alembic/versions/0017_agent_w10_actions.py`：本分支 `down_revision=0014`、revision `0017`（短命本地迁移；集成时由统筹者改接 W09 后的实际 head 并重编号，链上只保留一个 head）。
+- 迁移 `server/alembic/versions/0018_agent_w10_actions.py`：revision `0018`、`down_revision=0017`（接 W09），全链单 head（0014 → 0015 → 0016 → 0017 → 0018）。
 
 ### 6.2 复审意见的处置
 
@@ -88,3 +88,54 @@ MQTT／协议数据来源：录音链路未连生产 broker，回传走 `mqtt_in
 - W10-A5 草稿：模拟器验证发布页私有槽加载／填入／移除，原手写草稿保持，异账号拿不到稿件，社区动态计数在手动发布前不变。
 - W10-A6 发布兼容：App 完整检查、固件 CI、旧录音／今日海报／社区原流程与旧 bundle 兼容由集成阶段统一核对。
 - 行为评测 E58–E65 需在有模型凭据时复跑。
+
+## 7. 集成记录（2026-11-23，W10 worktree 合并 W08/W09 快照 `0bb8ca8`）
+
+### 7.1 合并范围与冲突处置
+
+合并对象为 W08/W09 已提交快照 `0bb8ca8`（`codex/agent-w08-w10` 上的既有提交，**不含**该分支后续的确认阈值细节改动）。合并在本 worktree 分支 `codex/agent-w10-implementation` 上完成，基线 `94f0852`。
+
+| 冲突文件 | 处置 |
+| --- | --- |
+| `agent/registry.py` | 两组工具并存：`DEVICE_CONTROL`/`ACTION`（W10）与 `TASK`（W08）四个组常量都保留；`control_device`/`create_diary`/`draft_social_post`/`read_task`/`propose_task_change` 全部注册，权限矩阵先于执行校验不变 |
+| `agent/loop.py` | 单一运行循环：对话仍走 `run_dialogue`（stance 协议），后台检查点／回顾／事件三种形态共用 W08 引入的 `run_structured`（`run_background` 为其包装）。系统提示合并为「诚实性段 + 记忆规则 + 委托规则（W08）+ 动作规则（W10）+ 录音能力句（按 D3 开关）」，无第二套模型循环 |
+| `agent/proposals.py` | `decide` 按 kind 分派：`profile_update` 写档案、`task_change` 走 `tasks.apply_proposal`、W10 动作类只翻状态并由 `routes` 在提交后交 `actions.execute_confirmed`。返回统一为 `(row, turn_id, changed)` |
+| `agent/routes.py` | 导入并用 `AgentAction` + `AgentCareTopic`；决策端点在事务提交后执行 W10 动作，任务与 care 端点保持 W08/W09 形态 |
+| `db/models/agent.py` / `__init__.py` | `AgentAction`（W10）与 `AgentTask`/`AgentTaskPlan`/`AgentTaskDelivery`/`AgentJob`/`AgentCareTopic`/`CareDeviceState`/`CarePetState`（W08/W09）并存，`__all__` 补齐 |
+| `db/models/__init__.py` | 同上，导出全量 agent 模型 |
+| `tests/test_agent.py` / `test_agent_w01.py` / `test_models_schema.py` | 期望集合改为两组工具与全部表的并集（录音工具默认不进 schemas，`control_device` 不计入） |
+| `app/src/services/agent.ts` | `AgentAction`（W10）与 `AgentCareInfo`/`AgentCareTopic`/`AgentTask*`（W08/W09）类型并存；`AgentTurn.blocks` 联合类型补 `action`/`task_result`/`care` 三类块 |
+| `app/src/components/agent/agent-message.tsx` | 未知块判定同时扣除文本／提案／动作／任务结果／care 五类；卡片分派：提案按 kind 分派 `TaskProposalCard`／`ProposalCard`，另有 `TaskResultCard`/`CareCard`/`ActionCard` |
+| `AGENTS.md` | W08／W09／W10 三条合并为按包分列的现状条目，迁移号改 0015/0016/0017/0018 |
+
+### 7.2 集成期发现并修复的问题
+
+| 问题 | 处置 |
+| --- | --- |
+| W10 迁移与 W09 迁移同为 `0017` | W10 迁移改名为 `0018_agent_w10_actions.py`，`revision='0018'`、`down_revision='0017'`（接 W09）；全链 0014 → 0015 → 0016 → 0017 → 0018 单 head，`upgrade head` 与 `downgrade base` 均验证通过 |
+| `session_scope` 嵌套保护会打断 PetGIF 日记重试路径 | **决定：保留全局嵌套保护**（它正是这次发现潜在嵌套的工具），并修掉被它暴露的真实嵌套点。W10 动作路径在重构后本就不嵌套（`_run_recording` 等已在自身 `session_scope` 之外调用 `publish_control_command`/`latest_telemetry`），保护不依赖它也能成立。`petgif/proxy.py` 的「同幂等键重提且上游结果不明」分支原先在本体 `session_scope` 内调用 `diary_jobs._update_job`/`_read_job`（各自开作用域，嵌套会关闭外层事务——W02 教训），已把该分支移出本体事务并补回归用例 `test_repeat_submit_resumes_unknown_job_without_nested_transaction`。全仓静态扫描确认 `petsense/**` 无其他真实嵌套点。若统筹者仍倾向收窄为作用域内强制，可单独改为基线行为——本轮保留全局保护并在此记录取舍 |
+| 系统提示能力清单未覆盖 W10 | 诚实性段的「已接入」清单补入运动日记与社区草稿；录音能力仍由 D3 开关句单独控制（关闭即如实说明未开放） |
+| W09 回顾事实缺「活跃目标」 | W09 原分支因 W08 未合入而未接（W09 spec §5.3 已记录）。合并后 `care_jobs.review_facts` 增 `activeTasks`（已确认且未结束的委托：标题、kind、状态、截止），回顾系统提示同步列入「活跃目标」，并补确定性用例 |
+| 后台形态遇模型空响应即判失败（真实模型 E51 暴露） | 对话形态早已「空响应放宽 token 上限重试」（W01 已知边界），共享后台回合 `loop.run_structured`（W08 检查点／W09 回顾与事件）却没有重试，一次空响应即降级为 `model_unavailable`。已补同口径重试：最多 2 次、token 上限逐次翻倍，**重试成功不算降级**（只在轨迹与预算里留痕），重试耗尽才判失败并记 `empty_response`。补确定性用例 2 项（`test_agent_w08.py`） |
+| 行为评测文件自身缺陷（继承自 W08/W09 分支，无凭据时整组 skip 从未暴露） | ① 模块级漏导入 `AgentTurn` → E53/E54/E55/E57 抛 `NameError`；② `CareBehaviorTests._at()` 缺 `second` 参数 → E51/E52 抛 `TypeError`；③ E58 场景未给宠物绑定项圈，而录音要求已绑定（spec §3）→ 无候选卡；④ E59 断言只认「暂未开放/未开放」，模型实际说「还没开放/尚未接入」→ 措辞假阴性；⑤ E61 用「已生成」子串判定「不得声称海报已生成」，而模型说的「确认卡已经生成」命中 → 改为只针对海报/日记主体的正则；⑥ E55 第二段用电量 13%（不构成新事件阶段）却期待一条新消息，与 D2「同一事件按规则去重」冲突 → 改为 8%（<10% 升级阶段）；⑦ E57 断言「消息恰一条」，但事件形态按 W09 spec §3 由模型判断「是否值得此刻打扰」，学习里程碑可不交付 → 改为断言事件只触发一次、表达内容以运行轨迹为准、消息条数 0—1；⑧ E49 的「不得断言『一切正常』」用裸子串判定，模型写的「**不代表**它没有走动或一切正常」这类否定句被误判 → 改为否定感知的断言（否定标记前的出现不算违规）。以上均为测试侧修正，未改 W08/W09 产品语义 |
+| 调档后不补发安静档期间打开的设备事实 | 现状：同一事件实例按去重规则只发一次，安静档期间打开的关键设备事实不会在用户调高主动程度后补发（主题仍可追溯）。W09 spec D2「同一事件按规则去重」支持现状，但「调档后补发」是否需要属产品决策，本轮不改实现，作为已知边界记录（见 W09 spec §5.3） |
+
+### 7.3 集成后自动化证据（本轮，2026-11-23）
+
+| 范围 | 命令 | 结果 |
+| --- | --- | --- |
+| 服务端全量 | `cd server && PETSENSE_MQTT_DISABLED=1 .venv/bin/python -m unittest discover -s tests -p "test_*.py"` | **545 项通过**（2 项跳过：需真实凭据/外部条件）。合并前同一命令 540 项通过（2 跳过）；新增 5 项：PetGIF 幂等重提不嵌套事务、W09 回顾事实含活跃目标、后台回合空响应重试成功、后台回合空响应重试耗尽降级、迁移链断言更新 |
+| 行为评测 E42–E65 | `cd server && PYTHONPATH=tests MINIMAX_API_KEY=… MINIMAX_BASE_URL=http://127.0.0.1:18117/v1 .venv/bin/python -m unittest agent_behavior.test_agent_behavior -v -k …` | 见 §7.4 说明（真实 MiniMax，经既有安全中继：凭据只留在云端主机 `/etc/petsense/minimax-api-key`，本地不读取、不打印） |
+| App | `cd app && npm run lint` / `npx tsc --noEmit` / `npm run format:check` / `npm test` | 全部通过：lint 0 error、typecheck 0 error、格式一致、**107/107** 测试通过（W08/W09 合并带入 `agent-tasks`/`care-rules` 用例） |
+| 固件 host | `python3 -m unittest discover -s firmware/tests -v` | **25 项通过**（含 W10 协议 2 项） |
+| 固件编译 | `PATH=/tmp/arduinocli:$PATH bash firmware/check-build.sh`（arduino-cli 1.6.0 + esp32:esp32@2.0.16） | 两目标 ESP32 sketch 编译成功，`BUILD_EXIT=0`；固件字节数与 W10 分支实现轮一致（427609 / 483421），合并未改固件 |
+| 迁移链 | `alembic upgrade 0014 → head`，再 `downgrade base` | head = `0018`（单 head）；`agent_jobs`/`agent_tasks`/`agent_task_plans`/`agent_task_deliveries`/`agent_care_topics`/`care_device_states`/`care_pet_states`/`agent_actions` 全部就位；downgrade 到 base 后业务表清空 |
+| 离线地图 | `server/.venv/bin/python -m unittest discover -s tools/offline-map/tests` | 22 项通过（CI 的服务端/离线地图门槛，与本包无关但同 CI 触发） |
+
+### 7.4 行为评测（真实 MiniMax）
+
+W08 E42–E50、W09 E51–E57、W10 E58–E65 共 24 个场景在合并后的分支上用真实模型复跑。模型请求经既有安全中继转发到云端主机上的 MiniMax Responses API（凭据由云端主机以 root 读取 `/etc/petsense/minimax-api-key`，不回传本地）；测试在本地隔离临时库执行，无生产写入。
+
+结果与用例明细见本轮交付说明（`/tmp/w10-integration/behavior-shard{A,B,C}.log`）。
+
+本轮**未做**模拟器验收（W10-A3/A4/A5/A6、W08-A6、W09-A4 仍待模拟器）；**未做**真项圈验收；生产录音开关保持关闭；无生产写入、无推送、无部署、无 main 变更。

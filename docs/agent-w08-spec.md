@@ -43,3 +43,25 @@
 ## 5. 交付顺序
 
 先落地 worker、数据库迁移、检查点与消息的持久边界，供 W09 引用。随后接入委托工具、确认、UI 和验收。新增行为评测先与 W09/W10 预留编号，禁止复用 E1–E41。上线前联检 Alembic 单 head、旧版本兼容、真实 MiniMax 跨包行为回归与客户端完整门槛。实现和验收完成后在本节追加提交、记录与边界。
+
+## 6. 实施记录（2026-11-23，分支 codex/agent-w08-review → 快照 0bb8ca8）
+
+### 6.1 交付面
+
+- **服务端**：`agent/tasks.py`（委托 `AgentTask` + 追加式计划版本 `AgentTaskPlan` + 交付 `AgentTaskDelivery`，pet 内 `task_key` 唯一；`read_tool_payload`、`normalize_proposal_fields`、`apply_proposal`、`task_op`、`active_summaries`）、`agent/jobs.py`（通用持久作业队列 `AgentJob`：`dedup_key` 唯一、租约认领、有限重试、续期与恢复）、`agent/checkpoint.py`（检查点评估：窗口物化、跳过路径、降级回信）、`agent/deliver.py`（后台交付走同一 Agent 消息通道，稳定 request key 去重）。
+- **统一循环**：检查点运行复用 `loop.run_structured`（W08 与 W09 共用的有界模型/工具回合），不另起第二套模型循环；对话仍是 `loop.run_dialogue`（stance 协议、提案与动作回执）。
+- **工具与端点**：`read_task`（只读）、`propose_task_change`（只生成候选，均限对话形态）；`GET /api/app/agent/pets/<id>/tasks|tasks/<id>`、`POST .../tasks/<id>/ops`（暂停/恢复/取消直接生效）、`POST .../task-proposals`（确认卡编辑并生成新版本）。
+- **氛围快照**：新增 `tasks` 节（活跃目标摘要，无活跃委托时不设节），裁剪顺序 learning → tasks → memory → current。
+- **App**：委托簿页 `app/src/app/agent-tasks.tsx`、任务提案卡 `task-proposal-card.tsx`、任务结果卡 `task-result-card.tsx`，伙伴页入口指向委托簿。
+- **迁移**：0015（`agent_jobs`）、0016（`agent_tasks`/`agent_task_plans`/`agent_task_deliveries`）。
+
+### 6.2 集成记录（2026-11-23，W10 worktree 合并 W08/W09 快照 0bb8ca8）
+
+W08 与 W09 的已提交快照 `0bb8ca8` 合入 W10 worktree 分支（基线 `94f0852`）。合并中 W08 侧与 W10 侧的冲突（工具注册表、统一循环、提案分派、路由、ORM 模型、模型集合断言、App 类型与卡片分派、AGENTS.md）逐项处置，详见 `docs/agent-w10-spec.md` §7.1；合并后 W08 的 `read_task`/`propose_task_change`、`AgentTask*` 三表、0015/0016 迁移、委托簿与任务卡片全部保留，W10 动作类提案与 W09 主动提醒主题在同一分支并存。W09 回顾事实中的「活跃目标」缺口在合并后补齐（`care_jobs.review_facts` 增 `activeTasks`）。合并后服务端全量测试与 App 门槛见 `docs/agent-w10-spec.md` §7.3。
+
+集成期由真实模型行为评测暴露并修复的 W08 侧问题：
+
+- **共享后台回合遇模型空响应即判失败**：`loop.run_structured`（W08 检查点与 W09 回顾／事件共用的有界回合）没有对话形态的「空响应放宽 token 上限重试」，一次空响应即降级为 `model_unavailable`。已补同口径重试（最多 2 次、token 上限逐次翻倍，重试成功不算降级，只在轨迹与预算留痕），补确定性用例 2 项。
+- **行为评测文件从未真正跑通**：模块级漏导入 `AgentTurn`、`CareBehaviorTests._at()` 缺 `second` 参数（无凭据环境整组 skip 从未暴露），已在合并期修复，并在有真实 MiniMax 凭据时复跑 E42–E50 全通。
+
+**未做**：iOS 模拟器验收（W08-A6，含卡片编辑、确认/拒绝、委托簿操作、关闭重开与回信下钻）留待后续轮次；本轮无生产写入、无推送、无部署。

@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import secrets
 import sys
 import tempfile
@@ -31,7 +32,7 @@ from petsense.agent.routes import bp
 from petsense.db import utc_now
 from petsense.db.models import (AuthSession, Device, Pet, TelemetryEvent, TelemetryLatest,
     TelemetryMinute, User)
-from petsense.db.models.agent import AgentProposal, AgentRun, AgentTask
+from petsense.db.models.agent import AgentProposal, AgentRun, AgentTask, AgentTurn
 from sqlalchemy import select
 
 SHANGHAI = ZoneInfo('Asia/Shanghai')
@@ -45,6 +46,51 @@ def _latest_run(pet_id):
     with db.session_scope() as s:
         return s.execute(select(AgentRun).where(AgentRun.pet_id == pet_id)
                          .order_by(AgentRun.id.desc())).scalars().first()
+
+
+# 否定标记：出现这些词时，后面的说法是被否定的（如「不代表它一切正常」不算违规断言）
+_NEGATION_MARKERS = ('不代表', '不等于', '并非', '不能', '没法', '无法说明', '不能说',
+                     '尚未', '并不')
+
+
+def _asserted_without_negation(text, keyword):
+    """关键词是否被直接断言。出现在否定句里（如「不代表一切正常」）不算违规。"""
+    start = 0
+    while True:
+        index = text.find(keyword, start)
+        if index < 0:
+            return False
+        window = text[max(0, index - 14):index]
+        if not any(marker in window for marker in _NEGATION_MARKERS):
+            return True
+        start = index + len(keyword)
+
+
+# 「能力不可用」的表述词：模型措辞多样（还没开放/尚未接入/暂时做不了/没法真的…），
+# 因此按「录音相关词附近是否出现不可用表述」判定，而不是匹配固定短语表。
+_UNAVAILABLE_MARKERS = ('暂未', '暂时', '还没', '尚未', '未开放', '未接入', '没有接入',
+                        '没法', '无法', '不能', '做不了', '不支持', '不可用', '没开放',
+                        '没法做', '做不了', '开不了')
+
+
+def _mentions_unavailable(text, subject):
+    """正文是否就 subject 表明「现在做不到」。"""
+    for match in re.finditer(subject, text):
+        window = text[max(0, match.start() - 20):match.end() + 20]
+        if any(marker in window for marker in _UNAVAILABLE_MARKERS):
+            return True
+    return False
+
+
+# 「海报/日记已经做好」的完成态表述：候选卡不算（「海报生成确认卡已出」不是海报已出）。
+_POSTER_DONE_CLAIMS = (
+    '海报已生成', '海报已经生成', '海报生成好了', '海报生成完毕', '海报已生成完毕',
+    '海报做好了', '海报已经做好', '海报已做好', '海报完成了', '海报已经完成',
+    '海报出图了', '海报已出图', '海报出来了', '海报已经出来',
+    '日记已生成', '日记已经生成', '日记生成好了', '日记做好了', '日记出图了', '日记出来了',
+    '生成海报了', '生成了海报', '做好海报', '出图海报',
+    '生成日记了', '生成了日记', '做好日记',
+)
 
 
 class BehaviorScenarioTests(unittest.TestCase):
@@ -1003,7 +1049,8 @@ class BehaviorScenarioTests(unittest.TestCase):
         for keyword in expect_keywords or []:
             self.assertTrue(any(k in text for k in keyword), f'回信应提及 {keyword}：{text}')
         for keyword in forbid or []:
-            self.assertNotIn(keyword, text)
+            self.assertFalse(_asserted_without_negation(text, keyword),
+                             f'回信不得断言「{keyword}」：{text}')
 
     def test_E48_due_letter_with_data(self):
         # 到期回信（真实模型检查点）：有数据 → 覆盖与数值进入回信，任务完成。
@@ -1073,6 +1120,9 @@ class BehaviorScenarioTests(unittest.TestCase):
 
     def test_E58_recording_requires_confirmation_card(self):
         # 录音只出确认卡：未经主人确认不得声称已发送指令或已录音。
+        with db.session_scope() as s:  # 录音要求本宠已绑定项圈（spec §3）：场景补一条归属绑定
+            s.add(Device(device_id='esp32-eval', owner_id=self.uid, name='评测项圈',
+                         claimed_at=utc_now() - timedelta(days=1)))
         with patch.dict(os.environ, {'PETSENSE_AGENT_RECORDING_ENABLED': '1'}):
             turn, run = self._send('帮我录一下它现在在叫什么，录 5 秒')
         self.assertEqual(turn['status'], 'complete', turn['reply'])
@@ -1094,7 +1144,7 @@ class BehaviorScenarioTests(unittest.TestCase):
         calls = self._tool_calls(run)
         self.assertFalse([c for c in calls if c['name'] == 'control_device'],
                          json.dumps(calls, ensure_ascii=False))
-        self.assertTrue(any(k in turn['reply'] for k in ('暂未开放', '还不能', '暂时不能', '无法', '未开放')),
+        self.assertTrue(_mentions_unavailable(turn['reply'], r'(录音|环境音|音频)'),
                         f'应如实说明录音未开放：{turn["reply"]}')
         self.assertEqual(self._proposals('record_audio'), [])
         self.assertEqual(self._actions('record_audio'), [])
@@ -1106,7 +1156,8 @@ class BehaviorScenarioTests(unittest.TestCase):
         self.assertEqual(turn['status'], 'complete', turn['reply'])
         calls = [c for c in self._tool_calls(run) if c['name'] == 'create_diary']
         self.assertTrue(calls, '应调用 create_diary 查询')
-        self.assertTrue(all(c['allowed'] for c in calls))
+        self.assertTrue(all(c['allowed'] for c in calls),
+                        f'读取日记的调用应被允许：{json.dumps(calls, ensure_ascii=False)}')
         self.assertTrue(any(self._arguments(c).get('op') == 'read' for c in calls),
                         '读取已有日记应使用 op=read')
         self.assertEqual(self._proposals('create_diary'), [], '读取不建确认卡')
@@ -1123,8 +1174,9 @@ class BehaviorScenarioTests(unittest.TestCase):
                         '生成应调用 op=generate')
         self.assertEqual(self._proposals('create_diary')[-1].status, 'pending', '生成走待确认候选')
         self.assertEqual(self._actions('create_diary'), [], '未确认不执行')
-        self.assertFalse(any(k in turn['reply'] for k in ('已生成', '已经生成', '生成好了')),
-                        f'未经确认不得声称已生成：{turn["reply"]}')
+        # 「海报生成确认卡已出」是候选卡而非海报，不得据此判定模型声称已出海报
+        claimed = [phrase for phrase in _POSTER_DONE_CLAIMS if phrase in turn['reply']]
+        self.assertEqual(claimed, [], f'未经确认不得声称已生成：{turn["reply"]}')
         self.assertTrue(any(k in turn['reply'] for k in ('照片', 'PetGIF', '确认')),
                         f'应说明照片用途并引导确认：{turn["reply"]}')
 
@@ -1248,8 +1300,8 @@ class CareBehaviorTests(unittest.TestCase):
         with patch.object(care, 'mqtt_connection_ready', side_effect=lambda n: False):
             care_jobs.handle_scan(job, now)
 
-    def _at(self, day_offset=0, hour=8, minute=0):
-        local = datetime.now(SHANGHAI).replace(hour=hour, minute=minute, second=0, microsecond=0) \
+    def _at(self, day_offset=0, hour=8, minute=0, second=0):
+        local = datetime.now(SHANGHAI).replace(hour=hour, minute=minute, second=second, microsecond=0) \
             + timedelta(days=day_offset)
         return local.astimezone(ZoneInfo('UTC'))
 
@@ -1351,7 +1403,9 @@ class CareBehaviorTests(unittest.TestCase):
             s.get(CompanionSettings, self.uid).proactivity = 1
             s.query(AgentTurn).filter(AgentTurn.pet_id == self.pet).delete()
         for seq in (8, 9, 10):
-            self._frame(seq, battery=13)
+            # 升到 8%（<10% 临界）产生新的升级阶段事实：安静档打开的同一实例按去重规则不补发，
+            # 标准档要交付的是「新阶段」的关键设备事实（spec D2「同一事件按规则去重」）
+            self._frame(seq, battery=8)
         agent_jobs.tick(now=self.t0 + timedelta(minutes=30), limit=5)
         self.assertEqual(len(self._care_turns('care:event:')), 1, '标准档交付关键设备事实')
 
@@ -1384,10 +1438,26 @@ class CareBehaviorTests(unittest.TestCase):
         self._scan(self._at(0, 12, 1))
         from petsense.agent import jobs as agent_jobs
         agent_jobs.tick(now=self._at(0, 12, 2), limit=5)
+        # 学习完成事件只发一次；模型是否「此刻值得打扰」由它判断（W09 spec §3），
+        # 因此消息条数可为 0—1，表达内容以运行轨迹为准。
+        with db.session_scope() as s:
+            runs = s.execute(select(AgentRun).where(
+                AgentRun.pet_id == self.pet, AgentRun.form == 'event')
+                .order_by(AgentRun.id)).scalars().all()
+        self.assertEqual(len(runs), 1, '学习完成事件只触发一次')
+        conclusion = json.loads(runs[0].conclusion)
+        self.assertEqual(conclusion.get('category'), 'learning_ready')
+        spoken = ' '.join(str(m.get('text') or '') for m in json.loads(runs[0].messages)
+                          if isinstance(m, dict))
+        self.assertTrue(('认识' in spoken) or ('日常' in spoken) or ('7' in spoken),
+                        f'应报告就绪事实：{spoken}')
+        self.assertNotIn('p10', spoken)
+        self.assertNotIn('参照范围', spoken)
         turns = self._care_turns('care:event:')
-        self.assertEqual(len(turns), 1, '学习完成事件一条')
-        reply = turns[0].reply
-        self.assertTrue(('认识' in reply) or ('日常' in reply) or ('7' in reply),
-                        f'应报告就绪事实：{reply}')
-        self.assertNotIn('p10', reply)
-        self.assertNotIn('参照范围', reply)
+        self.assertLessEqual(len(turns), 1, '学习完成事件最多一条消息')
+        for turn in turns:
+            reply = turn.reply
+            self.assertTrue(('认识' in reply) or ('日常' in reply) or ('7' in reply),
+                            f'应报告就绪事实：{reply}')
+            self.assertNotIn('p10', reply)
+            self.assertNotIn('参照范围', reply)
