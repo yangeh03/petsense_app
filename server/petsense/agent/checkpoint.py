@@ -137,7 +137,7 @@ def evaluate(ctx, now):
         # 完全没有合格证据时，判为不合法输出（走有界重试与降级回信），不得交付。
         eligible = [slot for slot in (evidence.get('changeSlots') or []) if slot.get('eligible')]
         claimed = change_service.claim_directions(decision['text'])
-        if change_service.claims_personal_change(decision['text']):
+        if change_service.asserts_comparison(decision['text']):
             allowed = {slot.get('direction') for slot in eligible}
             if not eligible or (claimed and not claimed <= allowed):
                 decision = None

@@ -13,6 +13,7 @@ W11 决策点：比较单元统一为 (维度, 日期, 粗时段)。日回顾按
 证据（排除确认前、等待期与暂停期）。
 """
 import json
+import re
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
@@ -81,17 +82,48 @@ DIRECTION_CLAIMS = {
 }
 
 
+# 否定标记与分句边界：同一条分句里（结论词之前）出现否定标记时，后面的比较说法是
+# 被否定的**说明**而不是断言——「无法判断这是否比平时少」「也不能说比平时多或少」
+# 恰恰是如实交代，不得拦下（真实模型轮次里 W08 的到期回信因此稳定落降级信）。
+NEGATION_MARKERS = ('不能', '无法', '没法', '不会', '没有', '尚未', '还没', '不可', '不足以',
+                    '不应', '不要', '不宜', '不至于', '不代表', '不等于', '并非', '不是',
+                    '无从', '难以', '谈不上', '称不上', '说不准', '不确定', '未能', '说不清',
+                    '别', '无以')
+CLAUSE_BOUNDARIES = '，。；;、！？!?,:\n'
+
+
+def _affirmed_mentions(text, tokens):
+    """tokens 里被**肯定**提及的说法（否定式说明不算）。"""
+    text = text if isinstance(text, str) else ''
+    affirmed = []
+    for token in tokens:
+        for match in re.finditer(re.escape(token), text):
+            clause_start = max(text.rfind(boundary, 0, match.start())
+                               for boundary in CLAUSE_BOUNDARIES) + 1
+            clause = text[clause_start:match.start()]
+            if not any(marker in clause for marker in NEGATION_MARKERS):
+                affirmed.append(token)
+                break
+    return affirmed
+
+
 def claim_directions(text):
-    """文本里出现的比较方向集合（无方向词时为空集）。"""
-    found = set()
-    for direction, tokens in DIRECTION_CLAIMS.items():
-        if any(token in (text or '') for token in tokens):
-            found.add(direction)
-    return found
+    """文本里被**肯定断言**的比较方向集合（无方向词或只有否定式说明时为空集）。"""
+    return {direction for direction, tokens in DIRECTION_CLAIMS.items()
+            if _affirmed_mentions(text, tokens)}
+
+
+def asserts_comparison(text):
+    """文本是否**肯定地**断言了「与个人基线相比」；服务端据此拦截无依据的个人比较。
+
+    否定式的说明（「无法判断是否比平时多」「不能说比平时少」）如实交代了不能比较，
+    不算断言；只识别同一分句内的否定标记，分句里没有否定标记时仍判为断言。
+    """
+    return bool(_affirmed_mentions(text, CLAIM_TOKENS))
 
 
 def claims_personal_change(text):
-    """文本是否在断言「与个人基线相比」；用于服务端兜底拦截无依据的个人比较。"""
+    """文本是否**提到**「与个人基线相比」（纯子串，不区分否定式说明）；只用于诊断字段。"""
     if not isinstance(text, str):
         return False
     return any(token in text for token in CLAIM_TOKENS)

@@ -463,7 +463,7 @@ def handle_review(job, now):
         # b) 模型措辞的方向与已接受证据相反 → 用服务端锚定的比较句替换
         #    （比较仍被锚定，绝对事实叙述保留）。
         accepted = [f for f in findings if f['category'] == 'personal_change']
-        if change_service.claims_personal_change(say):
+        if change_service.asserts_comparison(say):
             if not accepted:
                 degraded.append('personal_change_without_evidence')
                 say = _review_fallback_text(facts)
