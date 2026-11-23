@@ -203,7 +203,7 @@ def _supersede_pending(session, pet, kind, row):
     return refreshed_turn_ids
 
 
-def decide(session, pet, proposal_id, action, now=None):
+def decide(session, pet, proposal_id, action, now=None, baseline_strategy=None):
     """主人决策：confirm 落库 / reject 仅翻转状态；幂等，异态 409。
 
     confirm 按 kind 分派生效处理器：profile_update 写档案；task_change 走
@@ -228,9 +228,18 @@ def decide(session, pet, proposal_id, action, now=None):
         elif action == 'confirm' and row.kind == KIND_TASK:
             from petsense.agent import tasks as task_service
             try:
-                task_service.apply_proposal(session, pet, row, now=now)
+                task_service.apply_proposal(session, pet, row, now=now,
+                                            baseline_strategy=baseline_strategy)
             except task_service.TaskError as exc:
                 raise ProposalError(exc.message, status=exc.status)
+            if baseline_strategy:
+                # 已确认卡展示实际生效的策略（写入后才算选定）
+                payload = json.loads(row.payload)
+                plan = payload.get('plan')
+                if isinstance(plan, dict) and plan.get('kind') == 'comparison':
+                    plan['baselineStrategy'] = baseline_strategy
+                    plan['baselineStrategyChoiceRequired'] = False
+                    row.payload = json.dumps(payload, ensure_ascii=False)
         row.status = 'confirmed' if action == 'confirm' else 'rejected'
         row.decided_at = now
         changed = True

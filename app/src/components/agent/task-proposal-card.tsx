@@ -17,6 +17,11 @@ import {
   thresholdUnitLabel,
 } from '@/components/agent/task-threshold';
 import { useTheme } from '@/hooks/use-theme';
+import {
+  BASELINE_STRATEGY_OPTIONS,
+  requiresStrategyChoice,
+  type AgentBaselineStrategy,
+} from '@/services/agent-change';
 import { ApiError } from '@/services/api';
 import {
   decideAgentProposal,
@@ -107,7 +112,9 @@ function planRows(plan: AgentTaskPlan): { label: string; value: string }[] {
     label: '观察窗口',
     value: `${formatLocal(plan.startAt)} – ${formatLocal(plan.deadlineAt)}（Asia/Shanghai）`,
   });
-  if (plan.baselineStrategy) {
+  if (requiresStrategyChoice(plan)) {
+    rows.push({ label: '基线选择', value: '需要你选：等基线就绪，或先记录绝对事实' });
+  } else if (plan.baselineStrategy) {
     rows.push({
       label: '基线选择',
       value: plan.baselineStrategy === 'wait_baseline' ? '等基线就绪后开始比较' : '先按事实观察',
@@ -142,13 +149,27 @@ export function TaskProposalCard({
     plan?.baselineStrategy ?? 'fact_first',
   );
   const [deadline, setDeadline] = useState<string | null>(null);
+  // W11 D3：基线未就绪时必须由主人明确选择（服务端不接受缺少选择的确认）
+  const choiceRequired = requiresStrategyChoice(plan);
+  const [strategyChoice, setStrategyChoice] = useState<AgentBaselineStrategy | null>(
+    choiceRequired ? null : (plan?.baselineStrategy ?? null),
+  );
 
   const decide = async (action: 'confirm' | 'reject') => {
     if (busy || proposal.status !== 'pending' || petId == null) return;
     setBusy(true);
     setError('');
+    if (action === 'confirm' && choiceRequired && !strategyChoice) {
+      setError('请先选择「等基线就绪」或「先记录绝对事实」');
+      return;
+    }
     try {
-      const result = await decideAgentProposal(petId, proposal.id, action);
+      const result = await decideAgentProposal(
+        petId,
+        proposal.id,
+        action,
+        action === 'confirm' ? (strategyChoice ?? undefined) : undefined,
+      );
       if (result.turn) applyTurn(result.turn);
     } catch (exc) {
       if (exc instanceof ApiError && exc.status === 409) {
@@ -400,6 +421,35 @@ export function TaskProposalCard({
               </ThemedText>
             </Pressable>
           </View>
+        </View>
+      ) : null}
+      {choiceRequired && proposal.status === 'pending' ? (
+        <View style={[styles.editor, { borderColor: theme.backgroundSelected }]}>
+          <ThemedText type="smallBold">个人基线还没就绪，请选一种方式</ThemedText>
+          <View style={styles.optionRow}>
+            {BASELINE_STRATEGY_OPTIONS.map((option) => (
+              <Pressable
+                key={option.value}
+                accessibilityRole="button"
+                accessibilityLabel={option.label}
+                onPress={() => setStrategyChoice(option.value)}
+                style={[
+                  styles.option,
+                  { borderColor: theme.backgroundSelected },
+                  strategyChoice === option.value && {
+                    backgroundColor: theme.tintBackground,
+                    borderColor: theme.tint,
+                  },
+                ]}
+              >
+                <ThemedText type="small">{option.label}</ThemedText>
+              </Pressable>
+            ))}
+          </View>
+          <ThemedText type="small" themeColor="textSecondary">
+            {BASELINE_STRATEGY_OPTIONS.find((option) => option.value === strategyChoice)?.hint ??
+              '两种方式都用同一条已确认的截止时间；选「等基线」会在基线就绪后才开始比较。'}
+          </ThemedText>
         </View>
       ) : null}
       {proposal.status === 'pending' ? (

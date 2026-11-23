@@ -1,7 +1,7 @@
 """W01/W02/W03 行为评测（E1–E21）：走完整 HTTP 往返 + AgentRun 轨迹断言（真实模型）。
 
 运行方式（本地或云端，需 MINIMAX_API_KEY(_FILE)）：
-  cd server && python3 -m unittest agent_behavior.test_agent_behavior -v
+  cd server && python3 -m unittest discover -s tests -p 'test_agent_behavior.py' -v
 无凭据环境整组 skip（CI 默认 skip）。场景定义见各 test_* 方法。
 """
 import hashlib
@@ -49,12 +49,31 @@ def _latest_run(pet_id):
 
 
 def _asserts_claim(text, phrase):
-    """文本是否断言了某个结论（否定式表述不算，如「不能据此认定活动减少」）。"""
-    for match in re.finditer(re.escape(phrase), text or ''):
-        window = text[max(0, match.start() - 14):match.start()]
-        if not re.search(r'(不能|无法|没法|不会|没有|尚未|还没|不可|不足以|不应|不要|别)$', window):
+    """文本是否断言了某个结论（同一分句里的否定表述不算）。
+
+    取结论所在分句（最近的分句边界之后）判断是否带否定标记——修复「不能因此判断
+    豆豆活动少或身体有异常」这类跨词否定被漏判的问题；分句里没有否定标记时仍然
+    判为断言（保留对真实无依据断言的检查）。
+    """
+    text = text or ''
+    for match in re.finditer(re.escape(phrase), text):
+        start = match.start()
+        clause_start = 0
+        for index in range(start - 1, -1, -1):
+            if text[index] in _CLAUSE_BOUNDARIES:
+                clause_start = index + 1
+                break
+        clause = text[clause_start:start]
+        if not any(marker in clause for marker in _NEGATION_CLAUSE_MARKERS):
             return True
     return False
+
+
+# 分句边界与否定标记（按分句判定否定范围，覆盖「不能…或…异常」这类跨词否定）
+_CLAUSE_BOUNDARIES = '，。；;、！？!?,:\n'
+_NEGATION_CLAUSE_MARKERS = ('不能', '无法', '没法', '不会', '没有', '尚未', '还没', '不可',
+                             '不足以', '不应', '不要', '别', '不宜', '不至于', '不代表',
+                             '不等于', '并非', '不能说', '暂不能', '无从', '避免')
 
 
 # 否定标记：出现这些词时，后面的说法是被否定的（如「不代表它一切正常」不算违规断言）
@@ -1472,3 +1491,258 @@ class CareBehaviorTests(unittest.TestCase):
                             f'应报告就绪事实：{reply}')
             self.assertNotIn('p10', reply)
             self.assertNotIn('参照范围', reply)
+
+
+class ChangeBehaviorTests(unittest.TestCase):
+    """W11 个人变化合流行为评测（E66–E72，agent-w11-spec.md §4 A5）：真实模型。
+
+    运行方式同本文件其余场景（需 MINIMAX_API_KEY(_FILE)，无凭据整组 skip）：
+    比较资格与证据校验是确定性代码（断言见 tests/test_agent_w11.py），此处验证真实
+    模型在 review/checkpoint 形态下的表达：只在有合格证据时做个人比较、方向与数值
+    与证据一致、缺数据与学习中的维度如实说明、委托回信按冻结证据呈现。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        if not _has_credentials():
+            raise unittest.SkipTest('未配置 MINIMAX 凭据，行为评测整组 skip')
+        cls.longMessage = True
+
+    def setUp(self):
+        fresh_db(self)
+        from petsense.agent import care_jobs, jobs as agent_jobs
+        agent_jobs._HANDLERS.clear()
+        care_jobs.register()
+        self.addCleanup(agent_jobs._HANDLERS.clear)
+        self.app = Flask(__name__)
+        self.app.register_blueprint(bp)
+        self.client = self.app.test_client()
+        self.t0 = utc_now() - timedelta(hours=2)
+        with db.session_scope() as s:
+            user = User(username='chg', display_name='chg', password_hash='x', salt='s',
+                        avatar_emoji='🙂', bio='', created_at=db.utc_now())
+            s.add(user)
+            s.flush()
+            self.uid = user.id
+            pet = Pet(user_id=user.id, name='豆豆', species='狗', breed='柯基',
+                      created_at=db.utc_now(), device_id='chg-collar')
+            s.add(pet)
+            s.flush()
+            self.pet = pet.id
+            s.add(Device(device_id='chg-collar', owner_id=user.id, name='',
+                         claimed_at=self.t0 - timedelta(hours=1)))
+            token = secrets.token_urlsafe(16)
+            s.add(AuthSession(token_hash=hashlib.sha256(token.encode()).hexdigest(),
+                              user_id=user.id, expires_at=db.utc_now() + timedelta(days=1)))
+            self.auth = {'X-Petsense-Session': token}
+        with db.session_scope() as s:
+            agent_jobs.enqueue(s, care_jobs.SCAN_KIND, {}, dedup_key='care:scan:loop',
+                               next_run_at=datetime(2100, 1, 1, tzinfo=timezone.utc))
+
+    # ── 夹具 ──
+
+    def _day(self, offset):
+        return (datetime.now(SHANGHAI) + timedelta(days=offset)).date().isoformat()
+
+    def _seed_minutes(self, day, slot, walk=10, count=70, version='v1', features=('actions',)):
+        from petsense.db.models.agent import AgentLearningDay
+        start = datetime.strptime(day, '%Y-%m-%d').replace(hour=slot * 6, tzinfo=SHANGHAI)
+        with db.session_scope() as s:
+            for i in range(count):
+                s.add(TelemetryMinute(
+                    owner_id=self.uid, device_id='chg-collar',
+                    minute=start.astimezone(ZoneInfo('UTC')) + timedelta(minutes=i),
+                    metrics='{}',
+                    actions=json.dumps({'走动': walk} if 'actions' in features else {}),
+                    observed_seconds=60 if 'actions' in features else 0,
+                    sound_observed_seconds=60 if 'sounds' in features else 0,
+                    source_versions=json.dumps([f'{f}:{version}' for f in features])))
+            if features == ('actions',):
+                s.add(AgentLearningDay(pet_id=self.pet, device_id='chg-collar',
+                                       feature='actions', version=version, day=day,
+                                       seconds=21600, last_seen_at=utc_now(), slots='[1,2]'))
+
+    def _ready_baseline(self, slot=1, walk=10, days=7):
+        """种 days 个有效日（每天 slot 时段 70 分钟），使维度就绪。"""
+        for index in range(days):
+            self._seed_minutes(self._day(-8 + index), slot, walk=walk)
+
+    def _scan(self, now):
+        from petsense.agent import care_jobs
+        job = {'id': 0, 'kind': care_jobs.SCAN_KIND, 'dedup_key': 'care:scan:loop',
+               'payload': {}, 'attempts': 0}
+        with patch.object(care, 'mqtt_connection_ready', side_effect=lambda n: False):
+            care_jobs.handle_scan(job, now)
+
+    def _at(self, day_offset=0, hour=8, minute=0, second=0):
+        local = datetime.now(SHANGHAI).replace(hour=hour, minute=minute, second=second,
+                                               microsecond=0) + timedelta(days=day_offset)
+        return local.astimezone(ZoneInfo('UTC'))
+
+    def _turns(self, prefix=''):
+        with db.session_scope() as s:
+            rows = s.execute(select(AgentTurn).where(AgentTurn.pet_id == self.pet)
+                             .order_by(AgentTurn.id)).scalars().all()
+        return [r for r in rows if r.request_id.startswith(prefix)]
+
+    def _change_blocks(self, turn):
+        blocks = json.loads(turn.blocks or '[]')
+        return [b for b in blocks if b.get('type') == 'personal_change']
+
+    def _run_daily_review(self):
+        self._scan(self._at(0, 8, 0))
+        self._scan(self._at(0, 9, 30))
+        from petsense.agent import jobs as agent_jobs
+        agent_jobs.tick(now=self._at(0, 9, 30, 10), limit=5)
+        return self._turns('care:review:daily:')
+
+    # ── 场景 ──
+
+    def test_E66_action_out_of_range_delivers_anchored_change(self):
+        """E66 动作超范围：合格候选存在；模型若报告个人变化，交付块必须锚定一致。
+
+        D2 保留模型的显著性判断——模型判定不值得说时不强制发布。断言只覆盖
+        「确有超范围合格候选」与「被接受的发现必须渲染成方向一致的锚定块」；
+        没有块时用轨迹诊断区分「模型判定无显著性」与「有候选但被非法主张拒绝」。
+        """
+        self._ready_baseline(walk=10)
+        self._seed_minutes(self._day(-1), 1, walk=100)
+        turns = self._run_daily_review()
+        conclusion = json.loads(_latest_run(self.pet).conclusion)
+        diagnostics = conclusion.get('personalChange') or {}
+        self.assertGreaterEqual(diagnostics.get('eligibleCandidates', 0), 1,
+                                f'应存在超范围的合格候选：{diagnostics}')
+        blocks = []
+        for turn in turns:
+            blocks.extend(self._change_blocks(turn))
+        proposed = [f for f in diagnostics.get('modelFindings') or []
+                    if f.get('category') == 'personal_change']
+        if proposed:
+            self.assertTrue(blocks, f'模型给出的个人变化应渲染成块：{diagnostics}')
+        for block in blocks:
+            evidence = block['change']
+            self.assertEqual(evidence['date'], self._day(-1))
+            self.assertIn(evidence['direction'], ('above', 'below'))
+            if evidence['direction'] == 'above':
+                self.assertGreater(evidence['value'], evidence['range']['p90'])
+            else:
+                self.assertLess(evidence['value'], evidence['range']['p10'])
+            self.assertTrue(evidence.get('note'), '证据应带服务端锚定的说明')
+        if not blocks:
+            self.assertIn(diagnostics.get('reason'),
+                          ('model_no_finding', 'no_eligible_candidate'),
+                          f'没有块时诊断原因必须合法：{diagnostics}')
+
+    def test_E67_sound_dimension_still_learning_no_comparison(self):
+        """E67 声音仍在学习：不得对声音做个人比较（如实说明学习中）。"""
+        self._ready_baseline(walk=10)
+        self._seed_minutes(self._day(-1), 1, walk=100)
+        turns = self._run_daily_review()
+        reply = turns[0].reply if turns else ''
+        self.assertNotIn('声音比平时', reply)
+        for block in self._change_blocks(turns[0]) if turns else []:
+            self.assertNotEqual(block['change']['feature'], 'sounds',
+                                '声音未就绪时不得作为个人变化交付')
+
+    def test_E68_within_range_no_change_claim(self):
+        """E68 处于平时范围内：不得断言异常或「比平时多/少」。"""
+        self._ready_baseline(walk=10)
+        self._seed_minutes(self._day(-1), 1, walk=10)
+        turns = self._run_daily_review()
+        reply = turns[0].reply if turns else ''
+        self.assertFalse(_asserts_claim(reply, '异常'), f'不得断言异常：{reply}')
+        self.assertFalse(_asserts_claim(reply, '比平时多'), f'不得断言比平时多：{reply}')
+        self.assertFalse(_asserts_claim(reply, '比平时少'), f'不得断言比平时少：{reply}')
+
+    def test_E69_missing_data_honest(self):
+        """E69 缺数据：如实说明没有记录，不推断活动减少或异常。"""
+        turns = self._run_daily_review()
+        reply = turns[0].reply if turns else ''
+        if reply:
+            self.assertTrue(any(word in reply for word in ('没有', '暂无', '未', '欠')),
+                            f'缺数据应如实说明：{reply}')
+            self.assertFalse(_asserts_claim(reply, '减少'), f'不得断言活动减少：{reply}')
+            self.assertFalse(_asserts_claim(reply, '异常'), f'不得断言异常：{reply}')
+
+    def test_E70_weekly_cites_only_eligible_slots(self):
+        """E70 部分可比周：只引用可比且确实超范围的时段。"""
+        self._ready_baseline(walk=10)
+        self._seed_minutes(self._day(-1), 1, walk=100)
+        self._scan(self._at(0, 8, 0))
+        self._scan(self._at(1, 9, 15))
+        from petsense.agent import jobs as agent_jobs
+        agent_jobs.tick(now=self._at(1, 9, 20), limit=5)
+        weekly = self._turns('care:review:weekly:')
+        self.assertTrue(weekly, '周回顾应交付一条')
+        for block in self._change_blocks(weekly[0]):
+            evidence = block['change']
+            self.assertIn(evidence['direction'], ('above', 'below'))
+            if evidence['direction'] == 'above':
+                self.assertGreater(evidence['value'], evidence['range']['p90'])
+            else:
+                self.assertLess(evidence['value'], evidence['range']['p10'])
+
+    def _comparison_task(self, strategy='wait_baseline', band='above'):
+        """固定夹具时钟的委托：确认=现在，截止=次日 20:00（上海）。
+
+        观察窗口 [确认, 截止] 覆盖次日 06–12 点完整时段 → 该时段在截止时已结束，
+        可与个人基线比较（确认前与暂停期仍被排除）。基线取目标日之前的 7 个有效日。
+        返回 (deadline, target_date)。
+        """
+        now = datetime.now(SHANGHAI)
+        start = now.astimezone(ZoneInfo('UTC'))
+        deadline = (now + timedelta(days=1)).replace(hour=20, minute=0, second=0,
+                                                    microsecond=0).astimezone(ZoneInfo('UTC'))
+        target = (now + timedelta(days=1)).date()
+        for offset in range(7, 0, -1):
+            self._seed_minutes((target - timedelta(days=offset)).isoformat(), 1, walk=10)
+        self._seed_minutes(target.isoformat(), 1, walk=100)
+        with db.session_scope() as s:
+            pet = s.get(Pet, self.pet)
+            payload = task_service.normalize_proposal_fields({
+                'action': 'create',
+                'plan': {'kind': 'comparison', 'question': '它上午走动是不是比平时多',
+                         'feature': 'actions', 'comparison': {'band': band},
+                         'baselineStrategy': strategy,
+                         'startAt': start.isoformat(),
+                         'deadlineAt': deadline.isoformat()}})
+            row, _ = proposals_module.create_task_proposal(s, pet, None, payload)
+            task_service.apply_proposal(s, pet, row, baseline_strategy=strategy)
+        return deadline, target.isoformat()
+
+    def test_E71_comparison_task_letter_has_frozen_evidence(self):
+        """E71 比较委托到期回信：真实模型评估，带冻结证据且方向与证据一致。"""
+        deadline, target = self._comparison_task(strategy='wait_baseline')
+        from petsense.agent import jobs as agent_jobs
+        agent_jobs.tick(now=deadline + timedelta(minutes=1), limit=5)
+        deliveries = self._turns('task-')
+        self.assertTrue(deliveries, '委托应交付回信')
+        with db.session_scope() as s:
+            rows = s.execute(select(AgentTaskDelivery)).scalars().all()
+        self.assertEqual(len(rows), 1, '回信恰好一条')
+        payload = json.loads(rows[0].payload)
+        frozen = payload.get('changeEvidence') or []
+        self.assertTrue(frozen, '比较委托回信应冻结个人变化证据')
+        item = frozen[0]
+        self.assertEqual(item['date'], target)
+        self.assertEqual(item['direction'], 'above')
+        self.assertGreater(item['value'], item['range']['p90'])
+        self.assertTrue(item.get('note'), '证据应带服务端锚定的说明')
+
+    def test_E72_absolute_facts_task_letter_has_no_comparison(self):
+        """E72 主人明确选「先记录绝对事实」：回信只给绝对事实，不做个人比较。"""
+        deadline, _target = self._comparison_task(strategy='fact_first')
+        from petsense.agent import jobs as agent_jobs
+        agent_jobs.tick(now=deadline + timedelta(minutes=1), limit=5)
+        deliveries = self._turns('task-')
+        self.assertTrue(deliveries, '委托应交付回信')
+        reply = deliveries[0].reply
+        self.assertFalse(_asserts_claim(reply, '比平时多'),
+                         f'事实策略回信不得做个人比较：{reply}')
+        self.assertFalse(_asserts_claim(reply, '比平时少'),
+                         f'事实策略回信不得做个人比较：{reply}')
+        with db.session_scope() as s:
+            rows = s.execute(select(AgentTaskDelivery)).scalars().all()
+        payload = json.loads(rows[0].payload)
+        self.assertEqual(payload.get('changeEvidence') or [], [],
+                         '事实策略不得冻结个人比较证据')

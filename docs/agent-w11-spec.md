@@ -1,6 +1,6 @@
 # W11 个人变化合流
 
-2026-11-23，负责人已确认 D1–D6。实现基线为 main `5d945b4`，复用 W05 基线、W08 委托和 W09 回顾。本文的验收项须在工作包交付时回写证据。
+2026-11-23，负责人已确认 D1–D7。实现基线为 main `5d945b4`，复用 W05 基线、W08 委托和 W09 回顾。本文的验收项须在工作包交付时回写证据。
 
 ## 决策
 
@@ -12,6 +12,7 @@
 | D4 | 日回顾按对应粗时段比较。周回顾汇总本周已结束且可比的日内时段，不作整周总量比较。 |
 | D5 | 选择记录绝对事实后持续执行原计划。切到相对比较须重新确认。 |
 | D6 | 交付时冻结样本窗口、基线版本与修订号、分位数、观测值和覆盖。历史回信按原证据展示。 |
+| D7 | 委托按相同粗时段逐次比较；回信指出日期和时段。委托窗口内部分时段超出范围时，不作多日总量变化结论。 |
 
 ## 比较、交付与委托
 
@@ -33,3 +34,66 @@
 | W11-A7 | 浅色和深色各留确认卡、变化或回信卡及证据展开截图。核对多行文本、按钮层级、现有卡片的间距与容器、状态色语义和 theme token，至少检查一个紧凑尺寸。 |
 
 上线前必须过客户端 lint、typecheck、format:check、test 与 Web 构建，以及服务端全量 unittest。记录 CI、模拟器截图与生产只读抽查结果；没有真实就绪证据的宠物保持原学习状态。
+
+生产观测只读抽查（2026-11-23，腾讯云生产 SQLite 以 `mode=ro` 查询测试账号的当前设备）：2026-11-19 至 2026-11-20，动作有 2 个观测日，其中 1 个有效日。声音有 2 个观测日，0 个有效日。该记录支持生产学习态核对，已就绪场景使用隔离夹具验收。
+
+## 实施记录（2026-11-23，分支 codex/agent-w11-w13，基于 main 5d945b4）
+
+### 6.1 交付面
+
+- **服务端新模块 `server/petsense/agent/change.py`**：比较单元统一为「维度 × 日期 × 粗时段」（D2）。`compare_day()` 输出候选记录（`evidenceId=维度:日期:时段`），并如实区分五类不可比原因：维度学习（`baseline_learning`）、时段样本不足（`slot_sample_insufficient`）、观测时段未结束（`slot_not_ended`）、当前覆盖不足（`coverage_insufficient`）、有效但处于范围内（`within`）；边界值等于 p10 或 p90 一律视为范围内。目标日期自身不入样本（只取该日期之前的基线有效日）。`freeze()` 冻结 D6 证据：样本窗口、基线版本与修订号、p10/p50/p90、实际值、覆盖与方向。`slot_observations()` 按有效观察窗口汇总逐日逐时段实际值与覆盖。`claims_personal_change()` 为服务端兜底：有个人比较口播但无合格证据时拒绝该结论。
+- **W05 复用**：`baseline.py` 增 `slot_samples()` / `target_slots()` / 公开别名 `band()`，`_dimension_payload` 改为复用同一口径（单一真值源）。未新增表或迁移（alembic 不变）。
+- **回顾侧（W09 合流）**：`care_jobs.review_facts()` 增 `personalChange` 段（`review_candidates` 先惰性物化基线）。模型发现新增 `category=personal_change`，必须带 `evidenceId`；服务端校验引用存在、方向相符、数值相符，任一不符即拒绝该发现。没有任何合格候选时，模型正文出现「比平时/高于平时」等比较口播即触发降级（`personal_change_without_evidence`）并回退绝对事实描述。交付新增 `personal_change` 块（冻结证据）与时段来源下钻；主题依据内嵌冻结证据。D4：日回顾按对应粗时段比较；周回顾只汇总本周已结束且可比的日内时段，不作整周总量比较。同锚点（`change:<evidenceId>`）跨日/周回顾合并，不重复开题。
+- **委托侧（W08 合流）**：`tasks.materialize()` 增 `changeSlots`（只算有效观察窗口——排除确认前、等待基线期与暂停期；换版前的旧版本数据不补齐新版本）。`condition_state()` 的个人比较改为逐时段证据：存在同方向且严格超范围的时段才算达成。事实策略（`fact_first`）全程只给绝对事实，不把原比较目标当作达成。`_deliver()` 冻结证据进交付 payload 与 `task_result` 块。
+- **D3/D5 确认协议**：基线未就绪时，工具执行器给比较类候选标记 `baselineStrategyChoiceRequired`；决策端点新增 `baselineStrategy`（`fact_first` / `wait_baseline`），服务端校验选项与归属，缺少明确选择的新版候选不静默生效（400）；旧候选与旧客户端沿用兼容解析（用计划既定策略）。两种选择都沿用原确认的截止时间。切换到相对比较须重新确认（新增计划版本 → 新确认卡）。
+- **工具面（P00 先更新）**：`read_baseline` 对 `review` 形态开放；`event` 形态权限不扩大（硬件事件无个人比较）。
+- **客户端**：`services/agent-change.ts`（纯函数：两项基线选择、冻结证据展示行、单位与范围格式化、来源窗口）；`components/agent/change-card.tsx`（冻结证据可展开）；`task-result-card.tsx` 增证据行；`task-proposal-card.tsx` 增「等基线就绪 / 先记录绝对事实」两项选择，未选择不允许确认并随决策提交 `baselineStrategy`；`agent-message.tsx` 渲染 `personal_change` 块（未知块安全降级）。
+
+### 6.2 自动测试证据（本分支，2026-11-23）
+
+- 服务端：`PETSENSE_MQTT_DISABLED=1 .venv/bin/python -m unittest discover -s tests` → **606 例全过（2 skip = 真实 MiniMax 凭据门控的行为评测）**。新增 `tests/test_agent_w11.py` **30 例**：A1（低于 p10 / 高于 p90 / 边界值视为范围内 / 空窗=学习中 / 时段未结束 / 覆盖刚满与不足 / 时段样本不足 / 动作与声音就绪不一致 / 基线换版 / 目标日期自排除 / 声音维度按事件次数）、A2（日回顾按实际日期时段、周回顾混合可比与不可比、伪造证据 ID/方向/数值被拒、无候选时的口播兜底、同窗口重跑去重、跨宠物隔离）、A3（两种选择生效、缺选择不生效、取消、重复提交幂等、旧候选兼容、切换须重新确认、等待基线后就绪转观察）、A3/A4（观察窗口排除确认前与暂停期、事实策略无个人比较、交付冻结证据、基线重算后历史证据不变、二次交付去重）。
+- 契约变更同步更新既有测试（属 W11 已确认的契约变化，非回归）：`test_agent_w01` 工具面（review 含 `read_baseline`、event 不含）、`test_agent_w09` 同样口径、`test_agent_w08` 确认请求带上主人实际选择。
+- 客户端：`npm test` **120/120**（新增 `tools/agent-change.test.cjs` 5 例：选择必需性、两项文案、冻结证据展示口径、展示行顺序与样本窗口/版本、缺字段安全降级）；`npm run typecheck`、`npm run lint`、`npm run format:check` 均通过。
+
+### 6.3 未完成与移交（下一轮）
+
+1. **真实 MiniMax 行为评测（W11-A5）**：E66–E72 尚未写入 `tests/agent_behavior/`（本轮无凭据，且时间预算用于确定性逻辑与客户端）。需在有凭据环境补写并复跑：动作异常、声音仍学习、正常范围、缺数据、部分可比周、两类委托回信，并记录模型方差。
+2. **iOS 模拟器验收（W11-A6/A7）**：确认卡两项选择、到期回信、来源下钻与返回；浅色/深色各留确认卡、变化或回信卡及证据展开截图，至少一个紧凑尺寸。本轮未做（按约定由 Codex 在集成后统一调度）。
+3. **生产只读抽查**：优先用测试账号真实观测核对；生产覆盖不足时用授权只读副本核对真实缺数据场景，用独立种子验证就绪与变更。当前生产账号有效日不足，个人变化候选预计为零，属预期。
+4. **区域维度**：D1 明确区域显示待接入（定位侧未交付可验证的区域历史与基线），本轮未实现。
+5. **委托对比口径已确认**：见 D7。证据冻结与判定按「维度 × 日期 × 粗时段」处理。
+
+### 6.4 复审修复（2026-11-23，Codex code review follow-up）
+
+按复审意见修复已验证缺陷；**保留槽位级委托实现**（负责人 D7 已确认：委托按相同粗时段逐次比较、回信指出日期和时段、不作多日总量变化结论），未引入多日指标。
+
+1. **历史口径的就绪与版本（issue 1）**：新增 `baseline.states_before()` / `baseline.reference_before()`——目标日期的维度状态与活跃版本按「该日期当时」判定（只统计 `day < 目标日` 的有效日与最后观测时间）。参照样本按 W05 规则就地物化（该日期之前最近 28 个有效日；明细已裁剪的有效日计入进度、不入样本），不再依赖「今天」物化的基线行。周回顾用 `_reference_batch()` 一次取分钟、按各目标日期切窗口，周内换版时分别取用当时版本。回归：`test_later_learning_days_do_not_reach_gate_for_past_target`、`test_target_day_uses_version_active_at_that_day`、`test_weekly_review_mixes_comparable_and_incomparable`（`_day(-2)` 当时只有 6 个有效日 → 不得被后来凑够的第 7 天变成已就绪）。
+2. **证据锚定与措辞校验（issue 2）**：个人变化发现必须显式给出 `direction` 与 `value` 且与证据相符，缺失或不符一律拒绝（此前允许缺失）；被拒发现不进主题、不进来源、不作授权证据。用户可见比较句由服务端生成（`change.comparative_clause()`，方向与数值只来自已验证证据，含 D7 要求的日期与时段），模型自由文本不再承载比较结论；模型措辞方向与已接受证据相反时改为交付服务端锚定的比较句 + 绝对事实（`personal_change_narrative_corrected`），比较仍被锚定。检查点回信同受约束：无合格证据或方向相反 → 判为不合法输出，走有界重试与降级回信（`comparison_without_evidence`）。发布溯源写入轨迹 `publication.provenance`（`model_high_accepted` / `legacy_default_high` 等），供 W13 后续区分，未改动 W12/W13 代码。
+3. **fact_first 的旧语义（issue 3）**：只有主人在确认卡上**明确**选了「先记录绝对事实」的计划（`baselineStrategyExplicit`）才只给绝对事实；归一化默认值与旧计划沿用 W08 实际语义（先按事实观察，基线就绪后仍会做个人比较），避免默认悄悄改变已确认计划。切换到相对比较仍须重新确认（新版本 + 新确认卡）。
+4. **选择来源可信（issue 4）**：`baseline_ready()` 先物化所选宠物的**最新**基线再判断；确认卡编辑入口（`POST /task-proposals`）按所选宠物最新基线重判「须明确选择」，并保留主人已做过的明确选择，不会因旧候选或直接改候选悄悄换策略。
+5. **委托冻结证据的来源下钻（issue 5）**：冻结证据新增服务端锚定 `note` 与来源标签（`sourceLabel` / `deviceId`），交付来源逐条给出与证据匹配的时段窗口。
+
+复审后自动证据：服务端 `python -m unittest discover -s tests` → **608 例全过（3 skip = 凭据门控的行为评测类）**；`tests/test_agent_w11.py` 由 30 例增至 **32 例**（新增历史口径与版本回归）。客户端 `npm test` **120/120**，`typecheck`、`lint`、`format:check` 均通过。
+
+### 6.5 仍未完成
+
+- **E66–E72 已写入** `tests/agent_behavior/test_agent_behavior.py`（`ChangeBehaviorTests`：动作超范围、声音仍学习、正常范围、缺数据、部分可比周、两类委托回信），**本机无凭据整组 skip，尚未真实跑过**——需在有凭据环境复跑并记录模型方差。
+- iOS 模拟器验收（W11-A6/A7）与生产只读抽查仍未做（按约定由 Codex 在集成后统一调度）。
+
+### 6.6 行为评测修复（2026-11-23，Tencent 隔离真实模型轮次后）
+
+真实模型轮次结果：E67、E68、E70 通过；E66 未渲染 personal_change 块；E69 误报；E71/E72 未到达真实模型。修复如下（仅服务端与测试文件，客户端未改，iOS 模拟器源码与 UI 保持稳定）：
+
+1. **E66 —— 比较 schema 与定位信息**：
+   - 回顾输出 schema 的 JSON 示例补齐个人变化的**确切必填字段**：`evidenceId`、`direction`、`value`（原示例只列了 category/anchor/title/text，模型没有可照抄的结构）。
+   - 回顾事实新增 `personalChange.eligible` 列表，把合格候选的 `evidenceId`/`direction`/`value`/`range`/日期/时段单独列出，供模型原样照抄（`candidates` 仍保留全部时段与不可比原因）。
+   - 服务端校验放宽为：`evidenceId` 必需且必须命中合格候选；模型给出的 `direction`/`value` **给出时**必须与证据相符（不符 = 相反结论，拒绝），缺省时以服务端证据为准——用户可见比较句始终由服务端锚定（`change.comparative_clause()`），不依赖模型措辞。原实现要求三者都必须显式给出，真实模型常只给 evidenceId，导致发现被误拒。
+   - 轨迹新增定位信息 `conclusion.personalChange`：`eligibleCandidates`、`candidateCount`、`accepted`、`reason`（`no_eligible_candidate` / `rejected_findings` / `model_no_finding` / `accepted`）、`rejects`（含 `missing_evidence_id` / `unknown_evidence` / `not_eligible` / `direction_mismatch` / `value_mismatch`）、`modelFindings`（模型实际提出的发现）、`modelProvidedSay`、`sayClaimsComparison`、`sayDirections`。据此可区分「模型判定无显著性」「模型给了非法主张」「没有合格候选」与运行时错误（只含计数与状态，不含真实数据）。
+   - **保留 D2 的显著性判断**：E66 不再强制发布。断言改为「确有超范围合格候选」+「模型若报告了个人变化，交付块必须方向/数值锚定一致」+「没有块时诊断原因必须合法」。真实的「有效发现 → 渲染锚定块」由确定性用例 `test_review_accepts_valid_evidence_and_freezes_it` 覆盖。
+2. **E69 —— 否定范围误报**：`_asserts_claim` 原先只看结论词前 14 个字符且要求否定词紧邻结尾，「不能因此判断豆豆活动少或身体有异常」因此被误判为断言异常。改为**按分句判定否定范围**（最近的分句边界之后、结论词之前的整句内出现否定标记即视为否定），分句内无否定标记时仍判为断言——真实的无依据断言检查保留。
+3. **E71/E72 —— 夹具时钟无效**：原夹具用「今天 10:00」作截止时间，在 23 点运行时已过期，`normalize_plan` 以「截止时间需在未来」拒绝，任务从未创建，自然到不了真实模型。改为固定夹具时钟：确认=现在，截止=次日 20:00（上海），观察窗口 `[确认, 截止]` 覆盖次日 06–12 点完整时段（该时段在截止时已结束、可比较；确认前与暂停期仍被排除），基线取目标日之前的 7 个有效日，并显式在截止后 1 分钟运行作业。E71 断言回信冻结了目标日该时段的证据（方向 above、实际值 > p90、带服务端锚定 note），E72 断言事实策略回信既无个人比较断言也无冻结证据。
+   - 同时在证据里新增 `comparisonAllowed`（事实策略为 false），检查点系统提示据此要求「只能陈述绝对事实，不得做任何个人比较」——避免把主人的明确选择变成降级回信。
+   - 新增**本地无凭据**用例 `DelegationFixtureTests`（两条）：同一夹具 + 假模型直接证明「比较委托产出逐时段冻结证据」「事实策略委托不产出个人比较」，证明两条路径确实到达目标评估。
+4. 其余：**仅服务端与测试文件改动**，客户端源码与 UI 未动（iOS 模拟器验收用的 checkout 保持稳定）；未新增依赖、未提交、未推送、未部署、未访问生产。
+
+修复后自动证据：服务端 `python -m unittest discover -s tests` → **610 例全过（3 skip = 凭据门控的行为评测类）**；`tests/test_agent_w11.py` **34 例全过**（新增 2 条委托夹具本地用例）。E66–E72 的真实模型轮次需用未变更的凭据复跑（命令见下）。
