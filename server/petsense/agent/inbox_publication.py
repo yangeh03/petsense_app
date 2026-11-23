@@ -57,11 +57,14 @@ def _turn_links_run(turn, run_id):
 
 
 def _topic_change_ids(topic):
-    """主题上冻结的个人变化证据 id（handle_review 开题/合并提报时写入的 change 行）。"""
+    """主题上冻结的个人变化证据 id（handle_review 开题时写 `change` 行，合并提报时追加 `evidence` 行）。"""
     ids = set()
     for entry in json.loads(topic.evidence or '[]'):
-        change = entry.get('change') if isinstance(entry, dict) else None
-        if isinstance(change, dict) and change.get('evidenceId'):
+        if not isinstance(entry, dict):
+            continue
+        change = next((entry[key] for key in ('change', 'evidence')
+                       if isinstance(entry.get(key), dict)), None)
+        if change is not None and change.get('evidenceId'):
             ids.add(str(change['evidenceId']))
     return ids
 

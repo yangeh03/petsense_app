@@ -319,6 +319,22 @@ class W11W12PublicationTests(unittest.TestCase):
             self.assertEqual(row.push_candidate, 0)
             self.assertEqual(row.high_relevance, 0)
 
+    def test_merged_evidence_row_is_recognized(self):
+        """合并提报给既有主题追加的是 `evidence` 行（不是 `change` 行），同样算冻结证据。"""
+        run_id = self._review_run()
+        self._review_turn(run_id)
+        topic_id = self._review_topic(run_id=run_id)
+        with db.session_scope() as s:
+            topic = s.get(AgentCareTopic, topic_id)
+            topic.evidence = json.dumps([{
+                'at': '2026-11-24T09:00:00.000Z', 'kind': 'review', 'note': '再次提到',
+                'window': WINDOW, 'evidence': _frozen_evidence()}], ensure_ascii=False)
+        self._project()
+        with db.session_scope() as s:
+            row = self._care_item(s)
+            self.assertEqual(row.push_candidate, 1)
+            self.assertEqual(row.frozen_evidence, 1)
+
     def test_change_of_other_slot_in_turn_is_not_elevated(self):
         """回合交付的是另一个时段的证据，不替本主题作数。"""
         run_id = self._review_run()
