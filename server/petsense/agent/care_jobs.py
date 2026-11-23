@@ -112,6 +112,7 @@ def handle_scan(job, now):
             if not care.review_eligible(s, pet, now):
                 continue
             care.ensure_pet_state(s, pet, now)
+            level = settings_service.load(s, pet.user_id).get('proactivity', 1)
             for plan in care.due_reviews(s, pet, now):
                 jobs.enqueue(s, REVIEW_KIND,
                              {'pet': pet.id, 'kind': plan['kind'], 'key': plan['key'],
@@ -122,11 +123,22 @@ def handle_scan(job, now):
                              next_run_at=now)
             for item in care.learning_events(s, pet, now):
                 jobs.enqueue(s, EVENT_KIND, item,
-                             dedup_key='care:event:topic:%d:%s' % (item['topic'], item['phase']),
+                             dedup_key=care.event_job_key(item['topic'], item['phase'], level),
+                             next_run_at=now)
+            # 已开题但还没发出首发消息的事件：主动程度切档后要能真的补上
+            # （安静档下事件只落主题不发消息；改成标准/多提醒档后按新档位补发一次）
+            pending = s.execute(select(AgentCareTopic).where(
+                AgentCareTopic.pet_id == pet.id, AgentCareTopic.kind.in_(('device', 'learning')),
+                AgentCareTopic.status.in_(('open', 'ongoing')),
+                AgentCareTopic.delivered == 0)).scalars().all()
+            for topic in pending:
+                jobs.enqueue(s, EVENT_KIND, {'topic': topic.id, 'phase': 'open'},
+                             dedup_key=care.event_job_key(topic.id, 'open', level),
                              next_run_at=now)
         for item in care.detect_stale(s, now):
-            jobs.enqueue(s, EVENT_KIND, item,
-                         dedup_key='care:event:topic:%d:%s' % (item['topic'], item['phase']),
+            level = settings_service.load(s, item['pet']).get('proactivity', 1)
+            jobs.enqueue(s, EVENT_KIND, {'topic': item['topic'], 'phase': item['phase']},
+                         dedup_key=care.event_job_key(item['topic'], item['phase'], level),
                          next_run_at=now)
     return {'next_run_at': now + timedelta(seconds=care.SCAN_INTERVAL_S)}
 

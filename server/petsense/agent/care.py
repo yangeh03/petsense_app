@@ -380,6 +380,16 @@ def _close_device_topics(session, owner_id, reason, now):
         close_topic(row, reason, now)
 
 
+def event_job_key(topic_id, phase, level):
+    """事件作业的稳定键：按主题 + 阶段 + 主动程度分键。
+
+    主动程度进键是因为「切档后实际生效」（spec §4 A4）：安静档下事件已开题但没有
+    首发消息，改成标准档后必须能真的再跑一次把消息补上；同一档位不重复建作业，
+    消息本身仍由 request key 去重（同一事件实例只发一条首发消息）。
+    """
+    return 'care:event:topic:%d:%s:p%d' % (topic_id, phase, level)
+
+
 def observe_frame_and_queue(session, device_id, owner_id, payload, received_at):
     """telemetry 入库事务内的检测钩子：推进水位并把触发的运行入队（同事务提交）。
 
@@ -390,10 +400,12 @@ def observe_frame_and_queue(session, device_id, owner_id, payload, received_at):
         triggered = observe_frame(session, device_id, owner_id, payload, received_at)
         if triggered:
             from petsense.agent import jobs
+            from petsense.agent import settings as settings_service
+            level = settings_service.load(session, owner_id).get('proactivity', 1)
             for item in triggered:
                 jobs.enqueue(session, 'care_event',
                              {'topic': item['topic'], 'phase': item['phase']},
-                             dedup_key='care:event:topic:%d:%s' % (item['topic'], item['phase']),
+                             dedup_key=event_job_key(item['topic'], item['phase'], level),
                              next_run_at=received_at)
     except Exception:
         logger.exception('care observe_frame failed for device %s', device_id)
@@ -449,7 +461,7 @@ def detect_stale(session, now, connection_ready=None):
                                                % (iso_z(row.last_frame_at),
                                                   (now - row.last_frame_at).total_seconds())}])
         if opened is not None:
-            triggered.append({'topic': opened.id, 'phase': 'open'})
+            triggered.append({'topic': opened.id, 'phase': 'open', 'pet': pet_id})
     return triggered
 
 
@@ -483,7 +495,7 @@ def learning_events(session, pet, now=None):
                             evidence=[{'at': iso_z(now), 'kind': 'scan', 'dimension': key,
                                        'from': previous, 'to': status}])
         if opened is not None:
-            triggered.append({'topic': opened.id, 'phase': 'open'})
+            triggered.append({'topic': opened.id, 'phase': 'open', 'pet': pet.id})
     if current != watermark:
         if state is None:
             state = CarePetState(pet_id=pet.id, enabled_at=now, updated_at=now)

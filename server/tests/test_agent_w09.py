@@ -639,6 +639,33 @@ class W09CareTests(unittest.TestCase):
         self.assertGreater(row.next_run_at, now)
 
 
+class W09ProactivitySwitchTests(W09CareTests):
+    """切档后实际生效（W09 §4 A4）：安静档开题不发消息，改档后补发一次首发消息。"""
+
+    def test_proactivity_switch_delivers_pending_open_topic_once(self):
+        self._set_proactivity(0)
+        for seq in (1, 2, 3):
+            self._frame(seq, battery=15)
+        with patch('petsense.agent.model.respond', _fake_model([
+                _json_out({'say': '项圈电量偏低。', 'disturb': True})])):
+            jobs.tick(now=self.t0 + timedelta(minutes=10), limit=5)
+        self.assertEqual(len(self._topics('battery_low')), 1, '主题已开')
+        self.assertEqual(self._turns('care:event:'), [], '安静档不发主动会话消息')
+
+        # 改成标准档：扫描按新档位补排事件作业，首发消息补发一次
+        self._set_proactivity(1)
+        self._scan(self.t0 + timedelta(minutes=20))
+        with patch('petsense.agent.model.respond', _fake_model([
+                _json_out({'say': '项圈电量偏低，方便时帮它充下电。', 'disturb': True})])):
+            jobs.tick(now=self.t0 + timedelta(minutes=21), limit=5)
+        self.assertEqual(len(self._turns('care:event:')), 1, '切档后补发一条首发消息')
+
+        # 同档位再扫不重复发
+        self._scan(self.t0 + timedelta(minutes=30))
+        with patch('petsense.agent.model.respond', _fake_model([
+                _json_out({'say': '又来一次。', 'disturb': True})])):
+            jobs.tick(now=self.t0 + timedelta(minutes=31), limit=5)
+        self.assertEqual(len(self._turns('care:event:')), 1, '同一事件实例只发一条首发消息')
 class W09ReviewIntegrationTests(W09CareTests):
     """W09 评审修复的确定性回归：消息去重、主动程度门槛、调度资格、WS 交付与轨迹。"""
 

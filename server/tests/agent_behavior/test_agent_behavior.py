@@ -1101,9 +1101,9 @@ class CareBehaviorTests(unittest.TestCase):
         with patch.object(care, 'mqtt_connection_ready', side_effect=lambda n: False):
             care_jobs.handle_scan(job, now)
 
-    def _at(self, day_offset=0, hour=8, minute=0):
-        local = datetime.now(SHANGHAI).replace(hour=hour, minute=minute, second=0, microsecond=0) \
-            + timedelta(days=day_offset)
+    def _at(self, day_offset=0, hour=8, minute=0, second=0):
+        local = datetime.now(SHANGHAI).replace(hour=hour, minute=minute, second=second,
+                                               microsecond=0) + timedelta(days=day_offset)
         return local.astimezone(ZoneInfo('UTC'))
 
     def _care_turns(self, prefix='care:'):
