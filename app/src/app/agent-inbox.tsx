@@ -13,6 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
 import { useAgentInbox } from '@/hooks/use-agent-inbox';
+import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
 import { INBOX_SOURCE_LABEL } from '@/services/agent-inbox';
 
@@ -21,19 +22,41 @@ export default function AgentInboxScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { items, unreadCount, loading, error, refresh, markAllRead } = useAgentInbox();
+  const { user } = useAuth();
+  const signedIn = user != null;
 
   return (
-    <View style={[styles.screen, { backgroundColor: theme.background }]}>
+    <View
+      style={[
+        styles.screen,
+        { backgroundColor: theme.background, paddingTop: insets.top + Spacing.two },
+      ]}
+    >
       <View style={styles.header}>
-        <ThemedText type="title">收件箱</ThemedText>
+        <View style={styles.headerLead}>
+          <Pressable
+            onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="返回"
+          >
+            <SymbolView
+              name={{ ios: 'chevron.left', android: 'arrow_back', web: 'arrow_back' }}
+              size={24}
+              tintColor={theme.tint}
+            />
+          </Pressable>
+          <ThemedText type="title">收件箱</ThemedText>
+        </View>
         {unreadCount > 0 ? (
           <Pressable
             onPress={() => void markAllRead()}
             hitSlop={10}
+            accessibilityRole="button"
             accessibilityLabel="全部标为已读"
             style={[styles.action, { backgroundColor: theme.tintBackground }]}
           >
-            <Text style={[styles.actionText, { color: theme.tint }]}>全部已读</Text>
+            <Text style={[styles.actionText, { color: theme.tintForeground }]}>全部已读</Text>
           </Pressable>
         ) : null}
       </View>
@@ -42,19 +65,27 @@ export default function AgentInboxScreen() {
         contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + Spacing.four }]}
         refreshControl={undefined}
       >
-        {loading && items.length === 0 ? (
+        {!signedIn ? (
+          <Pressable onPress={() => router.push('/login')} accessibilityRole="button">
+            <ThemedText type="small" style={{ color: theme.tintForeground }}>
+              登录后查看通知
+            </ThemedText>
+          </Pressable>
+        ) : null}
+        {signedIn && loading && items.length === 0 ? (
           <ThemedText type="small" themeColor="textSecondary">
             正在读取…
           </ThemedText>
         ) : null}
         {error ? (
-          <Pressable onPress={() => void refresh()}>
+          <Pressable onPress={() => void refresh()} accessibilityRole="button">
             <ThemedText type="small" themeColor="textSecondary">
               {error}（点击重试）
             </ThemedText>
           </Pressable>
         ) : null}
-        {!loading && items.length === 0 ? (
+        {/* 读失败时不能同时说「没有通知」：空态只在确实读到空列表时出现 */}
+        {signedIn && !loading && !error && items.length === 0 ? (
           <View style={styles.empty}>
             <Text style={styles.emptyEmoji}>🐾</Text>
             <ThemedText type="small" themeColor="textSecondary">
@@ -118,9 +149,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: Spacing.four,
-    paddingTop: Spacing.four,
+    paddingTop: Spacing.two,
     paddingBottom: Spacing.three,
   },
+  headerLead: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
   action: {
     borderRadius: 999,
     paddingHorizontal: Spacing.three,
