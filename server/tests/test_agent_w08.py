@@ -645,6 +645,35 @@ class RegistryMatrixTests(W08TestCase):
             run = s.execute(select(AgentRun).where(AgentRun.form == 'checkpoint')).scalar_one()
             self.assertEqual(run.status, 'degraded')
 
+    def test_background_runtime_retries_empty_model_response(self):
+        """模型空响应（推理耗尽输出预算）先放宽 token 上限重试，不直接判失败。
+        与对话形态同口径（W01 已知边界）；重试成功不算降级。"""
+        from petsense.agent import loop
+        replies = [model_turn(''), model_turn('{"say":"回顾正文","findings":[]}')]
+        with patch('petsense.agent.model.respond', side_effect=replies) as respond:
+            outcome = loop.run_structured({
+                'pet_id': self.pet, 'user_id': self.uid, 'form': 'review',
+                'system': '只输出 JSON。', 'task': '回顾事实：{}',
+                'parse': lambda text: ({'say': text}, True)})
+        self.assertIsNone(outcome['error'])
+        self.assertEqual(outcome['degraded'], [])
+        self.assertEqual(respond.call_count, 2)
+        first_budget = respond.call_args_list[0].kwargs['max_output_tokens']
+        retry_budget = respond.call_args_list[1].kwargs['max_output_tokens']
+        self.assertGreater(retry_budget, first_budget)
+
+    def test_background_runtime_empty_response_exhausts_to_degraded(self):
+        """连续空响应到重试上限后才判失败并记 degraded。"""
+        from petsense.agent import loop
+        with patch('petsense.agent.model.respond', return_value=model_turn('')) as respond:
+            outcome = loop.run_structured({
+                'pet_id': self.pet, 'user_id': self.uid, 'form': 'review',
+                'system': '只输出 JSON。', 'task': '回顾事实：{}',
+                'parse': lambda text: ({'say': text}, True)})
+        self.assertEqual(outcome['error'], 'model_unavailable')
+        self.assertIn('empty_response', outcome['degraded'])
+        self.assertEqual(respond.call_count, 3)
+
     def test_read_task_scoped_to_pet(self):
         from petsense.agent import registry
         row, _ = self._propose()

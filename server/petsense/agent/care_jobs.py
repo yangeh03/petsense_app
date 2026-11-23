@@ -41,7 +41,7 @@ EVIDENCE_DAYS_SHOWN = 7
 
 _REVIEW_SYSTEM = (
     '任务：为一只宠物生成周期回顾（昨日或上一自然周）。判断什么值得告诉主人：'
-    '只依据给定窗口统计、覆盖与缺口、学习进度、近期主题和工具查询结果；'
+    '只依据给定窗口统计、覆盖与缺口、学习进度、活跃目标、近期主题和工具查询结果；'
     '覆盖不足的时间段如实说明，不推断为异常、活动减少或健康问题；'
     '按主人设置的主动程度把握分寸。'
     '输出 JSON：{"say": "给主人看的回顾消息（没事可说时为空字符串）", '
@@ -154,7 +154,7 @@ def _parse_iso(value):
 
 
 def review_facts(session, pet, window_start, window_end):
-    """回顾事实组装：逐日统计/覆盖/缺口 + 近期开放主题（统一观测口径；无数据如实）。"""
+    """回顾事实组装：逐日统计/覆盖/缺口 + 活跃目标 + 近期开放主题（统一观测口径；无数据如实）。"""
     tz = care.pet_timezone(pet)
     days = []
     day = window_start.astimezone(tz).date()
@@ -175,9 +175,28 @@ def review_facts(session, pet, window_start, window_end):
         .order_by(AgentCareTopic.updated_at.desc()).limit(5)).scalars().all()
     return {'window': {'startAt': iso_z(window_start), 'endAt': iso_z(window_end)},
             'days': days, 'coveredDays': len(covered), 'totalDays': len(days),
+            'activeTasks': _active_task_facts(session, pet),
             'openTopics': [{'id': t.id, 'category': t.category, 'title': t.title,
                             'status': t.status, 'anchor': t.anchor,
                             'updatedAt': iso_z(t.updated_at)} for t in topics]}
+
+
+def _active_task_facts(session, pet):
+    """活跃目标摘要（W08 委托域接入回顾事实，W09 spec §2）：只给已确认且未结束的委托。"""
+    from petsense.agent import tasks as task_service
+    rows = session.execute(select(task_service.AgentTask).where(
+        task_service.AgentTask.pet_id == pet.id,
+        task_service.AgentTask.status.in_(('observing', 'waiting_baseline', 'paused')))
+        .order_by(task_service.AgentTask.id.desc()).limit(5)).scalars().all()
+    result = []
+    for task in rows:
+        try:
+            plan = task_service.plan_of(session, task)
+        except task_service.TaskError:
+            continue
+        result.append({'id': task.id, 'title': plan.get('title'), 'kind': plan.get('kind'),
+                       'status': task.status, 'deadlineAt': iso_z(task.deadline_at)})
+    return result
 
 
 def _review_fallback_text(facts):

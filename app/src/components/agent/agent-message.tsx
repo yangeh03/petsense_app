@@ -14,6 +14,7 @@ import { Image } from 'expo-image';
 import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
 import AgentImageViewer from '@/components/agent/agent-image-viewer';
+import { ActionCard } from '@/components/agent/action-card';
 import { ProposalCard } from '@/components/agent/proposal-card';
 import { TaskProposalCard } from '@/components/agent/task-proposal-card';
 import { TaskResultCard } from '@/components/agent/task-result-card';
@@ -461,12 +462,18 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry, o
       ];
   const textSegments = blocks.filter((block) => block.type === 'text');
   const proposals = blocks.filter((block) => block.type === 'proposal');
+  const actions = blocks.filter((block) => block.type === 'action');
   const taskResults = blocks.filter((block) => block.type === 'task_result');
   const careBlocks = blocks.filter(
     (block): block is { type: 'care'; care: AgentCareInfo } => block.type === 'care',
   );
   const hasUnknownBlocks =
-    blocks.length > textSegments.length + proposals.length + taskResults.length + careBlocks.length;
+    blocks.length >
+    textSegments.length +
+      proposals.length +
+      actions.length +
+      taskResults.length +
+      careBlocks.length;
 
   const openMember = (speaker: 'pet' | 'assistant') =>
     router.push(speaker === 'pet' ? '/pet' : '/assistant-settings');
@@ -552,6 +559,9 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry, o
             care={block.care}
             onAskWhy={() => onAskWhy?.(turn)}
           />
+        ))}
+        {actions.map((block) => (
+          <ActionCard key={block.action.id} action={block.action} petId={petId} />
         ))}
         <View style={styles.replyFootnote}>
           {[...new Map((turn.sources ?? []).map((source) => [sourceKey(source), source]))].map(

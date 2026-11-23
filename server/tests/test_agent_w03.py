@@ -139,10 +139,10 @@ class ProposalServiceTests(unittest.TestCase):
         with db.session_scope() as s:
             pet = self._pet(s)
             row, _, _ = proposal_service.create(s, pet, None, {'name': '豆豆'}, explicit=False)
-            decided, _ = proposal_service.decide(s, pet, row.id, 'confirm')
+            decided, _, _ = proposal_service.decide(s, pet, row.id, 'confirm')
             self.assertEqual(decided.status, 'confirmed')
             self.assertEqual(pet.name, '豆豆')
-            again, _ = proposal_service.decide(s, pet, row.id, 'confirm')  # 幂等
+            again, _, _ = proposal_service.decide(s, pet, row.id, 'confirm')  # 幂等
             self.assertEqual(again.status, 'confirmed')
             with self.assertRaises(proposal_service.ProposalError) as ctx:
                 proposal_service.decide(s, pet, row.id, 'reject')  # 终态异 action
@@ -162,7 +162,7 @@ class ProposalServiceTests(unittest.TestCase):
         with db.session_scope() as s:
             pet = self._pet(s)
             row, _, _ = proposal_service.create(s, pet, None, {'name': '豆豆'}, explicit=False)
-            decided, _ = proposal_service.decide(s, pet, row.id, 'reject')
+            decided, _, _ = proposal_service.decide(s, pet, row.id, 'reject')
             self.assertEqual(decided.status, 'rejected')
             self.assertEqual(pet.name, 'Max')
 

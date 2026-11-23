@@ -13,6 +13,7 @@ from concurrent.futures import TimeoutError as FutureTimeout
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from petsense.agent import actions as actions_service
 from petsense.agent import baseline as baseline_service
 from petsense.agent import fetch
 from petsense.agent import memory as pet_memory
@@ -36,6 +37,8 @@ MEMORY = 'memory'
 PROFILE = 'profile'      # 确认门组（W03）：明确指令直写 / 候选确认卡，两路径在执行器内（agent-w03-spec.md §3.4）
 SETTINGS = 'settings'    # 直写组（W03）：助手设定，明确指令即改即回显
 EXTERNAL_READ = 'external_read'  # W06：公网网页深读（联网知识组）
+DEVICE_CONTROL = 'device_control'  # W10：设备动作（仅录音），D3 开关关闭时不进 schemas
+ACTION = 'action'        # W10 动作组（日记/草稿）：日记生成走确认卡，草稿明确指令可直写（D6）
 TASK = 'task'            # W08 委托组：read_task 只读 / propose_task_change 只生成候选（P00 §5）
 TOOL_TIMEOUT_S = 15.0
 
@@ -61,14 +64,19 @@ def register(spec):
     _TOOLS[spec.name] = spec
 
 
-def schemas_for(form, stance_scope, search_enabled=True):
+def schemas_for(form, stance_scope, search_enabled=True, recording_enabled=None):
     """渲染该运行形态与范围下可用的工具 schema。out_of_scope 下业务与网络工具全部不可用（V11 §12.1）。
-    search_enabled=False（PETSENSE_SEARCH_DISABLED 灰度开关）时 EXTERNAL_READ 组不进 schemas，
-    能力描述与真实可用性保持一致（W06 spec §4.5）。"""
+    search_enabled=False（PETSENSE_SEARCH_DISABLED 灰度开关）时 EXTERNAL_READ 组不进 schemas；
+    recording_enabled 缺省解析 W10 D3 开关（PETSENSE_AGENT_RECORDING_ENABLED，默认关停），
+    关闭时 DEVICE_CONTROL 组不进 schemas——能力描述与真实可用性保持一致
+    （W06 spec §4.5、agent-w10-spec.md §3）。"""
     if stance_scope == 'out_of_scope':
         return []
+    if recording_enabled is None:
+        recording_enabled = actions_service.recording_enabled()
     return [spec.schema() for spec in _TOOLS.values()
-            if form in spec.forms and (search_enabled or spec.group != EXTERNAL_READ)]
+            if form in spec.forms and (search_enabled or spec.group != EXTERNAL_READ)
+            and (recording_enabled or spec.group != DEVICE_CONTROL)]
 
 
 def _parse_time(value):
@@ -521,6 +529,65 @@ register(ToolSpec(
     group=EXTERNAL_READ, forms=(DIALOGUE,), execute=_execute_read_web_page, timeout_s=20.0))
 
 
+def _execute_control_device(args, context):
+    return actions_service.prepare_recording(args, context)
+
+
+register(ToolSpec(
+    name='control_device',
+    description='让本宠的项圈远程录一段环境音（仅支持录音，durationSec 为 1—10 整数秒）。'
+                '调用只生成录音确认卡（含目标项圈与时长），必须主人在卡片上确认后才真正向项圈'
+                '发送指令——未经确认不得声称已发送指令或已录音。指令发送与音频回传分开显示，'
+                '执行状态以动作卡为准；失败、超时或结果未知都会如实标注，结果未知时不自动重试、'
+                '需再次确认新候选。只在主人明确想听项圈现场声音时发起。',
+    parameters={'type': 'object', 'properties': {
+        'durationSec': {'type': 'integer', 'minimum': 1, 'maximum': 10,
+                        'description': '录音时长（秒），1—10 的整数'},
+        'note': {'type': 'string', 'description': '发起理由（入运行轨迹）'}},
+        'required': ['durationSec'], 'additionalProperties': False},
+    group=DEVICE_CONTROL, forms=(DIALOGUE,), execute=_execute_control_device))
+
+
+def _execute_create_diary(args, context):
+    return actions_service.prepare_diary(args, context)
+
+
+register(ToolSpec(
+    name='create_diary',
+    description='生成或读取本宠今天的 AI 运动海报（PetGIF 运动日记）。op=read 查看今天已有任务与'
+                '状态，可直接执行；op=generate 发起首次生成或重新生成——需要先在确认卡上向主人'
+                '说明：会使用宠物档案照片、照片将发送给 PetGIF 服务、海报链接生成后可被公开访问。'
+                '生成需档案照片与今天至少 1 分钟有效走动；步数是按试点步频的估算值，'
+                '回复不得虚构步数或数据来源，任务真实完成后才呈现海报结果。',
+    parameters={'type': 'object', 'properties': {
+        'op': {'type': 'string', 'enum': ['read', 'generate'],
+               'description': 'read=查看今天已有日记；generate=发起/重新生成（需确认卡）'},
+        'note': {'type': 'string', 'description': '发起理由（入运行轨迹）'}},
+        'required': ['op'], 'additionalProperties': False},
+    group=ACTION, forms=(DIALOGUE,), execute=_execute_create_diary))
+
+
+def _execute_draft_social_post(args, context):
+    explicit = bool(args.get('explicit'))
+    return actions_service.save_draft(args, context, explicit)
+
+
+register(ToolSpec(
+    name='draft_social_post',
+    description='把社区动态文字保存为本宠的私有草稿（仅主人可见，发布页有独立草稿位，'
+                '原有手写草稿不受影响）。主人明确要求保存/写下来时传 explicit=true 直接保存'
+                '并如实回显草稿内容；主人只是商量或请你拟内容（意图模糊）时传 explicit=false '
+                '先出确认卡。只保存草稿、没有任何发布动作，正式发布由主人在社区发布页手动完成，'
+                '不得声称已发布。caption 1—500 字，location 可选且 ≤80 字。',
+    parameters={'type': 'object', 'properties': {
+        'caption': {'type': 'string', 'description': '动态正文（1—500 字）'},
+        'location': {'type': 'string', 'description': '地点（可选，≤80 字）'},
+        'explicit': {'type': 'boolean', 'description': '主人是否明确要求保存'},
+        'note': {'type': 'string', 'description': '发起理由（入运行轨迹）'}},
+        'required': ['caption', 'explicit'], 'additionalProperties': False},
+    group=ACTION, forms=(DIALOGUE,), execute=_execute_draft_social_post))
+
+
 def _execute_read_task(args, context):
     task_id = args.get('taskId')
     if task_id is not None and (isinstance(task_id, bool) or not isinstance(task_id, int)):
@@ -617,7 +684,6 @@ register(ToolSpec(
         'note': {'type': 'string', 'description': '提案理由（入运行轨迹）'}},
         'required': ['action'], 'additionalProperties': False},
     group=TASK, forms=(DIALOGUE,), execute=_execute_propose_task_change))
-
 
 
 def execute_tool(name, arguments, form, stance_scope, context):

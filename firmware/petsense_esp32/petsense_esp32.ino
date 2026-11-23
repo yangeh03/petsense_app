@@ -7,6 +7,7 @@
 #include "driver/i2s.h"
 #include "board_config.h"
 #include "uwb_protocol.h"
+#include "agent_audio_protocol.h"
 
 // =====================================================
 // UART0: BU03 input on RX, USB-UART debug output on TX
@@ -76,6 +77,23 @@ bool audioFileUploading = false;
 bool audioFileStartSent = false;
 bool audioFileRecording = false;
 bool audioFileSingleAttempted = false;
+
+// ---------- W10 Agent 远程录音（psrec01，agent-w10-spec.md §3）----------
+// 复用 audioFile* 缓冲与采集状态，按 agentAudioActive/agentAudioUploading 区分链路；
+// 回传走设备作用域 topic，携带命令里的同一 requestId。
+static const uint8_t AGENT_AUDIO_DEDUPE_SLOTS = 4;
+bool agentAudioActive = false;
+bool agentAudioUploading = false;
+bool agentAudioStartSent = false;
+String agentAudioRequestId;
+uint32_t agentAudioRequestedMs = 0;
+String agentAudioSeenIds[AGENT_AUDIO_DEDUPE_SLOTS];
+uint8_t agentAudioSeenCount = 0;
+// 新增 Agent 录音函数先于既有 static 帮助函数定义，显式前置声明保证编译顺序无关
+static uint8_t audioFileByteAt(uint32_t offset);
+static bool audioFileUploadCanAttempt();
+static void appendBase64(String &out, const uint8_t *data, size_t len);
+bool publishAgentAudioStatus(const String &requestId, const char *status, const char *reason);
 
 // =====================================================
 // IMU 厂家协议
@@ -278,6 +296,8 @@ bool publishAudioStreamFrame();
 void captureAudioFeatureStep();
 void captureAudioFileStep();
 void processAudioFileUploadStep();
+void processAgentAudioUploadStep();
+void handleAgentAudioCommand(const String &body);
 void startAudioRecording();
 void stopAudioRecording();
 void processModemAsyncInput();
@@ -418,6 +438,7 @@ static bool modemAsyncHasCommand() {
          modemAsyncBuffer.indexOf("experiment_stop") >= 0 ||
          modemAsyncBuffer.indexOf("event_start") >= 0 ||
          modemAsyncBuffer.indexOf("event_stop") >= 0 ||
+         modemAsyncBuffer.indexOf("agent_record_audio") >= 0 ||
          modemAsyncBuffer.indexOf("record_audio_start") >= 0 ||
          modemAsyncBuffer.indexOf("record_audio_stop") >= 0;
 }
@@ -497,6 +518,14 @@ static bool handleModemAsyncCommands() {
     DebugSerial.println("MQTT command: event stop");
     stopEventCapture();
     modemAsyncBuffer = "";
+    return true;
+  }
+
+  if (modemAsyncBuffer.indexOf("agent_record_audio") >= 0) {
+    // W10 psrec01：解析 → 去重 → 占线/容量检查 → 启动（重复投递不重录，agent-w10-spec.md §3）
+    String body = modemAsyncBuffer;
+    modemAsyncBuffer = "";
+    handleAgentAudioCommand(body);
     return true;
   }
 
@@ -1085,6 +1114,8 @@ String buildCloudPayload() {
 
   payload += "{\"deviceId\":\"";
   payload += DEVICE_ID;
+  payload += "\",\"agentAudio\":\"";
+  payload += AGENT_AUDIO_PROTO;  // W10：显式上报 Agent 录音协议能力
   payload += "\",\"ts_ms\":";
   payload += millis();
   payload += ",\"experiment\":{\"active\":";
@@ -1236,7 +1267,9 @@ static void beginCloudBatch() {
   cloudBatchPayload += DEVICE_ID;
   cloudBatchPayload += "\",\"intervalMs\":";
   cloudBatchPayload += CLOUD_SAMPLE_INTERVAL_MS;
-  cloudBatchPayload += ",\"samples\":[";
+  cloudBatchPayload += ",\"agentAudio\":\"";
+  cloudBatchPayload += AGENT_AUDIO_PROTO;  // W10：显式上报 Agent 录音协议能力（服务端确认门复核）
+  cloudBatchPayload += "\",\"samples\":[";
   cloudBatchCount = 0;
   cloudBatchStartedMs = millis();
 }
@@ -2662,6 +2695,10 @@ void startAudioRecording() {
   if (!AUDIO_FILE_ENABLED || !audioFileSamples || audioFileUploading) {
     return;
   }
+  if (agentAudioActive || agentAudioUploading) {
+    // Agent 录音占用缓冲期间，旧链路不再启动（单设备录音互斥）
+    return;
+  }
 
   audioFileCaptureCount = 0;
   audioFileUploadSamples = 0;
@@ -2685,6 +2722,28 @@ void stopAudioRecording() {
   audioFileAutoStopBytes = 0;
   if (audioFileCaptureCount == 0) {
     DebugSerial.println("Audio recording stopped with no samples");
+    if (agentAudioActive) {
+      // 空采集：如实回报失败原因，服务端按动作失败收敛（不进回传链路）
+      agentAudioActive = false;
+      publishAgentAudioStatus(agentAudioRequestId, "rejected", "no_samples");
+      agentAudioRequestId = "";
+    }
+    return;
+  }
+
+  if (agentAudioActive) {
+    // Agent 链路：采集完成转 Agent 回传（旧链路标志保持关闭，互不干扰）
+    agentAudioActive = false;
+    agentAudioUploading = true;
+    agentAudioStartSent = false;
+    audioFileUploadOffset = 0;
+    audioFileUploadChunkIndex = 0;
+    audioFileUploadSamples = audioFileCaptureCount;
+    audioFileUploadTotalChunks = (uint16_t)((AUDIO_FILE_WAV_HEADER_LEN + audioFileUploadSamples + AUDIO_FILE_CHUNK_RAW_BYTES - 1) / AUDIO_FILE_CHUNK_RAW_BYTES);
+    DebugSerial.print("Agent audio capture done requestId=");
+    DebugSerial.print(agentAudioRequestId);
+    DebugSerial.print(" bytes=");
+    DebugSerial.println(audioFileUploadSamples);
     return;
   }
 
@@ -2704,6 +2763,170 @@ void stopAudioRecording() {
   DebugSerial.print(audioFileUploadSamples);
   DebugSerial.print(" wavBytes=");
   DebugSerial.println(AUDIO_FILE_WAV_HEADER_LEN + audioFileUploadSamples);
+}
+
+// =====================================================
+// W10 Agent 远程录音（psrec01）：命令处理与设备作用域回传
+// =====================================================
+static String agentAudioTopic() {
+  String topic = "petsense/sensor/";
+  topic += DEVICE_ID;
+  topic += "/agent_audio";
+  return topic;
+}
+
+bool publishAgentAudioStatus(const String &requestId, const char *status, const char *reason) {
+  char frame[192];
+  char requestIdBuf[AGENT_AUDIO_REQUEST_ID_MAX + 1];
+  strlcpy(requestIdBuf, requestId.c_str(), sizeof(requestIdBuf));
+  size_t length = agentAudioStatusFrame(frame, sizeof(frame), requestIdBuf, status, reason);
+  if (!length) {
+    return false;
+  }
+  return mqttPublishText(agentAudioTopic().c_str(), String(frame));
+}
+
+void handleAgentAudioCommand(const String &body) {
+  AgentAudioRequest request;
+  char json[640];
+  strlcpy(json, body.c_str(), sizeof(json));
+  int code = agentAudioParseCommand(json, request);
+  if (code == AGENT_AUDIO_ERR_PROTO || code == AGENT_AUDIO_ERR_REQUEST_ID) {
+    // 非本协议版本或凭据不可解析：无法关联，静默忽略（旧固件行为等同）
+    DebugSerial.println("Agent audio command ignored: proto/requestId mismatch");
+    return;
+  }
+  if (code == AGENT_AUDIO_ERR_DURATION) {
+    DebugSerial.println("Agent audio command rejected: duration out of range");
+    publishAgentAudioStatus(String(request.requestId), "invalid", "duration");
+    return;
+  }
+  const char *seen[AGENT_AUDIO_DEDUPE_SLOTS];
+  for (uint8_t i = 0; i < AGENT_AUDIO_DEDUPE_SLOTS; i++) {
+    seen[i] = agentAudioSeenIds[i].c_str();
+  }
+  if (agentAudioDedupeSeen(seen, agentAudioSeenCount, request.requestId)) {
+    // QoS1 重复投递或已完成请求：不启动第二次录音（agent-w10-spec.md §3）
+    DebugSerial.print("Agent audio duplicate requestId ignored: ");
+    DebugSerial.println(request.requestId);
+    return;
+  }
+  agentAudioSeenIds[agentAudioSeenCount % AGENT_AUDIO_DEDUPE_SLOTS] = String(request.requestId);
+  agentAudioSeenCount++;
+
+  if (!AUDIO_FILE_ENABLED || !audioFileSamples) {
+    publishAgentAudioStatus(String(request.requestId), "rejected", "audio_disabled");
+    return;
+  }
+  if (agentAudioActive || agentAudioUploading || audioFileRecording || audioFileUploading) {
+    publishAgentAudioStatus(String(request.requestId), "busy", "recorder_in_use");
+    return;
+  }
+  uint32_t capacitySeconds = audioFileCapacitySamples /
+      (AUDIO_FILE_SAMPLE_RATE * AUDIO_FILE_BYTES_PER_SAMPLE);
+  if (request.durationSec > capacitySeconds) {
+    // 缓存不足（如无 PSRAM 只装得下短录音）：如实拒绝，不录不满时长的短音频冒充
+    publishAgentAudioStatus(String(request.requestId), "rejected", "capacity");
+    return;
+  }
+
+  agentAudioRequestId = String(request.requestId);
+  agentAudioRequestedMs = (uint32_t)request.durationSec * 1000UL;
+  audioFileCaptureCount = 0;
+  audioFileUploadSamples = 0;
+  audioFileUploadOffset = 0;
+  audioFileUploadChunkIndex = 0;
+  audioFileUploadTotalChunks = 0;
+  audioFileAutoStopBytes = agentAudioDurationBytes(request.durationSec);
+  audioFileRecording = true;
+  agentAudioActive = true;
+  DebugSerial.print("Agent audio recording start requestId=");
+  DebugSerial.print(agentAudioRequestId);
+  DebugSerial.print(" seconds=");
+  DebugSerial.println(request.durationSec);
+  publishAgentAudioStatus(agentAudioRequestId, "started", "");
+}
+
+void processAgentAudioUploadStep() {
+  if (!agentAudioUploading || !audioFileSamples || audioFileUploadSamples == 0) {
+    return;
+  }
+  if (!audioFileUploadCanAttempt()) {
+    return;
+  }
+
+  const uint32_t totalBytes = AUDIO_FILE_WAV_HEADER_LEN + audioFileUploadSamples;
+  const uint32_t durationMs =
+      (audioFileUploadSamples / AUDIO_FILE_BYTES_PER_SAMPLE) * 1000UL / AUDIO_FILE_SAMPLE_RATE;
+
+  if (!agentAudioStartSent) {
+    char frame[320];
+    size_t length = agentAudioStartFrame(frame, sizeof(frame), agentAudioRequestId.c_str(),
+                                         DEVICE_ID, totalBytes, audioFileUploadTotalChunks,
+                                         durationMs, agentAudioRequestedMs);
+    if (length && mqttPublishText(agentAudioTopic().c_str(), String(frame))) {
+      agentAudioStartSent = true;
+      lastAudioFileUploadAttemptMs = 0;
+      DebugSerial.print("Agent audio start sent bytes=");
+      DebugSerial.println(totalBytes);
+    } else {
+      DebugSerial.println("Agent audio start send failed");
+    }
+    return;
+  }
+
+  if (audioFileUploadOffset < totalBytes) {
+    uint16_t rawLen = (uint16_t)min((uint32_t)AUDIO_FILE_CHUNK_RAW_BYTES, totalBytes - audioFileUploadOffset);
+    for (uint16_t i = 0; i < rawLen; i++) {
+      audioFileChunkBuffer[i] = audioFileByteAt(audioFileUploadOffset + i);
+    }
+    char prefix[160];
+    char suffix[4];
+    if (!agentAudioChunkPrefix(prefix, sizeof(prefix), agentAudioRequestId.c_str(),
+                               audioFileUploadChunkIndex) ||
+        !agentAudioChunkSuffix(suffix, sizeof(suffix))) {
+      return;
+    }
+    String chunkPayload;
+    chunkPayload.reserve((uint32_t)(rawLen * 4 / 3) + (uint32_t)strlen(prefix) + 4);
+    chunkPayload += prefix;
+    appendBase64(chunkPayload, audioFileChunkBuffer, rawLen);
+    chunkPayload += suffix;
+
+    if (mqttPublishText(agentAudioTopic().c_str(), chunkPayload, 1)) {
+      audioFileUploadOffset += rawLen;
+      audioFileUploadChunkIndex++;
+      lastAudioFileUploadAttemptMs = 0;
+      if ((audioFileUploadChunkIndex % 10) == 0 || audioFileUploadOffset >= totalBytes) {
+        DebugSerial.print("Agent audio chunk ");
+        DebugSerial.print(audioFileUploadChunkIndex);
+        DebugSerial.print('/');
+        DebugSerial.println(audioFileUploadTotalChunks);
+      }
+    } else {
+      DebugSerial.print("Agent audio chunk send failed index=");
+      DebugSerial.println(audioFileUploadChunkIndex);
+    }
+    return;
+  }
+
+  char endFrame[160];
+  size_t length = agentAudioEndFrame(endFrame, sizeof(endFrame), agentAudioRequestId.c_str());
+  if (length && mqttPublishText(agentAudioTopic().c_str(), String(endFrame))) {
+    DebugSerial.print("Agent audio upload complete requestId=");
+    DebugSerial.println(agentAudioRequestId);
+    audioFileCaptureCount = 0;
+    audioFileUploadSamples = 0;
+    audioFileUploadOffset = 0;
+    audioFileUploadChunkIndex = 0;
+    audioFileUploadTotalChunks = 0;
+    agentAudioUploading = false;
+    agentAudioStartSent = false;
+    agentAudioRequestId = "";
+    lastAudioFileUploadAttemptMs = 0;
+  } else {
+    DebugSerial.println("Agent audio end send failed");
+  }
 }
 
 static uint8_t wavHeaderByte(uint32_t offset) {
@@ -2898,6 +3121,9 @@ static bool audioFileUploadCanAttempt() {
 }
 
 void processAudioFileUploadStep() {
+  if (agentAudioActive || agentAudioUploading) {
+    return;  // Agent 链路占用上传状态，旧链路暂停
+  }
   if (!AUDIO_FILE_ENABLED || !audioFileSamples || !audioFileUploading || audioFileUploadSamples == 0) {
     return;
   }
@@ -3568,6 +3794,13 @@ void loop() {
     }
   }
 
+  if (AUDIO_FILE_ENABLED && agentAudioUploading) {
+    for (uint8_t i = 0; i < AUDIO_FILE_UPLOAD_BURST && agentAudioUploading; i++) {
+      processAgentAudioUploadStep();
+      processModemAsyncInput();
+    }
+  }
+
   uint32_t now = millis();
   if (now - lastCloudSampleMs >= CLOUD_SAMPLE_INTERVAL_MS) {
     lastCloudSampleMs = now;
@@ -3583,6 +3816,11 @@ void loop() {
 
   if (AUDIO_FILE_ENABLED && audioFileUploading) {
     processAudioFileUploadStep();
+    processModemAsyncInput();
+  }
+
+  if (AUDIO_FILE_ENABLED && agentAudioUploading) {
+    processAgentAudioUploadStep();
     processModemAsyncInput();
   }
 }

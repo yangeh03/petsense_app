@@ -45,6 +45,56 @@ function proposalRows(fields: AgentProposal['fields']): { label: string; value: 
   return rows;
 }
 
+/** W10 动作类候选（agent-w10-spec.md §2）：录音/日记/草稿各自的确认卡内容。 */
+type W10KindMeta = { title: string; confirm: string; notice?: string };
+
+const W10_KIND_META: Record<string, W10KindMeta> = {
+  record_audio: {
+    title: '远程录音确认',
+    confirm: '确认录音',
+    notice: '确认后才会向项圈发送录音指令；音频回传后在动作卡里播放。',
+  },
+  create_diary: {
+    title: '运动日记确认',
+    confirm: '确认生成',
+    notice: '将使用宠物档案照片并由 PetGIF 生成海报，海报链接生成后可被公开访问。',
+  },
+  social_draft: {
+    title: '社区草稿确认',
+    confirm: '保存草稿',
+    notice: '只保存为仅自己可见的草稿，不会发布；发布请在社区发布页手动完成。',
+  },
+};
+
+function w10Rows(
+  kind: string,
+  fields: AgentProposal['fields'],
+): { label: string; value: string }[] {
+  if (kind === 'record_audio') {
+    const rows = [{ label: '时长', value: `${fields.durationSec ?? '—'} 秒` }];
+    rows.push({ label: '项圈', value: fields.deviceName || fields.deviceId || '已绑定项圈' });
+    return rows;
+  }
+  if (kind === 'create_diary') {
+    const minutes = Math.round((fields.walkingSeconds ?? 0) / 60);
+    const rows = [{ label: '日期', value: fields.date ?? '今天' }];
+    rows.push({
+      label: '今日走动',
+      value:
+        fields.steps != null
+          ? `约 ${minutes} 分钟 · 估算 ${fields.steps.toLocaleString()} 步`
+          : `约 ${minutes} 分钟`,
+    });
+    return rows;
+  }
+  if (kind === 'social_draft') {
+    const rows = [{ label: '文案', value: fields.caption ?? '' }];
+    if (fields.location) rows.push({ label: '地点', value: fields.location });
+    return rows;
+  }
+  return [];
+}
+
 export function ProposalCard({
   petId,
   proposal,
@@ -79,10 +129,13 @@ export function ProposalCard({
     }
   };
 
-  const rows = proposalRows(proposal.fields);
+  const w10 = W10_KIND_META[proposal.kind];
+  const rows = w10 ? w10Rows(proposal.kind, proposal.fields) : proposalRows(proposal.fields);
   const statusText =
     proposal.status === 'confirmed'
-      ? '已写入档案'
+      ? w10
+        ? '已确认执行'
+        : '已写入档案'
       : proposal.status === 'rejected'
         ? '已取消'
         : proposal.status === 'superseded'
@@ -103,7 +156,8 @@ export function ProposalCard({
           size={16}
         />
         <ThemedText type="smallBold" style={styles.headText}>
-          档案修改建议{proposal.version > 1 ? `（第 ${proposal.version} 版）` : ''}
+          {(w10 ? w10.title : '档案修改建议') +
+            (proposal.version > 1 ? `（第 ${proposal.version} 版）` : '')}
         </ThemedText>
         {statusText ? (
           <ThemedText

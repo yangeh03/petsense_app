@@ -28,6 +28,21 @@ IDEMPOTENCY_PATTERN = re.compile(r'^[A-Za-z0-9._:-]{1,128}$')
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix='petgif-diary')
 _active_lock = threading.Lock()
 _active_jobs = set()
+# 终态钩子（W10）：任务到终态时按 jobId 回调（Agent 动作回执收敛），钩子异常不影响任务流
+_terminal_hooks = []
+
+
+def add_terminal_hook(fn):
+    if fn not in _terminal_hooks:
+        _terminal_hooks.append(fn)
+
+
+def _fire_terminal_hooks(job_id):
+    for fn in list(_terminal_hooks):
+        try:
+            fn(job_id)
+        except Exception as error:  # noqa: BLE001 钩子失败只记录，不阻断任务状态
+            print(f'[PETGIF] terminal hook error for {job_id}: {error}')
 
 
 def validate_input(fields):
@@ -184,8 +199,11 @@ def _run_registered(job_id):
 
 
 def _set_terminal(job_id, status, message=None, result=None):
-    return _update_job(job_id, status=status, error_message=message,
-                       result_json=json.dumps(result or {}, ensure_ascii=False), finished_at=utc_now())
+    row = _update_job(job_id, status=status, error_message=message,
+                      result_json=json.dumps(result or {}, ensure_ascii=False), finished_at=utc_now())
+    if row is not None:
+        _fire_terminal_hooks(job_id)
+    return row
 
 
 def run_diary_job(job_id, poll_timeout=None, poll_interval=None):

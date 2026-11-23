@@ -207,8 +207,12 @@ def decide(session, pet, proposal_id, action, now=None):
     """主人决策：confirm 落库 / reject 仅翻转状态；幂等，异态 409。
 
     confirm 按 kind 分派生效处理器：profile_update 写档案；task_change 走
-    tasks.apply_proposal（W08，spec §3 复用决定入口分派到受控业务处理器）。
-    返回 (提案行, 需刷新 blocks 的 turn_id)；turn 为 None 表示提案不挂回合。
+    tasks.apply_proposal（W08，spec §3 复用决定入口分派到受控业务处理器）；
+    W10 动作类（录音/日记/草稿）只翻状态，实际执行由 routes 在事务提交后交给
+    agent.actions.execute_confirmed（录音/日记的复核与副作用都在自带会话中执行，
+    agent-w10-spec.md §2）。
+    返回 (提案行, 需刷新 blocks 的 turn_id, 本次是否发生状态翻转)；
+    turn 为 None 表示提案不挂回合。
     """
     if action not in ('confirm', 'reject'):
         raise ProposalError('决策动作无效', status=400)
@@ -216,19 +220,20 @@ def decide(session, pet, proposal_id, action, now=None):
     if row is None or row.pet_id != pet.id:
         raise ProposalError('提案不存在', status=404)
     now = now or utc_now()
+    changed = False
     if row.status == 'pending':
-        if action == 'confirm':
+        if action == 'confirm' and row.kind == KIND_PROFILE:
             payload = json.loads(row.payload)
-            if row.kind == KIND_TASK:
-                from petsense.agent import tasks as task_service
-                try:
-                    task_service.apply_proposal(session, pet, row, now=now)
-                except task_service.TaskError as exc:
-                    raise ProposalError(exc.message, status=exc.status)
-            else:
-                _apply_writes(session, pet, payload)
+            _apply_writes(session, pet, payload)
+        elif action == 'confirm' and row.kind == KIND_TASK:
+            from petsense.agent import tasks as task_service
+            try:
+                task_service.apply_proposal(session, pet, row, now=now)
+            except task_service.TaskError as exc:
+                raise ProposalError(exc.message, status=exc.status)
         row.status = 'confirmed' if action == 'confirm' else 'rejected'
         row.decided_at = now
+        changed = True
         session.flush()
         _refresh_turn_blocks(session, row)
     elif row.status == ('confirmed' if action == 'confirm' else 'rejected'):
@@ -237,7 +242,7 @@ def decide(session, pet, proposal_id, action, now=None):
         raise ProposalError('提案已被新版本替代，请确认最新候选', status=409)
     else:
         raise ProposalError('提案已处理过另一种决策', status=409)
-    return row, row.turn_id
+    return row, row.turn_id, changed
 
 
 def _refresh_turn_blocks(session, row):

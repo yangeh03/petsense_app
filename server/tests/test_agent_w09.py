@@ -228,6 +228,27 @@ class W09CareTests(unittest.TestCase):
         expected_day = (datetime.now(SH) - timedelta(days=4)).date().isoformat()  # resume 的昨天
         self.assertEqual(daily['key'], expected_day)
 
+    def test_review_facts_include_active_goals(self):
+        """回顾事实带活跃目标（W08 委托域接入，W09 spec §2）：只给已确认且未结束的委托。"""
+        from petsense.agent import proposals as proposal_service
+        from petsense.agent import tasks as task_service
+        with db.session_scope() as s:
+            pet = s.get(Pet, self.pet)
+            payload = task_service.normalize_proposal_fields({
+                'action': 'create',
+                'plan': {'kind': 'fact_watch', 'question': '今天走动超过 30 分钟就告诉我',
+                         'feature': 'actions',
+                         'condition': {'metric': 'walkSeconds', 'op': 'at_least',
+                                       'value': 1800, 'scope': 'daily'}}})
+            row, _ = proposal_service.create_task_proposal(s, pet, None, payload)
+            task_service.apply_proposal(s, pet, row)
+        with db.session_scope() as s:
+            pet = s.get(Pet, self.pet)
+            facts = care_jobs.review_facts(s, pet, _at(-1, 0, 0), _at(0, 0, 0))
+        self.assertEqual(len(facts['activeTasks']), 1)
+        self.assertEqual(facts['activeTasks'][0]['kind'], 'fact_watch')
+        self.assertIn('deadlineAt', facts['activeTasks'][0])
+
     def test_review_without_data_zero_findings(self):
         """无数据回顾：可以零发现，不发消息，轨迹如实保存。"""
         self._scan(_at(0, 8, 0))

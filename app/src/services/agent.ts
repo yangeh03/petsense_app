@@ -10,21 +10,34 @@ export type AgentImageMeta = {
 };
 
 /** W03 确认提案卡（agent-w03-spec.md §3.5）：fields 为归一化候选，状态由决策端点翻转。
+ * W10 起 kind 扩展 record_audio / create_diary / social_draft，候选字段随 kind 不同；
  * W08 起 kind=task_change 的 fields 形状见 AgentTaskChangeFields（按 kind 区分，卡片分派渲染）。 */
+export type AgentProposalFields = {
+  name?: string;
+  breed?: string;
+  birthDate?: string;
+  birthDatePrecision?: 'day' | 'month' | 'year';
+  weightKg?: number;
+  weightMeasuredOn?: string;
+  weightRawText?: string;
+  durationSec?: number;
+  deviceId?: string;
+  deviceName?: string;
+  date?: string;
+  replaceJobId?: string | null;
+  walkingSeconds?: number;
+  observedSeconds?: number;
+  steps?: number;
+  caption?: string;
+  location?: string | null;
+};
+
 export type AgentProposal = {
   id: number;
   kind: string;
   status: 'pending' | 'confirmed' | 'rejected' | 'superseded';
   version: number;
-  fields: {
-    name?: string;
-    breed?: string;
-    birthDate?: string;
-    birthDatePrecision?: 'day' | 'month' | 'year';
-    weightKg?: number;
-    weightMeasuredOn?: string;
-    weightRawText?: string;
-  };
+  fields: AgentProposalFields;
   createdAt: string;
   decidedAt: string | null;
 };
@@ -131,6 +144,38 @@ export type AgentSource = AgentWindowSource | AgentWebSource;
 
 export const isWebSource = (source: AgentSource): source is AgentWebSource => source.type === 'web';
 
+/** W10 动作回执（agent-w10-spec.md §2）：录音/日记/草稿的执行状态；text 为旧客户端可读降级。 */
+export type AgentAction = {
+  id: number;
+  kind: 'record_audio' | 'create_diary' | 'social_draft' | string;
+  status: 'executing' | 'completed' | 'failed' | 'unknown' | 'dismissed' | string;
+  createdAt: string;
+  updatedAt: string;
+  text: string;
+  error?: string | null;
+  durationSec?: number | null;
+  deviceId?: string | null;
+  deviceName?: string | null;
+  commandSent?: boolean | null;
+  audioReceived?: boolean | null;
+  audio?: {
+    durationMs: number;
+    sampleRate: number;
+    bits: number;
+    channels: number;
+    bytes: number;
+  } | null;
+  audioUrl?: string;
+  job?: {
+    jobId: string;
+    status: string;
+    posterUrl: string | null;
+    message: string | null;
+    date?: string | null;
+  } | null;
+  draft?: { caption: string; location: string | null } | null;
+};
+
 /** W09 主动关怀块（care.py / care_jobs.py 写入）：设备事件、周期回顾与学习完成提醒。 */
 export type AgentCareInfo = {
   kind: 'review' | 'device' | 'learning' | string;
@@ -188,6 +233,7 @@ export type AgentTurn = {
     | (
         | { type: 'text'; speaker: 'pet' | 'assistant'; text: string }
         | { type: 'proposal'; proposal: AgentProposal }
+        | { type: 'action'; action: AgentAction }
         | { type: 'task_result'; task: AgentTaskResultBlock }
         | { type: 'care'; care: AgentCareInfo }
       )[]
@@ -271,6 +317,29 @@ export function agentImageSource(imageId: string) {
     ...(token ? { headers: { 'X-Petsense-Session': token } } : {}),
   };
 }
+
+/** W10：录音鉴权播放地址（仅本人可读；WebView/audio 标签发不了 header，走 ?token=）。 */
+export function agentRecordingUrl(actionId: number) {
+  const token = getToken();
+  const query = token ? `?token=${encodeURIComponent(token)}` : '';
+  return absoluteUrl(`/api/app/agent/recordings/${actionId}/audio`) + query;
+}
+
+/** W10：本宠私有社区草稿槽（发布页独立加载，与本地手写草稿互不影响）。 */
+export type AgentSocialDraft = {
+  actionId: number;
+  caption: string;
+  location: string | null;
+  savedAt: string;
+};
+
+export const fetchAgentSocialDraft = (pet: number) =>
+  request<{ success: boolean; draft: AgentSocialDraft | null }>(`/agent/pets/${pet}/social-draft`);
+
+export const dismissAgentSocialDraft = (pet: number) =>
+  request<{ success: boolean; draft: null }>(`/agent/pets/${pet}/social-draft`, {
+    method: 'DELETE',
+  });
 
 export type AgentObservation = {
   startAt: string;

@@ -23,6 +23,11 @@ import { useAuth } from '@/hooks/use-auth';
 import { usePetChanges } from '@/hooks/use-pet-changes';
 import { useTheme } from '@/hooks/use-theme';
 import { createPost, fetchPets } from '@/services/api';
+import {
+  dismissAgentSocialDraft,
+  fetchAgentSocialDraft,
+  type AgentSocialDraft,
+} from '@/services/agent';
 import { downloadDiaryPoster } from '@/services/exercise-diary';
 import { getDiaryJob } from '@/services/petgif';
 import { normalizeForUpload } from '@/services/normalize-image';
@@ -99,6 +104,13 @@ function PostForm({ diaryJobId }: { diaryJobId?: string }) {
   const [petId, setPetId] = useState<number | null>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // W10 私有社区草稿槽：服务端独立保存，与本页手写草稿互不影响（D2）
+  // 草稿按宠物存放，切换宠物时不显示上一只宠物的助手草稿
+  const [agentDraftState, setAgentDraftState] = useState<{
+    petId: number;
+    draft: AgentSocialDraft | null;
+  } | null>(null);
+  const [agentDraftTick, setAgentDraftTick] = useState(0);
   const { user } = useAuth();
   const draftKey = `petsense.community.draft.${user?.id ?? 'guest'}${diaryJobId ? `.diary.${diaryJobId}` : ''}`;
   const draftDirectory =
@@ -211,6 +223,39 @@ function PostForm({ diaryJobId }: { diaryJobId?: string }) {
       };
     }, [loadPets]),
   );
+
+  // W10：按选中宠物加载私有草稿（日记海报流程不加载，独立槽不触碰手写草稿）
+  useEffect(() => {
+    if (!user || diaryJobId || !petId) return;
+    let active = true;
+    fetchAgentSocialDraft(petId)
+      .then((data) => {
+        if (active) setAgentDraftState({ petId, draft: data.draft });
+      })
+      .catch(() => {
+        // 加载失败不阻断发布，仅少一个可选入口
+        if (active) setAgentDraftState({ petId, draft: null });
+      });
+    return () => {
+      active = false;
+    };
+  }, [user, diaryJobId, petId, agentDraftTick]);
+
+  const agentDraft =
+    agentDraftState && agentDraftState.petId === petId ? agentDraftState.draft : null;
+
+  const removeAgentDraft = async () => {
+    if (!petId) return;
+    const target = petId;
+    setAgentDraftState((current) =>
+      current && current.petId === target ? { ...current, draft: null } : current,
+    );
+    try {
+      await dismissAgentSocialDraft(target);
+    } catch {
+      setAgentDraftTick((tick) => tick + 1); // 移除失败则重新拉取还原
+    }
+  };
 
   const pickImages = async (camera: boolean) => {
     try {
@@ -368,6 +413,56 @@ function PostForm({ diaryJobId }: { diaryJobId?: string }) {
         </ScrollView>
       )}
 
+      {!diaryJobId && agentDraft ? (
+        <View
+          style={[
+            styles.agentDraftCard,
+            { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
+          ]}
+        >
+          <View style={styles.agentDraftHead}>
+            <SymbolView
+              name={{ ios: 'sparkles', android: 'auto_awesome', web: 'auto_awesome' }}
+              tintColor={theme.tint}
+              size={14}
+            />
+            <ThemedText type="smallBold" style={styles.agentDraftTitle}>
+              来自助手的草稿（仅自己可见）
+            </ThemedText>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="移除助手草稿"
+              onPress={() => void removeAgentDraft()}
+              hitSlop={6}
+            >
+              <ThemedText type="small" themeColor="textSecondary">
+                移除
+              </ThemedText>
+            </Pressable>
+          </View>
+          <ThemedText type="small">{agentDraft.caption}</ThemedText>
+          {agentDraft.location ? (
+            <ThemedText type="small" themeColor="textSecondary">
+              地点：{agentDraft.location}
+            </ThemedText>
+          ) : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="把助手草稿填入正文"
+            onPress={() => {
+              setCaption(agentDraft.caption);
+              if (agentDraft.location) setLocation(agentDraft.location);
+              setMutationId('');
+            }}
+            style={[styles.agentDraftApply, { backgroundColor: theme.tint }]}
+          >
+            <ThemedText type="smallBold" style={{ color: '#ffffff' }}>
+              填入到正文
+            </ThemedText>
+          </Pressable>
+        </View>
+      ) : null}
+
       <TextInput
         value={caption}
         onChangeText={(value) => {
@@ -454,6 +549,28 @@ function PostForm({ diaryJobId }: { diaryJobId?: string }) {
 const styles = StyleSheet.create({
   sheet: {
     flex: 1,
+  },
+  // W10 助手草稿槽：独立卡片，不改变既有输入区布局
+  agentDraftCard: {
+    width: '100%',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    gap: 8,
+  },
+  agentDraftHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  agentDraftTitle: { flex: 1 },
+  agentDraftApply: {
+    alignSelf: 'flex-start',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    minHeight: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   header: {
     flexDirection: 'row',
