@@ -146,7 +146,7 @@ class RegistryMatrixTests(unittest.TestCase):
         self.assertEqual(set(names), {'query_observations', 'read_baseline', 'read_current_status',
                                       'write_memory', 'search_memories', 'forget_memory',
                                       'read_pet_profile', 'prepare_profile_update', 'prepare_role_settings',
-                                      'read_web_page'})
+                                      'read_web_page', 'create_diary', 'draft_social_post'})
         self.assertEqual(registry.schemas_for('review', 'allowed'), [])
 
 

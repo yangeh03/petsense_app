@@ -8,6 +8,7 @@ schema 唯一入口是 alembic（``init_db`` 幂等执行 upgrade head）。
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+import threading
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -21,6 +22,7 @@ def _default_url():
 _engine = None
 _session_factory = None
 Session = scoped_session(lambda: _session_factory())
+_scope_depth = threading.local()
 
 
 def _build_engine(url):
@@ -54,12 +56,22 @@ def engine():
 
 @contextmanager
 def session_scope():
-    """事务作用域：成功提交、异常回滚、退出关闭并从线程注册表摘除。"""
+    """事务作用域：成功提交、异常回滚、退出关闭并从线程注册表摘除。
+
+    禁止嵌套：scoped_session 在同一线程返回同一个 Session，内层 begin 会与外层事务
+    冲突，且内层退出会连带摘除外层（W02 教训）。自开事务的能力（latest_telemetry、
+    uwb service 等）必须在自身 session_scope 之外调用。
+    """
+    depth = getattr(_scope_depth, 'value', 0)
+    if depth:
+        raise RuntimeError('session_scope 不可嵌套：内层作用域会关闭外层事务')
+    _scope_depth.value = depth + 1
     session = Session()
     try:
         with session.begin():
             yield session
     finally:
+        _scope_depth.value = depth
         Session.remove()
 
 

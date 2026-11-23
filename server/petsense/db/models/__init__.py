@@ -22,7 +22,9 @@ __all__ = [
     'Reading', 'ActionPrediction', 'Device', 'TelemetryLatest', 'TelemetryMinute', 'TelemetryEvent',
     'CollectionSession', 'CollectionFrame', 'CollectionVideo', 'JournalCrc', 'PetgifDiaryJob',
     'PetgifIdentity', 'AgentTurn', 'AgentLearningDay', 'CompanionSettings', 'AgentProposal', 'PetMemory',
+    'AgentAction',
 ]
 
-from petsense.db.models.agent import AgentTurn, AgentLearningDay, AgentProposal, CompanionSettings
+from petsense.db.models.agent import (AgentAction, AgentLearningDay, AgentProposal, AgentTurn,
+                                      CompanionSettings)
 from petsense.db.models.memory import PetMemory

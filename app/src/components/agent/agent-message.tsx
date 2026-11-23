@@ -12,6 +12,7 @@ import { Image } from 'expo-image';
 import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
 import AgentImageViewer from '@/components/agent/agent-image-viewer';
+import { ActionCard } from '@/components/agent/action-card';
 import { ProposalCard } from '@/components/agent/proposal-card';
 import { WebSourceCard } from '@/components/agent/web-source-card';
 import { ThemedText } from '@/components/themed-text';
@@ -376,7 +377,8 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry }:
       ];
   const textSegments = blocks.filter((block) => block.type === 'text');
   const proposals = blocks.filter((block) => block.type === 'proposal');
-  const hasUnknownBlocks = blocks.length > textSegments.length + proposals.length;
+  const actions = blocks.filter((block) => block.type === 'action');
+  const hasUnknownBlocks = blocks.length > textSegments.length + proposals.length + actions.length;
 
   const openMember = (speaker: 'pet' | 'assistant') =>
     router.push(speaker === 'pet' ? '/pet' : '/assistant-settings');
@@ -446,6 +448,9 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry }:
         ) : null}
         {proposals.map((block) => (
           <ProposalCard key={block.proposal.id} petId={petId} proposal={block.proposal} />
+        ))}
+        {actions.map((block) => (
+          <ActionCard key={block.action.id} action={block.action} petId={petId} />
         ))}
         <View style={styles.replyFootnote}>
           {[...new Map((turn.sources ?? []).map((source) => [sourceKey(source), source]))].map(

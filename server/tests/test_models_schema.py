@@ -14,7 +14,7 @@ EXPECTED_TABLES = {'agent_turns', 'agent_runs', 'agent_learning_days', 'agent_pr
                    'telemetry_latest', 'telemetry_minutes', 'telemetry_events', 'petgif_diary_jobs',
                    'petgif_identities', 'post_bookmarks', 'post_media', 'stories',
                    'story_views', 'discovery_locations', 'discovery_queries',
-                   'social_notifications', 'social_outbox'}
+                   'social_notifications', 'social_outbox', 'agent_actions'}
 
 
 class ModelSchemaTests(unittest.TestCase):

@@ -1,5 +1,5 @@
 """Durable owner turns, model output and run trajectories; request IDs deduplicate retries."""
-from sqlalchemy import Column, ForeignKey, Float, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Column, ForeignKey, Float, Index, Integer, String, Text, UniqueConstraint
 from petsense.db.base import Base, UTCDatetime
 
 
@@ -107,3 +107,31 @@ class AgentProposal(Base):
     superseded_by = Column(Integer, nullable=True)
     created_at = Column(UTCDatetime, nullable=False)
     decided_at = Column(UTCDatetime, nullable=True)
+
+
+class AgentAction(Base):
+    """W10 动作执行回执（agent-w10-spec.md §2）：稳定动作 ID + 结构化结果。
+
+    行只在真实执行时创建（提案确认后 / 明确直写草稿），提案候选本身不建行；
+    kind: record_audio / diary / social_draft。status: executing / completed /
+    failed / unknown（外部提交结果不明确）/ dismissed（仅草稿，用户在发布页移除）。
+    request_token 为录音关联凭据（高熵、唯一），设备按命令回传同一值。
+    """
+    __tablename__ = 'agent_actions'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    pet_id = Column(Integer, ForeignKey('pets.id'), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    kind = Column(String(24), nullable=False)
+    proposal_id = Column(Integer, nullable=True)
+    status = Column(String(16), nullable=False)
+    device_id = Column(String(64), nullable=True)
+    request_token = Column(String(64), nullable=True, unique=True)
+    intent_key = Column(String(64), nullable=True, unique=True)
+    duration_sec = Column(Integer, nullable=True)
+    input_json = Column(Text, nullable=False, default='{}')
+    result_json = Column(Text, nullable=False, default='{}')
+    error = Column(Text, nullable=True)
+    created_at = Column(UTCDatetime, nullable=False)
+    updated_at = Column(UTCDatetime, nullable=False)
+    finished_at = Column(UTCDatetime, nullable=True)
+    __table_args__ = (Index('ix_agent_actions_pet_kind_id', 'pet_id', 'kind', 'id'),)

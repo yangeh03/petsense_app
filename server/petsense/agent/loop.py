@@ -18,6 +18,7 @@ import re
 import time
 
 from petsense.agent import attachments, model, registry
+from petsense.agent import actions as actions_service
 from petsense.agent import settings as agent_settings
 
 MAX_TOOL_ROUNDS = 8
@@ -95,6 +96,19 @@ _MEMORY_RULES = (
     '收尾检查：完成回答后，若本轮还有值得记的内容现在就写，宁少勿错。\n'
     '外部知识、拟人表达不构成本宠事实，不写入档案或记忆。\n')
 
+# W10 动作类工具规则（录音能力句随 D3 开关变化，由 system_prompt 拼接）
+_ACTION_RULES_BASE = (
+    '动作类工具确认协议：远程录音（control_device）与生成运动日记（create_diary op=generate）'
+    '每次调用只生成确认卡，主人在卡片上确认后才真正执行；未经确认不得声称已发送录音指令、'
+    '已开始录音或已生成日记，也不得虚构步数或数据来源。读取已有日记（op=read）可直接执行。'
+    '录音以动作卡为准：指令发送和音频回传是两步，失败、超时如实说明，结果未知时等原结果、'
+    '不自动重试。生成日记会使用档案照片并交给 PetGIF（海报链接可公开访问），须先向主人说明并确认。'
+    '社区草稿（draft_social_post）：主人明确要求保存时 explicit=true 直接保存并回显草稿内容；'
+    '商量或请你拟稿时 explicit=false 出确认卡。草稿只私密保存，正式发布由主人在社区发布页手动完成，'
+    '不得声称已发布。\n')
+_ACTION_RECORDING_ON = '远程录音能力已接入（control_device，需项圈在线且固件支持，经确认卡执行）。\n'
+_ACTION_RECORDING_OFF = '远程录音暂未开放，被要求录音时如实说明，不得假装已发起。\n'
+
 _SEARCH_GUIDANCE = (
     '联网搜索时机：先判断答案是否依赖会过期的信息——是才搜索：时效状态（今天/最近的天气、'
     '空气质量、限行、新闻）、具体数字与程序类知识（疫苗程序、剂量标准）、争议话题、'
@@ -152,18 +166,18 @@ _SYSTEM_PROMPT_TAIL = (
 
 # 兼容旧引用：默认（搜索开启）版系统提示
 SYSTEM_PROMPT = _SYSTEM_PROMPT_HEAD + _HONESTY_SEARCH_ON + '\n' + _SEARCH_GUIDANCE \
-    + _MEMORY_RULES + _SYSTEM_PROMPT_TAIL
+    + _MEMORY_RULES + _ACTION_RULES_BASE + _ACTION_RECORDING_ON + _SYSTEM_PROMPT_TAIL
 
 
-def system_prompt(search_on=True):
-    """按联网搜索开关组装系统提示：能力描述与真实可用性一致（W06 spec §4.5）。
-
-    记忆规则与搜索开关无关，两个变体都带（W04）；开关关闭时不含搜索指引。
-    """
+def system_prompt(search_on=True, recording_on=True):
+    """按联网搜索与远程录音开关组装系统提示：能力描述与真实可用性一致
+    （W06 spec §4.5；W10 D3 录音默认关停，关闭时不提录音能力）。"""
+    recording_line = _ACTION_RECORDING_ON if recording_on else _ACTION_RECORDING_OFF
     if search_on:
         return _SYSTEM_PROMPT_HEAD + _HONESTY_SEARCH_ON + '\n' + _SEARCH_GUIDANCE \
-            + _MEMORY_RULES + _SYSTEM_PROMPT_TAIL
-    return _SYSTEM_PROMPT_HEAD + _HONESTY_SEARCH_OFF + '\n' + _MEMORY_RULES + _SYSTEM_PROMPT_TAIL
+            + _MEMORY_RULES + _ACTION_RULES_BASE + recording_line + _SYSTEM_PROMPT_TAIL
+    return _SYSTEM_PROMPT_HEAD + _HONESTY_SEARCH_OFF + '\n' + _MEMORY_RULES \
+        + _ACTION_RULES_BASE + recording_line + _SYSTEM_PROMPT_TAIL
 
 
 def build_context(snapshot):
@@ -344,8 +358,10 @@ def run_dialogue(context, on_progress=None):
     started = time.monotonic()
     deadline = started + RUN_WALL_LIMIT_S
     search_on = search_enabled()
+    recording_on = actions_service.recording_enabled()  # W10 D3：默认关停，开启才挂录音工具
     stance = None
     sources, tool_summary, messages_trace, proposals = [], [], [], []
+    action_results = []      # W10 直写动作回执（明确保存草稿等），routes 追加 action 块
     refreshed_turn_ids = []
     web_search_calls = []   # 累计（W06）：本轮与历史轮的 web_search_call（id/action/status）
     citations = {}          # url -> {'title','url','snippet'}，跨轮按 url 去重（每轮都收，§4.6）
@@ -360,7 +376,7 @@ def run_dialogue(context, on_progress=None):
     for index, old in enumerate(history):
         if old.get('images'):
             inline_history_index = index
-    system_content = system_prompt(search_on) + '\n实时快照：' + build_context(snap) \
+    system_content = system_prompt(search_on, recording_on) + '\n实时快照：' + build_context(snap) \
         + f"\n本轮指向：{context['target']}。"
     if context.get('settings'):
         system_content += '\n' + agent_settings.prompt_line(context['settings'])
@@ -417,7 +433,8 @@ def run_dialogue(context, on_progress=None):
         elif not allow_tools:
             degraded.append('wall_clock_exceeded')
         schemas = registry.schemas_for(registry.DIALOGUE, stance['scope'] if stance else None,
-                                       search_enabled=search_on) if allow_tools else []
+                                       search_enabled=search_on,
+                                       recording_enabled=recording_on) if allow_tools else []
         # W06 挂载策略：开关开启 + stance 非 out_of_scope（首轮 None 也挂，§2.1）
         # + 累计 < 2 次 + 该轮仍允许工具（§4.2）。执行在供应商侧，无法先于执行拦截（P00 §3 例外）。
         mount_search = (search_on and allow_tools
@@ -529,6 +546,13 @@ def run_dialogue(context, on_progress=None):
                 # W03 提案卡：同回合多次写入调用时，后一调用已把前一 pending 替代（supersede），
                 # routes 只挂最后一张（agent-w03-spec.md §3.5）
                 proposals.append(gate['result']['proposal'])
+            if gate['reason'] is None and isinstance(gate['result'], dict) \
+                    and isinstance(gate['result'].get('action'), dict):
+                # W10 直写动作回执（明确保存草稿）；确认类动作的回执由决策端点写回 blocks
+                action = gate['result']['action']
+                # 同一动作按意图幂等，回执块只留一份（稳定引用，重复调用不复制块）
+                if not any(existing.get('id') == action.get('id') for existing in action_results):
+                    action_results.append(action)
             if gate['reason'] is None and isinstance(gate['result'], dict):
                 # W03：被 supersede 的旧卡所在回合需推帧刷新（历史回合卡片翻「已有新候选」）
                 for turn_id in gate['result'].get('refreshedTurnIds') or []:
@@ -597,4 +621,4 @@ def run_dialogue(context, on_progress=None):
     return {'reply': stripped.strip(), 'blocks': blocks, 'speaker': blocks[0]['speaker'] if blocks else default_speaker,
             'sources': sources, 'stance': stance or {'scope': 'unknown', 'intent': 'unknown', 'speaker': 'assistant'},
             'degraded': bool(degraded), 'trace': trace, 'proposals': proposals,
-            'refreshedTurnIds': refreshed_turn_ids}
+            'actions': action_results, 'refreshedTurnIds': refreshed_turn_ids}

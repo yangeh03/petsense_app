@@ -45,3 +45,46 @@
 | W10-A6 发布兼容 | App 完整检查、固件 CI、旧录音／今日海报／社区原流程和旧 bundle 兼容。核对生产录音开关、未升级固件降级及日记/草稿上线状态。 |
 
 本包行为评测号段 E58–E65。验收记录须写明 MQTT 或协议数据来源、实机与模拟范围、PetGIF 返回状态、稳定引用和最终负责人选定的录音发布状态。
+
+## 6. 实施与本轮验证记录（2026-11-23，分支 codex/agent-w10-implementation）
+
+### 6.1 已实现范围
+
+- 服务端 `server/petsense/agent/actions.py`：三个动作共用的 `AgentAction` 回执（稳定动作 ID + 结构化结果）、录音 psrec01 协议接入、日记共用提交入口、私有草稿槽。
+- 注册表 `registry.py`：`control_device`（DEVICE_CONTROL 组，D3 开关关闭时进 schemas）、`create_diary`、`draft_social_post`（ACTION 组）。三个工具 `forms=(DIALOGUE,)`，后台检查点／回顾／事件形态不可调用。
+- 提案确认门复用 W03：`proposals.decide` 改为返回 `(row, turn_id, changed)`，W10 动作类只在确认时翻状态，实际执行由 `routes.proposal_decision` 在事务提交后交给 `actions.execute_confirmed`。
+- 固件 `agent_audio_protocol.{h,cpp}`（两目标同源，host 可测）+ 两份 `.ino` 接入：命令解析、凭据校验、去重表、限时停止、设备作用域回传、容量不足如实拒绝；遥测 envelope 上报 `agentAudio` 能力。
+- App：动作回执卡 `action-card.tsx`（录音按需播放、日记详情入口、草稿发布页入口）、录音播放 `action-audio.native.tsx`（WebView 内建 audio，无新增原生模块）、`proposal-card.tsx` 的 W10 候选卡形态、`create.tsx` 的独立私有草稿槽（不触碰本地手写草稿）。
+- 迁移 `server/alembic/versions/0017_agent_w10_actions.py`：本分支 `down_revision=0014`、revision `0017`（短命本地迁移；集成时由统筹者改接 W09 后的实际 head 并重编号，链上只保留一个 head）。
+
+### 6.2 复审意见的处置
+
+| 复审条目 | 处置 |
+| --- | --- |
+| 嵌套 `session_scope` | `db.session_scope` 增加同线程嵌套保护（嵌套即 `RuntimeError`），并把「读状态」与「写回执/推帧」拆成两段事务：`_transition` 用条件 UPDATE 做原子迁移，`_publish_turn` 在事务外调用。全量服务端测试在保护开启下通过（431 项）。 |
+| unknown 与到期口径不一致 | `unknown` 语义统一为「等待原结果」：仍接受归属正确的后续有效回传并可完成；同时为 unknown 排到期定时器，到期收敛为失败。任何路径都不自动重发指令，重发需新的确认。 |
+| WAV 核对不足 | 收尾处强制 mono 16 bit 16 kHz、声明字节数与实际字节数一致、数据块长度与实际字节一致且为整帧、时长对齐请求时长；终态提交前复核宠物与设备归属；超时与音频交叉时以原子迁移为准，迁移失败即删除本次落盘文件，不留孤儿音频。 |
+| 草稿幂等与副作用 | 直写与确认两条路径都按「授权意图键」（`proposal:<id>` 或账号+宠物+回合+正文+地点的哈希）唯一，重复调用只对应一条动作行；确认后候选卡被动作卡取代（同一位置只留一个可交互卡）；发布表无任何写入；社区发布计数在手动发布前不变。 |
+| 录音读取鉴权 | 独立目录 `agent-recordings/` + 专属鉴权路由，读取前校验账号、宠物、设备绑定与动作引用；不经旧公共 `/audio/` 路由暴露。 |
+| 固件与生产开关 | 两目标 ESP32 完整编译通过；`PETSENSE_AGENT_RECORDING_ENABLED` 默认关闭（生产未开启），工具不进 schemas、系统提示如实说明未开放。 |
+
+### 6.3 本轮测试证据
+
+| 范围 | 命令 | 结果 |
+| --- | --- | --- |
+| 服务端全量 | `cd server/tests && PETSENSE_MQTT_DISABLED=1 python -m unittest discover -s . -p "test_*.py"` | 431 项通过（1 项跳过） |
+| W10 服务端 | `python -m unittest test_agent_w10` | 35/35 通过（原 24 项 + 新增 11 项：unknown 接受迟到音频、unknown 到期不自动重发、终态不被迟到帧覆盖、非声明格式拒绝、字节数不符拒绝、数据块不完整拒绝、请求时长不符拒绝、草稿按意图幂等、不同意图各自成行、确认后候选卡被动作卡取代、私有槽取最新且旧行保留） |
+| 固件 host | `python -m unittest discover -s firmware/tests -v` | 25 项通过（含 W10 协议 2 项：两目标协议逻辑、两目标副本一致） |
+| 固件编译 | `bash firmware/check-build.sh`（arduino-cli 1.6.0 + esp32:esp32@2.0.16） | 两目标 ESP32 sketch 编译成功，`BUILD_EXIT=0`（`/tmp/w10-firmware-build-rerun.log`） |
+| App | `npm run lint` / `npx tsc --noEmit` / `npm run format:check` / `npm test` | 全部通过（无 error，格式一致，100/100 测试通过） |
+| 行为评测 E58–E65 | `cd server/tests/agent_behavior && python -m unittest test_agent_behavior` | 场景已补入；本轮环境无 `MINIMAX_API_KEY`，真实模型回合未执行（无凭据自动 skip） |
+
+MQTT／协议数据来源：录音链路未连生产 broker，回传走 `mqtt_ingest.on_message` 的真实 topic 路由与真实帧格式（`petsense/sensor/<id>/agent_audio`，start/chunk/end 三类帧、base64 分片、声明 16 kHz/16 bit/单声道），仅 `publish_control_command` 被替换为桩。
+
+### 6.4 本轮未覆盖（需后续模拟器／真机）
+
+- W10-A3 录音模拟器与真机：隔离账户走完整「确认 → 等待 → 播放 → 前后台回读 → 失败展示」；真实项圈验收需更新固件、有效命令与回传 ID、实际时长与播放结果。生产录音开关保持关闭，等真项圈门槛通过再评估开启。
+- W10-A4 PetGIF：隔离环境用测试素材走「确认 → 发起一次任务 → 完成后打开详情」，重生成只产生一次新任务，App 重开不重复。
+- W10-A5 草稿：模拟器验证发布页私有槽加载／填入／移除，原手写草稿保持，异账号拿不到稿件，社区动态计数在手动发布前不变。
+- W10-A6 发布兼容：App 完整检查、固件 CI、旧录音／今日海报／社区原流程与旧 bundle 兼容由集成阶段统一核对。
+- 行为评测 E58–E65 需在有模型凭据时复跑。

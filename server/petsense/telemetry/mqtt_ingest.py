@@ -13,6 +13,7 @@ from sqlalchemy import delete, func, insert, select, update
 
 from petsense import config, stats
 from petsense.actions import service as actions_service
+from petsense.agent import actions as agent_actions
 from petsense.collection.api import CollectionStore
 from petsense.db import iso_z, session_scope, utc_now
 from petsense.db.models import Device, Reading
@@ -40,6 +41,15 @@ def sensor_device(topic):
     if not tail or '/' in tail or tail in SENSOR_RESERVED_TAILS:
         return None
     return tail
+
+
+def agent_audio_device(topic):
+    """W10 设备作用域录音回传 topic（petsense/sensor/<id>/agent_audio）→ 设备 ID；其余 None。"""
+    suffix = '/' + agent_actions.AUDIO_TOPIC_SUFFIX
+    if not topic.startswith(SENSOR_PREFIX) or not topic.endswith(suffix):
+        return None
+    device_id = topic[len(SENSOR_PREFIX):-len(suffix)]
+    return device_id if device_id and '/' not in device_id else None
 
 
 def _touch_device_last_seen(device_id):
@@ -240,6 +250,26 @@ def on_connect(client, userdata, flags, rc):
 
 
 def on_message(client, userdata, msg):
+    agent_device = agent_audio_device(msg.topic)
+    if agent_device:
+        # W10 psrec01 回传：设备作用域 topic + 高熵 requestId；归属/有效性校验在动作服务内，
+        # 读文件与落库之前完成（agent-w10-spec.md §3）。原始音频不进 Reading/广播。
+        try:
+            payload = json.loads(msg.payload)
+        except (ValueError, TypeError):
+            payload = None
+        try:
+            accepted = agent_actions.ingest_agent_audio(agent_device, payload)
+        except Exception as error:
+            print(f'[AGENT-AUDIO] ingest error: {error}')
+            accepted = False
+        if accepted:
+            # 只给通过校验的帧留审计行（不含音频内容，只有帧类型与字节数）
+            store(msg.topic, json.dumps({'kind': 'agent_audio',
+                                         'frame': (payload or {}).get('type'),
+                                         'bytes': len(msg.payload)}),
+                  agent_device)
+        return
     if msg.topic == edge.TOPIC:
         try:
             if len(msg.payload) > 65536:
@@ -288,6 +318,7 @@ def on_message(client, userdata, msg):
     device_id = sensor_device(msg.topic)
 
     if device_id and isinstance(payload_dict, dict):
+        agent_actions.note_device_caps(device_id, payload_dict)  # W10：envelope 上的 agentAudio 能力
         frames = expand_sensor_batch(payload_dict)
         if frames:
             for frame in frames:
@@ -320,6 +351,7 @@ def on_message(client, userdata, msg):
             return
 
     if device_id and isinstance(payload_dict, dict):
+        agent_actions.note_device_caps(device_id, payload_dict)  # W10：单帧 envelope 同样上报能力
         gps.normalize(payload_dict)
         payload_dict.pop('uwbPosition', None)
         actions_service.enrich_frame_with_action(payload_dict)
