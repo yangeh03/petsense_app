@@ -15,6 +15,7 @@ import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
 import AgentImageViewer from '@/components/agent/agent-image-viewer';
 import { ActionCard } from '@/components/agent/action-card';
+import { AgentMarkdownText } from '@/components/agent/markdown-text';
 import { ProposalCard } from '@/components/agent/proposal-card';
 import { TaskProposalCard } from '@/components/agent/task-proposal-card';
 import { TaskResultCard } from '@/components/agent/task-result-card';
@@ -542,7 +543,7 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry, o
                   {segment.speaker === 'pet' ? (petName ?? '爱宠') : assistantName}
                 </ThemedText>
               </Pressable>
-              <ThemedText>{segment.text || '正在接话…'}</ThemedText>
+              <AgentMarkdownText text={segment.text || '正在接话…'} />
             </View>
           </View>
         ))}
