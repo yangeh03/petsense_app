@@ -35,6 +35,8 @@
 
 上线前必须过客户端 lint、typecheck、format:check、test 与 Web 构建，以及服务端全量 unittest。记录 CI、模拟器截图与生产只读抽查结果；没有真实就绪证据的宠物保持原学习状态。
 
+生产观测只读抽查（2026-11-23，腾讯云生产 SQLite 以 `mode=ro` 查询测试账号的当前设备）：2026-11-19 至 2026-11-20，动作有 2 个观测日，其中 1 个有效日。声音有 2 个观测日，0 个有效日。该记录支持生产学习态核对，已就绪场景使用隔离夹具验收。
+
 ## 实施记录（2026-11-23，分支 codex/agent-w11-w13，基于 main 5d945b4）
 
 ### 6.1 交付面
@@ -77,3 +79,21 @@
 
 - **E66–E72 已写入** `tests/agent_behavior/test_agent_behavior.py`（`ChangeBehaviorTests`：动作超范围、声音仍学习、正常范围、缺数据、部分可比周、两类委托回信），**本机无凭据整组 skip，尚未真实跑过**——需在有凭据环境复跑并记录模型方差。
 - iOS 模拟器验收（W11-A6/A7）与生产只读抽查仍未做（按约定由 Codex 在集成后统一调度）。
+
+### 6.6 行为评测修复（2026-11-23，Tencent 隔离真实模型轮次后）
+
+真实模型轮次结果：E67、E68、E70 通过；E66 未渲染 personal_change 块；E69 误报；E71/E72 未到达真实模型。修复如下（仅服务端与测试文件，客户端未改，iOS 模拟器源码与 UI 保持稳定）：
+
+1. **E66 —— 比较 schema 与定位信息**：
+   - 回顾输出 schema 的 JSON 示例补齐个人变化的**确切必填字段**：`evidenceId`、`direction`、`value`（原示例只列了 category/anchor/title/text，模型没有可照抄的结构）。
+   - 回顾事实新增 `personalChange.eligible` 列表，把合格候选的 `evidenceId`/`direction`/`value`/`range`/日期/时段单独列出，供模型原样照抄（`candidates` 仍保留全部时段与不可比原因）。
+   - 服务端校验放宽为：`evidenceId` 必需且必须命中合格候选；模型给出的 `direction`/`value` **给出时**必须与证据相符（不符 = 相反结论，拒绝），缺省时以服务端证据为准——用户可见比较句始终由服务端锚定（`change.comparative_clause()`），不依赖模型措辞。原实现要求三者都必须显式给出，真实模型常只给 evidenceId，导致发现被误拒。
+   - 轨迹新增定位信息 `conclusion.personalChange`：`eligibleCandidates`、`candidateCount`、`accepted`、`reason`（`no_eligible_candidate` / `rejected_findings` / `model_no_finding` / `accepted`）、`rejects`（含 `missing_evidence_id` / `unknown_evidence` / `not_eligible` / `direction_mismatch` / `value_mismatch`）、`modelFindings`（模型实际提出的发现）、`modelProvidedSay`、`sayClaimsComparison`、`sayDirections`。据此可区分「模型判定无显著性」「模型给了非法主张」「没有合格候选」与运行时错误（只含计数与状态，不含真实数据）。
+   - **保留 D2 的显著性判断**：E66 不再强制发布。断言改为「确有超范围合格候选」+「模型若报告了个人变化，交付块必须方向/数值锚定一致」+「没有块时诊断原因必须合法」。真实的「有效发现 → 渲染锚定块」由确定性用例 `test_review_accepts_valid_evidence_and_freezes_it` 覆盖。
+2. **E69 —— 否定范围误报**：`_asserts_claim` 原先只看结论词前 14 个字符且要求否定词紧邻结尾，「不能因此判断豆豆活动少或身体有异常」因此被误判为断言异常。改为**按分句判定否定范围**（最近的分句边界之后、结论词之前的整句内出现否定标记即视为否定），分句内无否定标记时仍判为断言——真实的无依据断言检查保留。
+3. **E71/E72 —— 夹具时钟无效**：原夹具用「今天 10:00」作截止时间，在 23 点运行时已过期，`normalize_plan` 以「截止时间需在未来」拒绝，任务从未创建，自然到不了真实模型。改为固定夹具时钟：确认=现在，截止=次日 20:00（上海），观察窗口 `[确认, 截止]` 覆盖次日 06–12 点完整时段（该时段在截止时已结束、可比较；确认前与暂停期仍被排除），基线取目标日之前的 7 个有效日，并显式在截止后 1 分钟运行作业。E71 断言回信冻结了目标日该时段的证据（方向 above、实际值 > p90、带服务端锚定 note），E72 断言事实策略回信既无个人比较断言也无冻结证据。
+   - 同时在证据里新增 `comparisonAllowed`（事实策略为 false），检查点系统提示据此要求「只能陈述绝对事实，不得做任何个人比较」——避免把主人的明确选择变成降级回信。
+   - 新增**本地无凭据**用例 `DelegationFixtureTests`（两条）：同一夹具 + 假模型直接证明「比较委托产出逐时段冻结证据」「事实策略委托不产出个人比较」，证明两条路径确实到达目标评估。
+4. 其余：**仅服务端与测试文件改动**，客户端源码与 UI 未动（iOS 模拟器验收用的 checkout 保持稳定）；未新增依赖、未提交、未推送、未部署、未访问生产。
+
+修复后自动证据：服务端 `python -m unittest discover -s tests` → **610 例全过（3 skip = 凭据门控的行为评测类）**；`tests/test_agent_w11.py` **34 例全过**（新增 2 条委托夹具本地用例）。E66–E72 的真实模型轮次需用未变更的凭据复跑（命令见下）。

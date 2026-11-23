@@ -28,6 +28,7 @@ from petsense.db.models.agent import (AgentCareTopic, AgentLearningDay, AgentTas
 from sqlalchemy import select
 
 SH = ZoneInfo('Asia/Shanghai')
+SHANGHAI = SH
 UTC = timezone.utc
 
 
@@ -697,6 +698,70 @@ class DeliveryEvidenceTests(ChangeTestBase):
                                            reason=None)
             self.assertEqual(first.id, second.id)
             self.assertEqual(len(s.execute(select(AgentTaskDelivery)).scalars().all()), 1)
+
+
+class DelegationFixtureTests(ChangeTestBase):
+    """本地（无凭据）证明委托夹具真的走到目标评估。
+
+    E71/E72 的行为评测需要真实凭据；这里用固定夹具时钟 + 假模型证明同一条路径：
+    比较委托在截止时产出逐时段冻结证据，事实策略委托不产出个人比较。
+    """
+
+    def setUp(self):
+        super().setUp()
+        jobs.register_handler(task_service.CHECKPOINT_KIND, task_service.handle_checkpoint_job)
+
+    def _window(self):
+        """确认=现在，截止=次日 20:00（上海）；目标日=次日；基线=目标日之前 7 个有效日。"""
+        now = datetime.now(SHANGHAI)
+        start = now.astimezone(UTC)
+        deadline = (now + timedelta(days=1)).replace(hour=20, minute=0, second=0,
+                                                    microsecond=0).astimezone(UTC)
+        target = (now + timedelta(days=1)).date()
+        for offset in range(7, 0, -1):
+            day = (target - timedelta(days=offset)).isoformat()
+            self.seed_learning([day], slots='[1,2]')
+            self.seed_minutes(day, 1, walk=10)
+        self.seed_minutes(target.isoformat(), 1, walk=100)
+        return start, deadline, target.isoformat()
+
+    def _run(self, strategy):
+        start, deadline, target = self._window()
+        with db.session_scope() as s:
+            pet = s.get(Pet, self.pet_id)
+            payload = task_service.normalize_proposal_fields({
+                'action': 'create',
+                'plan': {'kind': 'comparison', 'question': '它上午走动是不是比平时多',
+                         'feature': 'actions', 'comparison': {'band': 'above'},
+                         'baselineStrategy': strategy,
+                         'startAt': start.isoformat(),
+                         'deadlineAt': deadline.isoformat()}})
+            row, _ = proposal_service.create_task_proposal(s, pet, None, payload)
+            task_service.apply_proposal(s, pet, row, baseline_strategy=strategy)
+        with patch('petsense.agent.checkpoint.evaluate',
+                   return_value={'decision': 'letter', 'text': '它上午走动 70 分钟。',
+                                 'run_id': 7, 'error': None}):
+            jobs.tick(now=deadline + timedelta(minutes=1), limit=5)
+        with db.session_scope() as s:
+            rows = s.execute(select(AgentTaskDelivery)).scalars().all()
+        self.assertEqual(len(rows), 1, '委托应交付一条回信')
+        return json.loads(rows[0].payload), target
+
+    def test_comparison_delegation_freezes_slot_evidence(self):
+        """比较委托：回信冻结目标日该时段的个人变化证据。"""
+        payload, target = self._run('wait_baseline')
+        frozen = payload.get('changeEvidence') or []
+        self.assertEqual(len(frozen), 1, f'应冻结一条时段证据：{payload.get("changeEvidence")}')
+        self.assertEqual(frozen[0]['date'], target)
+        self.assertEqual(frozen[0]['direction'], 'above')
+        self.assertGreater(frozen[0]['value'], frozen[0]['range']['p90'])
+        self.assertTrue(frozen[0]['note'])
+
+    def test_absolute_facts_delegation_has_no_personal_evidence(self):
+        """事实策略（主人明确选择）：回信不冻结个人比较证据。"""
+        payload, _target = self._run('fact_first')
+        self.assertEqual(payload.get('changeEvidence') or [], [],
+                         '事实策略不得冻结个人比较证据')
 
 
 if __name__ == '__main__':

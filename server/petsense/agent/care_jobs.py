@@ -48,11 +48,14 @@ _REVIEW_SYSTEM = (
     '"level": "high或normal", '
     '"findings": [{"category": "walk_volume|sound_events|coverage|observation|personal_change|other", '
     '"anchor": "同一事件的自然键（小写英文与数字；跨天指同一件事时保持一致）", '
-    '"title": "短标题", "text": "这条发现的一句说明"}]}。'
-    '个人变化（category=personal_change）只能在 personalChange.candidates 里 status 为 '
-    'below/above 的时段上成立，并且必须带上该候选的 evidenceId（direction 与 value 与候选一致）；'
+    '"title": "短标题", "text": "这条发现的一句说明", '
+    '"evidenceId": "仅 personal_change 需要：候选的 evidenceId（原样照抄）", '
+    '"direction": "仅 personal_change 需要：above 或 below（原样照抄）", '
+    '"value": "仅 personal_change 需要：候选的实际值（数字，原样照抄）"}]}。'
+    '个人变化（category=personal_change）只能在 personalChange.eligible 里列出的时段上成立，'
+    '并且必须原样带上该候选的 evidenceId、direction、value 三个字段；'
     '候选 status 为 within 时只能说在平时范围内，不能说比平时多或少；没有合格候选时'
-    '只能陈述绝对事实，不要提「比平时」。'
+    '只能陈述绝对事实，不要提「比平时」。是否值得说由你判断：没有值得说的就少说或不说。'
     'say 中不要罗列全部数字，挑值得说的说。'
     'level=high 表示值得现在打扰主人（异常、里程碑、主人关心的事）；'
     'level=normal 是一般发现，只有多提醒档才会主动发出。'
@@ -191,6 +194,7 @@ def review_facts(session, pet, window_start, window_end):
 def _change_facts(change):
     """个人变化候选的提示词视图（只给可引用的事实，模型按 evidenceId 引用）。"""
     items = []
+    eligible = []
     for record in change.get('candidates') or []:
         entry = {'evidenceId': record['evidenceId'], 'feature': record.get('feature'),
                  'dimension': record.get('dimension'),
@@ -204,10 +208,19 @@ def _change_facts(change):
                  'revision': record.get('revision'), 'range': record.get('range'),
                  'direction': record.get('direction'), 'note': record.get('note')}
         items.append(entry)
+        if record.get('eligible'):
+            # 合格候选单独列出并附「原样照抄」的三个字段，降低模型漏字段的概率
+            eligible.append({'evidenceId': record['evidenceId'],
+                             'direction': record.get('direction'),
+                             'value': record.get('value'),
+                             'range': record.get('range'),
+                             'date': record['date'], 'slotLabel': record.get('slotLabel'),
+                             'dimension': record.get('dimension'),
+                             'coverageMinutes': record.get('coverageMinutes')})
     return {'dates': change.get('dates') or [], 'counts': change.get('counts') or {},
-            'candidates': items,
-            'note': '只有 status=below/above（严格超出 p10–p90）且覆盖达标的时段才可作为'
-                    '个人变化主题；引用时必须带 evidenceId；status 为 within 时不得说比平时多或少。'}
+            'candidates': items, 'eligible': eligible,
+            'note': '只有 eligible 里的时段可作为个人变化主题；引用时把 evidenceId、'
+                    'direction、value 三个字段原样照抄；status 为 within 时不得说比平时多或少。'}
 
 
 def _active_task_facts(session, pet):
@@ -266,7 +279,7 @@ def _validate_findings(payload, pet_id, session, now=None, candidates=None):
     raw = payload.get('findings') if isinstance(payload, dict) else None
     if not isinstance(raw, list):
         return [], []
-    findings, merged = [], []
+    findings, merged, rejects = [], [], []
     for item in raw:
         if not isinstance(item, dict):
             continue
@@ -276,17 +289,31 @@ def _validate_findings(payload, pet_id, session, now=None, candidates=None):
         if not anchor or not text:
             continue
         if category == 'personal_change':
-            # W11：个人变化必须引用真实的时段证据；方向与数值必须显式给出且与证据相符
-            # （缺失或不符一律拒绝——避免模型用自由措辞表达相反结论）
+            # W11：个人变化必须引用真实的时段证据。
+            # evidenceId 是必需的稳定引用；direction/value 是模型对证据的复述，
+            # 给出时必须与证据相符（不符 = 相反结论，拒绝），缺省时以服务端证据为准
+            # （用户可见句子由服务端锚定，不用模型措辞）。
             evidence_id = str(item.get('evidenceId') or '').strip()
             record = (candidates or {}).get(evidence_id)
-            if record is None or not record.get('eligible'):
+            if not evidence_id:
+                rejects.append({'reason': 'missing_evidence_id', 'anchor': anchor})
+                continue
+            if record is None:
+                rejects.append({'reason': 'unknown_evidence', 'evidenceId': evidence_id})
+                continue
+            if not record.get('eligible'):
+                rejects.append({'reason': 'not_eligible', 'evidenceId': evidence_id,
+                                'status': record.get('status')})
                 continue
             direction = item.get('direction')
-            if direction not in ('above', 'below') or direction != record.get('direction'):
+            if direction is not None and direction != record.get('direction'):
+                rejects.append({'reason': 'direction_mismatch', 'evidenceId': evidence_id,
+                                'claimed': direction, 'actual': record.get('direction')})
                 continue
             value = item.get('value')
-            if value != record.get('value'):
+            if value is not None and value != record.get('value'):
+                rejects.append({'reason': 'value_mismatch', 'evidenceId': evidence_id,
+                                'claimed': value, 'actual': record.get('value')})
                 continue
             anchor = f"change:{evidence_id}"
             evidence = change_service.freeze(record)
@@ -317,7 +344,45 @@ def _validate_findings(payload, pet_id, session, now=None, candidates=None):
                          'title': str(item.get('title') or category)[:80], 'text': text})
         if len(findings) >= FINDING_BUDGET:
             break
-    return findings, merged
+    return findings, merged, rejects
+
+
+def _change_diagnostics(facts, findings, rejects, say, payload=None):
+    """个人变化的定位信息（合成安全：只含计数、状态与拒绝原因，不含真实数据）。
+
+    用于区分「模型判定无显著性」「模型给了非法主张」「没有合格候选」与运行时错误，
+    便于真实模型轮次失败时定位。
+    """
+    change = facts.get('personalChange') or {}
+    accepted = [f for f in findings if f.get('category') == 'personal_change']
+    if not change.get('eligible'):
+        reason = 'no_eligible_candidate'
+    elif not accepted and rejects:
+        reason = 'rejected_findings'
+    elif not accepted:
+        reason = 'model_no_finding'
+    else:
+        reason = 'accepted'
+    model_findings = []
+    raw = (payload or {}).get('findings') if isinstance(payload, dict) else None
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        model_findings.append({'category': item.get('category'),
+                                'evidenceId': item.get('evidenceId'),
+                                'direction': item.get('direction'),
+                                'value': item.get('value'),
+                                'hasText': bool(str(item.get('text') or '').strip())})
+    return {'eligibleCandidates': len(change.get('eligible') or []),
+            'candidateCount': len(change.get('candidates') or []),
+            'accepted': len(accepted),
+            'reason': reason,
+            'rejects': rejects[:5],
+            'modelFindings': model_findings,
+            'modelProvidedSay': bool(str((payload or {}).get('say') or '').strip())
+            if isinstance(payload, dict) else False,
+            'sayClaimsComparison': change_service.claims_personal_change(say),
+            'sayDirections': sorted(change_service.claim_directions(say))}
 
 
 def _publication_provenance(payload, relevance):
@@ -362,7 +427,7 @@ def handle_review(job, now):
     trigger = {'kind': payload['kind'], 'window': payload['key'], 'petId': pet.id,
                'windowStart': payload['windowStart'], 'windowEnd': payload['windowEnd'],
                'scheduledAt': payload.get('scheduledAt')}
-    degraded, say, findings, merged = [], '', [], []
+    degraded, say, findings, merged, rejects = [], '', [], [], []
     relevance = 'high'
     outcome = loop.run_structured({
         'pet_id': pet.id, 'user_id': pet.user_id, 'form': registry.REVIEW,
@@ -387,7 +452,7 @@ def handle_review(job, now):
     else:
         say = str(payload_json.get('say') or '').strip()
         with session_scope() as s:
-            findings, merged = _validate_findings(
+            findings, merged, rejects = _validate_findings(
                 payload_json, pet.id, s, now=now,
                 candidates=change_service.eligible_map(facts.get('personalChange', {}).get('candidates') or []))
         relevance = _relevance(payload_json, findings)
@@ -417,6 +482,8 @@ def handle_review(job, now):
     trace['degraded'] = degraded
     trace['conclusion'] = {'reason_code': 'degraded:' + ','.join(degraded) if degraded else 'ok',
                            'window': payload['key'], 'findings': len(findings),
+                           'personalChange': _change_diagnostics(facts, findings, rejects, say,
+                                                                 payload_json),
                            'publication': {'provenance': _publication_provenance(payload_json,
                                                                                 relevance),
                                            'relevance': relevance,

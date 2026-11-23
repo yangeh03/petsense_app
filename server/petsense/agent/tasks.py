@@ -281,6 +281,7 @@ def materialize(session, pet, task, plan, end):
                 'observedSeconds': 0, 'walkSeconds': 0, 'soundEventCount': 0,
                 'actionSeconds': {}, 'daily': [], 'dataThrough': None, 'baseline': None,
                 'changeSlots': [],
+                'comparisonAllowed': True,
                 'comparisonStarted': task.observing_since is not None}
     if end <= start:
         return evidence
@@ -343,6 +344,7 @@ def materialize(session, pet, task, plan, end):
             evidence['baseline'] = {'error': 'baseline_unavailable'}
         # W11：逐日逐时段个人比较（只算有效观察窗口：排除确认前、等待期与暂停期）
         evidence['changeSlots'] = change_slots(session, pet, plan, windows, end)
+        evidence['comparisonAllowed'] = not _absolute_only(plan)
     return evidence
 
 
