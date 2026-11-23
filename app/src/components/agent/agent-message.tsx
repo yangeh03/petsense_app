@@ -13,6 +13,8 @@ import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
 import AgentImageViewer from '@/components/agent/agent-image-viewer';
 import { ProposalCard } from '@/components/agent/proposal-card';
+import { TaskProposalCard } from '@/components/agent/task-proposal-card';
+import { TaskResultCard } from '@/components/agent/task-result-card';
 import { WebSourceCard } from '@/components/agent/web-source-card';
 import { ThemedText } from '@/components/themed-text';
 import { Shadows } from '@/constants/theme';
@@ -376,17 +378,21 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry }:
       ];
   const textSegments = blocks.filter((block) => block.type === 'text');
   const proposals = blocks.filter((block) => block.type === 'proposal');
-  const hasUnknownBlocks = blocks.length > textSegments.length + proposals.length;
+  const taskResults = blocks.filter((block) => block.type === 'task_result');
+  const hasUnknownBlocks =
+    blocks.length > textSegments.length + proposals.length + taskResults.length;
 
   const openMember = (speaker: 'pet' | 'assistant') =>
     router.push(speaker === 'pet' ? '/pet' : '/assistant-settings');
 
   return (
     <View style={styles.exchange}>
-      <View style={[styles.ownerBubble, { backgroundColor: theme.tintBackground }]}>
-        {images.length ? <OwnerImages images={images} onOpen={openViewer} /> : null}
-        {turn.text ? <ThemedText>{turn.text}</ThemedText> : null}
-      </View>
+      {turn.text || images.length ? (
+        <View style={[styles.ownerBubble, { backgroundColor: theme.tintBackground }]}>
+          {images.length ? <OwnerImages images={images} onOpen={openViewer} /> : null}
+          {turn.text ? <ThemedText>{turn.text}</ThemedText> : null}
+        </View>
+      ) : null}
       {images.length ? (
         <AgentImageViewer
           images={images.map((meta) => agentImageSource(meta.id))}
@@ -444,8 +450,15 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry }:
             这条消息里有暂不支持的内容。
           </ThemedText>
         ) : null}
-        {proposals.map((block) => (
-          <ProposalCard key={block.proposal.id} petId={petId} proposal={block.proposal} />
+        {proposals.map((block) =>
+          block.proposal.kind === 'task_change' ? (
+            <TaskProposalCard key={block.proposal.id} petId={petId} proposal={block.proposal} />
+          ) : (
+            <ProposalCard key={block.proposal.id} petId={petId} proposal={block.proposal} />
+          ),
+        )}
+        {taskResults.map((block, index) => (
+          <TaskResultCard key={`${block.task.deliveryId}-${index}`} block={block.task} />
         ))}
         <View style={styles.replyFootnote}>
           {[...new Map((turn.sources ?? []).map((source) => [sourceKey(source), source]))].map(

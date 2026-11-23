@@ -44,6 +44,14 @@ export default function RootLayout() {
               }}
             />
             <Stack.Screen name="monitor" />
+            <Stack.Screen
+              name="agent-tasks"
+              options={{
+                headerShown: true,
+                title: '委托簿',
+                headerBackButtonDisplayMode: 'minimal',
+              }}
+            />
             <Stack.Screen name="pet" />
             <Stack.Screen name="collect" options={{ gestureEnabled: false }} />
             <Stack.Screen

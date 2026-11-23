@@ -166,6 +166,20 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
             </ThemedText>
           ) : null}
         </View>
+        {petId ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="查看委托簿"
+            onPress={() => router.push('/agent-tasks')}
+            style={[styles.pill, { backgroundColor: theme.backgroundSelected }]}
+          >
+            <SymbolView
+              name={{ ios: 'checklist', android: 'checklist', web: 'checklist' }}
+              tintColor={theme.tint}
+              size={18}
+            />
+          </Pressable>
+        ) : null}
         {loadedFor === (user?.id ?? -1) && learningDays !== null ? (
           <Pressable
             onPress={() => setShowLearning(!showLearning)}
