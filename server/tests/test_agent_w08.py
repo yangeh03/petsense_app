@@ -707,6 +707,38 @@ class BookAndSnapshotTests(W08TestCase):
 
 
 
+class ObservationLabelTests(W08TestCase):
+    """真实遥测按英文动作标签入库（walking），Agent 侧走动秒数必须照样算得出。"""
+
+    def _seed_english_minutes(self, minutes=30, walk_per_minute=40):
+        # 落在确认之后的观察窗口内（effective_from=确认时刻）
+        minute = (self.now + timedelta(minutes=1)).replace(second=0, microsecond=0)
+        with db.session_scope() as s:
+            for i in range(minutes):
+                s.add(TelemetryMinute(owner_id=self.uid, device_id='esp32-001',
+                                      minute=minute + timedelta(minutes=i), metrics='{}',
+                                      actions=json.dumps({'walking': walk_per_minute}),
+                                      observed_seconds=60, frames=60))
+
+    def test_walk_seconds_read_english_stored_labels(self):
+        self._seed_english_minutes(minutes=30, walk_per_minute=40)
+        with db.session_scope() as s:
+            pet = s.get(Pet, self.pet)
+            from petsense.agent.observations import query
+            result = query(s, pet, self.now - timedelta(hours=2), self.now + timedelta(hours=1))
+        self.assertEqual(result['actionSeconds'].get('walking'), 1200)
+
+    def test_task_evidence_counts_walk_seconds_from_english_labels(self):
+        self._seed_english_minutes(minutes=30, walk_per_minute=40)
+        row, _ = self._propose(plan=self._plan(deadlineAt=(self.now + timedelta(days=1)).isoformat()))
+        self.assertEqual(self._decide(row.id).status_code, 200)
+        task = self._task()
+        with db.session_scope() as s:
+            pet = s.get(Pet, self.pet)
+            plan = task_service.plan_of(s, task)
+            evidence = task_service.materialize(s, pet, task, plan, self.now + timedelta(hours=1))
+        self.assertEqual(evidence['walkSeconds'], 1200, '委托证据的走动秒数须来自真实标签')
+        self.assertEqual(evidence['observedSeconds'], 30 * 60)
 class CheckpointSchedulingRegressionTests(W08TestCase):
     """W08 评审修复的确定性回归：续期重排、在途换版、幂等入队与计划异常保作业。"""
 

@@ -7,6 +7,29 @@ from petsense.db.models import TelemetryMinute, TelemetryEvent, TelemetryLatest
 from petsense.agent.baseline import dimension_states
 from petsense.telemetry.observations import _combine, _public_metrics, prediction, METRICS, number
 
+# 动作标签归一：遥测按英文分类标签入库（telemetry/observations.ACTIONS），
+# Agent 侧统一用中文口径统计（与提示词、App 展示一致）；两种标签都能识别。
+ACTION_LABELS = {'walking': '走动', 'standing': '站立', 'sitting': '坐', 'lying down': '趴卧'}
+WALK_LABELS = ('walking', '走动')
+
+
+def normalize_action_label(key):
+    return ACTION_LABELS.get(key, key)
+
+
+def normalize_action_seconds(actions):
+    """把动作秒数归一到中文口径并合并同名标签。"""
+    result = {}
+    for key, value in (actions or {}).items():
+        label = normalize_action_label(key)
+        result[label] = result.get(label, 0) + value
+    return result
+
+
+def walk_seconds(actions):
+    """走动秒数（走动/walking 两种标签口径一致）。"""
+    return sum(value for key, value in (actions or {}).items() if key in WALK_LABELS)
+
 
 def query(session, pet, start, end):
     if end <= start or end - start > timedelta(days=90):

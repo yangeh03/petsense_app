@@ -31,7 +31,7 @@ from petsense.agent.routes import bp
 from petsense.db import utc_now
 from petsense.db.models import (AuthSession, Device, Pet, TelemetryEvent, TelemetryLatest,
     TelemetryMinute, User)
-from petsense.db.models.agent import AgentProposal, AgentRun, AgentTask
+from petsense.db.models.agent import AgentProposal, AgentRun, AgentTask, AgentTurn
 from sqlalchemy import select
 
 SHANGHAI = ZoneInfo('Asia/Shanghai')

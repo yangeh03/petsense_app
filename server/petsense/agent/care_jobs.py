@@ -23,7 +23,7 @@ from sqlalchemy import select
 
 from petsense.agent import care, deliver, jobs, loop, registry, runs
 from petsense.agent import settings as settings_service
-from petsense.agent.observations import query as observations_query
+from petsense.agent.observations import query as observations_query, walk_seconds
 from petsense.db import iso_z, session_scope, utc_now
 from petsense.db.models import Pet
 from petsense.db.models.agent import AgentCareTopic, CareDeviceState
@@ -149,7 +149,7 @@ def review_facts(session, pet, window_start, window_end):
         summary = observations_query(session, pet, bounds[0], bounds[1])
         days.append({'day': day.isoformat(),
                      'observedMinutes': int(summary.get('observedSeconds', 0) // 60),
-                     'walkMinutes': int((summary.get('actionSeconds') or {}).get('走动', 0) // 60),
+                     'walkMinutes': int(walk_seconds(summary.get('actionSeconds') or {}) // 60),
                      'soundEventCount': summary.get('soundEventCount', 0),
                      'minuteCount': summary.get('minuteCount', 0)})
         day += timedelta(days=1)

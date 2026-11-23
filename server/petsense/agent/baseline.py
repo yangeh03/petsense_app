@@ -27,6 +27,14 @@ DAY_RANGE_MIN_SAMPLES = 7       # D2：全天范围就绪样本门槛
 SLOT_RANGE_MIN_SAMPLES = 4      # D2：时段范围就绪样本门槛
 WALK_LABEL = '走动'
 
+
+def walk_seconds(actions):
+    """走动秒数：遥测按英文标签入库（walking），Agent 侧统一中文口径，两种都识别。"""
+    if not isinstance(actions, dict):
+        return 0
+    return sum(value for key, value in actions.items()
+               if key in (WALK_LABEL, 'walking'))
+
 DIMENSION_LABELS = {'actions': '动作', 'sounds': '声音'}
 SLOT_LABELS = {0: '夜间 00–06 点', 1: '上午 06–12 点', 2: '下午 12–18 点', 3: '晚间 18–24 点'}
 METRIC_LABELS = {'actions': '走动秒数', 'sounds': '声音事件次数'}
@@ -117,7 +125,7 @@ def _window_values(session, pet, feature, version, window_days):
                                   else minute.sound_observed_seconds)
         if feature == 'actions':
             actions = json.loads(minute.actions) if minute.actions else {}
-            day['value'][slot] += actions.get(WALK_LABEL, 0) if isinstance(actions, dict) else 0
+            day['value'][slot] += walk_seconds(actions) if isinstance(actions, dict) else 0
     for event in events:
         day = entry(event.started_at.astimezone(SHANGHAI).strftime('%Y-%m-%d'))
         day['value'][event.started_at.astimezone(SHANGHAI).hour // 6] += 1
@@ -192,7 +200,7 @@ def _target_day(session, pet, feature, version, date):
                            else minute.sound_observed_seconds)
         if feature == 'actions':
             actions = json.loads(minute.actions) if minute.actions else {}
-            value[slot] += actions.get(WALK_LABEL, 0) if isinstance(actions, dict) else 0
+            value[slot] += walk_seconds(actions) if isinstance(actions, dict) else 0
     if feature == 'sounds':
         events = session.execute(select(TelemetryEvent).where(
             TelemetryEvent.owner_id == pet.user_id, TelemetryEvent.device_id == pet.device_id,

@@ -21,7 +21,7 @@ from sqlalchemy import func, select
 
 from petsense.agent import jobs
 from petsense.agent.baseline import dimension_states
-from petsense.agent.observations import query as observations_query
+from petsense.agent.observations import query as observations_query, walk_seconds
 from petsense.db import iso_z, session_scope, utc_now
 from petsense.db.models import Pet, TelemetryMinute
 from petsense.db.models.agent import (AgentTask, AgentTaskDelivery, AgentTaskPlan, AgentTurn)
@@ -302,7 +302,7 @@ def materialize(session, pet, task, plan, end):
     evidence['observedSeconds'] = int(observed)
     evidence['soundEventCount'] = int(sound_total)
     evidence['actionSeconds'] = actions
-    evidence['walkSeconds'] = int(actions.get(WALK_LABEL, 0))
+    evidence['walkSeconds'] = int(walk_seconds(actions))
     evidence['gapSeconds'] = int(max(0, effective_seconds - observed))
     daily = []
     day_cursor = start.astimezone(tz).date()
@@ -319,7 +319,7 @@ def materialize(session, pet, task, plan, end):
                 result = observations_query(session, pet, a, b)
             except ValueError:
                 continue
-            day_totals['walkSeconds'] += (result.get('actionSeconds') or {}).get(WALK_LABEL, 0)
+            day_totals['walkSeconds'] += walk_seconds(result.get('actionSeconds') or {})
             day_totals['soundEventCount'] += result.get('soundEventCount') or 0
             day_totals['observedSeconds'] += result.get('observedSeconds') or 0
         daily.append({'day': day_cursor.isoformat(), **day_totals})

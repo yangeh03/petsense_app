@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 from petsense.agent import baseline as baseline_service
 from petsense.agent import fetch
 from petsense.agent import memory as pet_memory
+from petsense.agent import observations as observations_module
 from petsense.agent.observations import query as observations_query
 from petsense.agent import proposals as proposal_service
 from petsense.agent import settings as settings_service
@@ -176,7 +177,7 @@ def _today_summary(session, pet, end):
         actions = summary.get('actionSeconds') or {}
         observed_seconds = summary.get('observedSeconds') or 0
         sound_count = summary.get('soundEventCount') or 0
-    return {'windowStart': iso_z(start), 'walkSeconds': actions.get('走动', 0),
+    return {'windowStart': iso_z(start), 'walkSeconds': observations_module.walk_seconds(actions),
             'actionSeconds': actions, 'observedMinutes': int(observed_seconds // 60),
             'soundEventCount': sound_count}
 
