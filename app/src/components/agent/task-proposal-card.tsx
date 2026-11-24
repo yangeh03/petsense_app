@@ -257,7 +257,9 @@ export function TaskProposalCard({
         {statusText ? (
           <ThemedText
             type="small"
-            style={{ color: proposal.status === 'confirmed' ? theme.online : theme.textSecondary }}
+            style={{
+              color: proposal.status === 'confirmed' ? theme.onlineForeground : theme.textSecondary,
+            }}
           >
             {statusText}
           </ThemedText>
@@ -514,7 +516,7 @@ export function TaskProposalCard({
           onPress={() => setEditing(!editing)}
           style={styles.editToggle}
         >
-          <ThemedText type="small" style={{ color: theme.tint }}>
+          <ThemedText type="small" style={{ color: theme.tintForeground }}>
             {editing ? '' : '想调整？改截止、阈值或基线选择'}
           </ThemedText>
         </Pressable>

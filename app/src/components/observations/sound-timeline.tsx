@@ -47,7 +47,7 @@ export function SoundTimeline({ events }: { events: SoundEvent[] }) {
           onPress={() => setShowAll(!showAll)}
           style={styles.more}
         >
-          <ThemedText type="smallBold" style={{ color: theme.tint }}>
+          <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
             {showAll ? '收起' : '更多记录'}
           </ThemedText>
         </Pressable>

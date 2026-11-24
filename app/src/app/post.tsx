@@ -158,7 +158,7 @@ export default function PostScreen() {
             accessibilityLabel="重新加载帖子"
           >
             <ThemedText style={{ color: theme.danger }}>{failure.message}</ThemedText>
-            <ThemedText type="small" style={{ color: theme.tint }}>
+            <ThemedText type="small" style={{ color: theme.tintForeground }}>
               点击重试
             </ThemedText>
           </Pressable>

@@ -113,7 +113,9 @@ function Review({ clip, token, close }: { clip: Clip; token: string; close: () =
             </Text>
           </Pressable>
         ))}
-        {!markers.length && <Text style={{ color: theme.warning }}>尚未收到同步触发样本</Text>}
+        {!markers.length && (
+          <Text style={{ color: theme.warningForeground }}>尚未收到同步触发样本</Text>
+        )}
         <Pressable
           disabled={!selected || clip.state !== 'uploaded' || saving}
           onPress={confirm}
@@ -640,7 +642,7 @@ function CollectionScreen({ ownerId }: { ownerId: number }) {
         />
       )}
       {countdown !== null && (
-        <Text style={[styles.countdown, { color: theme.tint }]}>
+        <Text style={[styles.countdown, { color: theme.tintForeground }]}>
           {countdown > 0 ? `保持静止 ${countdown}` : '晃动项圈'}
         </Text>
       )}
@@ -673,7 +675,7 @@ function CollectionScreen({ ownerId }: { ownerId: number }) {
           </Pressable>
         ))}
       </View>
-      <Text accessibilityLiveRegion="polite" style={{ color: theme.warning }}>
+      <Text accessibilityLiveRegion="polite" style={{ color: theme.warningForeground }}>
         {message}
       </Text>
       <Text style={[color, { fontSize: 20, fontWeight: '700' }]}>本机录像</Text>

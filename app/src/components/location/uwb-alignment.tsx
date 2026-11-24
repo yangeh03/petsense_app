@@ -210,7 +210,7 @@ export function UwbAlignmentReview({
           opacity: busy || !ready ? 0.45 : 1,
         }}
       >
-        <ThemedText type="smallBold" style={{ color: theme.tint }}>
+        <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
           {session.phase === 'published' ? '切换为此配准结果' : '确认方向与轮廓，启用此地图'}
         </ThemedText>
       </Pressable>

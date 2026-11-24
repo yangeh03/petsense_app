@@ -18,7 +18,7 @@ import {
   uploadAgentImage,
   type AgentTurn,
 } from '@/services/agent';
-import { ApiError, fetchDashboard } from '@/services/api';
+import { ApiError, fetchDashboard, getToken } from '@/services/api';
 import { scrollRestorePlan } from '@/services/chat-restore';
 import {
   AGENT_JPEG_QUALITY,
@@ -80,13 +80,17 @@ export function useAgentChat(user: { id: number } | null) {
       setLearningDays(null);
       return;
     }
+    const session = getToken();
+    const currentSession = () => !!session && getToken() === session;
     try {
       const data = await fetchDashboard();
+      if (!currentSession()) return;
       state.setPet(data.pet);
       // W09：按当前宠物探测后端受管理告警规则（切宠/退出时内部恢复本地逻辑）
       void refreshCareRules(data.pet?.id ?? null);
       if (data.pet) {
         const latest = (await fetchAgentTurns(data.pet.id)).turns;
+        if (!currentSession()) return;
         useAgentChatStore
           .getState()
           .setTurns([
@@ -102,6 +106,7 @@ export function useAgentChat(user: { id: number } | null) {
           start.toISOString(),
           end.toISOString(),
         );
+        if (!currentSession()) return;
         setLearningDays(facts.learning.validDays);
         setLearningState(facts.learning.state);
         setSoundDays(
@@ -115,6 +120,7 @@ export function useAgentChat(user: { id: number } | null) {
       useAgentChatStore.getState().setLoadedFor(userId);
       useAgentChatStore.getState().setError('');
     } catch {
+      if (!currentSession()) return;
       useAgentChatStore.getState().setError('暂时没能取回我们的聊天，点这里重试');
     }
   }, [userId]);
@@ -125,7 +131,7 @@ export function useAgentChat(user: { id: number } | null) {
     restoredFor.current = userId;
     wasOpen.current = false;
     const state = useAgentChatStore.getState();
-    state.resetForUser();
+    state.resetForUser(userId);
     if (!userId) return;
     let active = true;
     void loadSnapshot(userId).then((snapshot) => {
@@ -168,6 +174,7 @@ export function useAgentChat(user: { id: number } | null) {
     if (!userId) return;
     const timer = setTimeout(() => {
       const state = useAgentChatStore.getState();
+      if (state.ownerId !== userId) return;
       const snapshot: Snapshot = {
         draft: state.draft,
         target: state.target,
@@ -195,18 +202,25 @@ export function useAgentChat(user: { id: number } | null) {
   /** WS：状态 + 帧 + 重连拉齐（以服务端已保存结果为准） */
   useEffect(() => {
     if (!userId) return;
+    const session = getToken();
+    let active = true;
+    const currentSession = () => active && !!session && getToken() === session;
     const unsubscribeStatus = agentChannel.subscribeStatus((status) => {
+      if (!currentSession()) return;
       useAgentChatStore.getState().setConnection(status);
       if (status === 'open') {
         if (wasOpen.current || useAgentChatStore.getState().turns.length) {
           void fetchAgentTurns(useAgentChatStore.getState().petId ?? -1)
-            .then((data) => useAgentChatStore.getState().setTurns(data.turns))
+            .then((data) => {
+              if (currentSession()) useAgentChatStore.getState().setTurns(data.turns);
+            })
             .catch(() => {});
         }
         wasOpen.current = true;
       }
     });
     const unsubscribeFrames = agentChannel.subscribe((frame) => {
+      if (!currentSession()) return;
       if (frame.type === 'turn') {
         useAgentChatStore.getState().applyTurn(frame.turn);
       } else if (frame.type === 'delta') {
@@ -217,6 +231,7 @@ export function useAgentChat(user: { id: number } | null) {
     });
     agentChannel.reconnect();
     return () => {
+      active = false;
       unsubscribeStatus();
       unsubscribeFrames();
     };
@@ -242,6 +257,8 @@ export function useAgentChat(user: { id: number } | null) {
 
   /** W07：单张上传（选中即传，失败标红可重试；服务端内容寻址，重试零成本） */
   const uploadOne = useCallback(async (attachment: AgentAttachment) => {
+    const session = getToken();
+    const currentSession = () => !!session && getToken() === session;
     const state = useAgentChatStore.getState();
     if (!state.petId || !attachment.localUri) {
       useAgentChatStore.getState().updateAttachment(attachment.key, { status: 'failed' });
@@ -253,6 +270,7 @@ export function useAgentChat(user: { id: number } | null) {
         name: 'photo.jpg',
         type: 'image/jpeg',
       });
+      if (!currentSession()) return;
       useAgentChatStore.getState().updateAttachment(attachment.key, {
         imageId: meta.id,
         width: meta.width ?? attachment.width,
@@ -261,6 +279,7 @@ export function useAgentChat(user: { id: number } | null) {
         failReason: undefined,
       });
     } catch (error) {
+      if (!currentSession()) return;
       // 服务端结构化消息如实透出（如超配额「请先清理历史图片」），网络失败用通用文案
       const reason = error instanceof ApiError ? error.message : '图片上传失败，请检查网络后重试';
       useAgentChatStore
@@ -272,6 +291,8 @@ export function useAgentChat(user: { id: number } | null) {
   /** W07：相册（多选）/拍照（单张）→ 压缩（1280/q0.8，D2）→ 逐张上传 */
   const pickImages = useCallback(
     async (source: 'library' | 'camera') => {
+      const session = getToken();
+      const currentSession = () => !!session && getToken() === session;
       const state = useAgentChatStore.getState();
       if (!state.petId) return;
       const limit = MAX_ATTACHMENTS - state.attachments.length;
@@ -285,7 +306,7 @@ export function useAgentChat(user: { id: number } | null) {
               selectionLimit: limit,
             })
           : await ImagePicker.launchCameraAsync(options);
-      if (result.canceled) return;
+      if (result.canceled || !currentSession()) return;
       for (const asset of result.assets.slice(0, limit)) {
         const key = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
         let normalized: Awaited<ReturnType<typeof normalizeForUpload>>;
@@ -297,6 +318,7 @@ export function useAgentChat(user: { id: number } | null) {
         } catch {
           continue; // 单张压缩失败跳过该张，不阻断其余选择
         }
+        if (!currentSession()) return;
         const attachment: AgentAttachment = {
           key,
           localUri: normalized.uri,
@@ -327,6 +349,8 @@ export function useAgentChat(user: { id: number } | null) {
   }, []);
 
   const send = useCallback(async () => {
+    const session = getToken();
+    const currentSession = () => !!session && getToken() === session;
     const state = useAgentChatStore.getState();
     const draft = state.draft.trim();
     if (!state.petId || state.busy) return;
@@ -369,6 +393,7 @@ export function useAgentChat(user: { id: number } | null) {
         pending.replyTo,
         pending.images,
       );
+      if (!currentSession()) return;
       const current = useAgentChatStore.getState();
       current.applyTurn(result.turn);
       current.setPending(null);
@@ -378,24 +403,31 @@ export function useAgentChat(user: { id: number } | null) {
       // W03：聊天内可能直写了助手设定（如改名），拉齐让副标题/指向 pill/消息标签即时生效
       void useCompanionSettingsStore.getState().refresh();
     } catch {
+      if (!currentSession()) return;
       useAgentChatStore.getState().setError('暂时没能确认送达，原话和图片已保留，可以重试');
     } finally {
-      useAgentChatStore.getState().setBusy(false);
+      if (currentSession()) useAgentChatStore.getState().setBusy(false);
     }
   }, []);
 
   const loadOlder = useCallback(async () => {
+    const session = getToken();
+    const currentSession = () => !!session && getToken() === session;
     const state = useAgentChatStore.getState();
     if (!state.petId || !state.turns.length) return;
     try {
       const data = await fetchAgentTurns(state.petId, state.turns[0].id);
+      if (!currentSession()) return;
       useAgentChatStore.getState().prependOlder(data.turns);
     } catch {
+      if (!currentSession()) return;
       useAgentChatStore.getState().setError('更早的聊天暂时没取回来');
     }
   }, []);
 
   const markRead = useCallback(async () => {
+    const session = getToken();
+    const currentSession = () => !!session && getToken() === session;
     const state = useAgentChatStore.getState();
     if (!state.petId || state.loadedFor !== userId) return;
     const ids = state.turns
@@ -410,6 +442,7 @@ export function useAgentChat(user: { id: number } | null) {
     if (!ids.length) return;
     try {
       const result = await markAgentRead(state.petId, ids);
+      if (!currentSession()) return;
       result.turns.forEach((turn) => useAgentChatStore.getState().applyTurn(turn));
     } catch {
       // 下次聚焦重试

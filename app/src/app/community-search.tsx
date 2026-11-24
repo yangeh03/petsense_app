@@ -176,7 +176,7 @@ export default function CommunitySearchScreen() {
             </Pressable>
           )}
           <Pressable onPress={() => router.back()} accessibilityLabel="取消搜索">
-            <ThemedText type="small" style={{ color: theme.tint }}>
+            <ThemedText type="small" style={{ color: theme.tintForeground }}>
               取消
             </ThemedText>
           </Pressable>
@@ -196,7 +196,7 @@ export default function CommunitySearchScreen() {
             >
               <ThemedText
                 type="small"
-                style={{ color: item === kind ? '#ffffff' : theme.textSecondary }}
+                style={{ color: item === kind ? theme.onTint : theme.textSecondary }}
               >
                 {{ all: '综合', posts: '帖子', users: '宠友', places: '地点' }[item]}
               </ThemedText>
@@ -245,7 +245,7 @@ export default function CommunitySearchScreen() {
             ListFooterComponent={
               nextCursor ? (
                 <Pressable onPress={() => void loadMore()}>
-                  <ThemedText type="small" style={{ color: theme.tint }}>
+                  <ThemedText type="small" style={{ color: theme.tintForeground }}>
                     {loadingMore ? '加载中…' : '加载更多结果'}
                   </ThemedText>
                 </Pressable>

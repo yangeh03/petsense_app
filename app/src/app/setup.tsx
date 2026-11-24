@@ -195,7 +195,7 @@ export default function SetupScreen() {
                 setAttempt((n) => n + 1);
               }}
             >
-              <ThemedText type="smallBold" style={{ color: theme.tint }}>
+              <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
                 重新加载
               </ThemedText>
             </Pressable>

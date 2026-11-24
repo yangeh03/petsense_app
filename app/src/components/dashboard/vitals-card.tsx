@@ -47,7 +47,7 @@ export function VitalsCard({
           onPress={() => setExplanationOpen(!explanationOpen)}
           style={styles.tap}
         >
-          <ThemedText type="small" style={{ color: theme.tint }}>
+          <ThemedText type="small" style={{ color: theme.tintForeground }}>
             {explanationOpen ? '收起说明' : '测量说明'}
           </ThemedText>
         </Pressable>
@@ -110,7 +110,7 @@ export function VitalsCard({
           type="small"
           style={[
             styles.alertText,
-            { color: theme.warning, backgroundColor: theme.tintBackground },
+            { color: theme.warningForeground, backgroundColor: theme.tintBackground },
           ]}
         >
           温度读数偏高，请先核对佩戴和传感器状态。
@@ -136,7 +136,7 @@ export function VitalsCard({
             数值下方为今日最小–最大区间；温度来自项圈传感器，不等同于体温。趋势线在实时在线时显示最近读数，离线时显示当日小时均值。
           </ThemedText>
           <Pressable accessibilityRole="button" onPress={onOpenCollar} style={styles.tap}>
-            <ThemedText type="smallBold" style={{ color: theme.tint }}>
+            <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
               查看项圈状态 ›
             </ThemedText>
           </Pressable>

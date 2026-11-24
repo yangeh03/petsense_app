@@ -72,6 +72,13 @@
           "granularPermissions": []
         }
       ],
+      [
+        "expo-notifications",
+        {
+          "enableRemoteNotifications": true,
+          "enableBackgroundRemoteNotifications": false
+        }
+      ],
       "expo-video"
     ],
     "experiments": {

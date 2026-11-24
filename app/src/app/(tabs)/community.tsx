@@ -240,7 +240,7 @@ export default function CommunityScreen() {
           >
             <ThemedText
               type="smallBold"
-              style={{ color: item === scope ? '#ffffff' : theme.textSecondary }}
+              style={{ color: item === scope ? theme.onTint : theme.textSecondary }}
             >
               {item === 'discover' ? '发现' : '关注'}
             </ThemedText>
@@ -256,7 +256,7 @@ export default function CommunityScreen() {
           <ThemedText type="small" style={{ color: theme.danger }}>
             刷新失败：{error}
           </ThemedText>
-          <ThemedText type="smallBold" style={{ color: theme.tint }}>
+          <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
             重试
           </ThemedText>
         </Pressable>
@@ -274,7 +274,7 @@ export default function CommunityScreen() {
               size={18}
               tintColor={theme.tint}
             />
-            <ThemedText type="smallBold" style={{ color: theme.tint }}>
+            <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
               发布故事
             </ThemedText>
           </Pressable>
@@ -359,7 +359,7 @@ export default function CommunityScreen() {
                     : '还没有帖子，来分享第一条动态')}
               </ThemedText>
               {!!error && (
-                <ThemedText type="small" style={{ color: theme.tint }}>
+                <ThemedText type="small" style={{ color: theme.tintForeground }}>
                   点击重试
                 </ThemedText>
               )}
@@ -424,7 +424,7 @@ function HeaderButton({
       <SymbolView name={name} size={21} tintColor={theme.tint} />
       {badge > 0 && (
         <View style={[styles.badge, { backgroundColor: theme.danger }]}>
-          <ThemedText style={[styles.badgeText, { color: '#ffffff' }]}>
+          <ThemedText style={[styles.badgeText, { color: theme.onDanger }]}>
             {badge > 99 ? '99+' : badge}
           </ThemedText>
         </View>

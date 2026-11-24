@@ -114,7 +114,10 @@ export default function LoginScreen() {
                     selected && { backgroundColor: theme.background, boxShadow: Shadows.chip },
                   ]}
                 >
-                  <ThemedText type="smallBold" style={selected ? { color: theme.tint } : undefined}>
+                  <ThemedText
+                    type="smallBold"
+                    style={selected ? { color: theme.tintForeground } : undefined}
+                  >
                     {item === 'login' ? '登录' : '注册'}
                   </ThemedText>
                 </View>
@@ -196,11 +199,11 @@ export default function LoginScreen() {
           ]}
         >
           {busy ? (
-            <ActivityIndicator color="#ffffff" />
+            <ActivityIndicator color={theme.onTint} />
           ) : (
             <ThemedText
               type="smallBold"
-              style={{ color: canSubmit ? '#ffffff' : theme.textSecondary }}
+              style={{ color: canSubmit ? theme.onTint : theme.textSecondary }}
             >
               {mode === 'login' ? '登录' : '注册并登录'}
             </ThemedText>

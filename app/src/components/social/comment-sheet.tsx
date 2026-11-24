@@ -336,7 +336,7 @@ export function CommentSheet({
             </ThemedText>
             {!comment.deleted && (
               <Pressable onPress={() => setReplyTarget(comment)}>
-                <ThemedText type="small" style={{ color: theme.tint }}>
+                <ThemedText type="small" style={{ color: theme.tintForeground }}>
                   回复
                 </ThemedText>
               </Pressable>
@@ -400,7 +400,7 @@ export function CommentSheet({
                   <ThemedText type="small" style={{ color: theme.danger }}>
                     {loadError}
                   </ThemedText>
-                  <ThemedText type="small" style={{ color: theme.tint }}>
+                  <ThemedText type="small" style={{ color: theme.tintForeground }}>
                     点击重试
                   </ThemedText>
                 </Pressable>
@@ -437,7 +437,7 @@ export function CommentSheet({
                           onPress={() => void toggleReplies(comment.id)}
                           style={styles.replyToggle}
                         >
-                          <ThemedText type="small" style={{ color: theme.tint }}>
+                          <ThemedText type="small" style={{ color: theme.tintForeground }}>
                             {replies[comment.id]
                               ? '收起回复'
                               : `查看 ${comment.reply_count ?? 0} 条回复`}
@@ -450,7 +450,7 @@ export function CommentSheet({
                           onPress={() => void loadMoreReplies(comment.id)}
                           style={styles.replyToggle}
                         >
-                          <ThemedText type="small" style={{ color: theme.tint }}>
+                          <ThemedText type="small" style={{ color: theme.tintForeground }}>
                             {loadingReplies === comment.id ? '加载中…' : '加载更多回复'}
                           </ThemedText>
                         </Pressable>
@@ -476,7 +476,7 @@ export function CommentSheet({
                       .catch(() => setError('更多评论加载失败，请重试'));
                   }}
                 >
-                  <ThemedText type="small" style={{ color: theme.tint }}>
+                  <ThemedText type="small" style={{ color: theme.tintForeground }}>
                     加载更多评论
                   </ThemedText>
                 </Pressable>
@@ -489,7 +489,7 @@ export function CommentSheet({
             )}
             {!!replyTarget && (
               <Pressable onPress={() => setReplyTarget(null)}>
-                <ThemedText type="small" style={{ color: theme.tint }}>
+                <ThemedText type="small" style={{ color: theme.tintForeground }}>
                   回复 {replyTarget.display_name} · 取消
                 </ThemedText>
               </Pressable>
@@ -519,7 +519,7 @@ export function CommentSheet({
               >
                 <ThemedText
                   type="smallBold"
-                  style={{ color: draft.trim() ? '#ffffff' : theme.textSecondary }}
+                  style={{ color: draft.trim() ? theme.onTint : theme.textSecondary }}
                 >
                   {sending ? '发送中' : '发送'}
                 </ThemedText>

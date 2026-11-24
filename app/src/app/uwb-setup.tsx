@@ -48,7 +48,7 @@ export default function UwbSetupScreen() {
             onPress={() => router.back()}
             style={[styles.backButton, { backgroundColor: theme.tintBackground }]}
           >
-            <ThemedText type="smallBold" style={{ color: theme.tint }}>
+            <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
               返回位置页查看新地图 ›
             </ThemedText>
           </Pressable>

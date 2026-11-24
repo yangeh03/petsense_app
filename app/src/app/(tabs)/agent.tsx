@@ -43,6 +43,7 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const accountChat = useAgentChatStore();
   const {
     petId,
     petName,
@@ -59,7 +60,22 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
     setTopic,
     setReplyTo,
     setScrollY,
-  } = useAgentChatStore();
+  } =
+    accountChat.ownerId === (user?.id ?? null)
+      ? accountChat
+      : {
+          ...accountChat,
+          petId: null,
+          petName: null,
+          loadedFor: null,
+          turns: [],
+          topic: undefined,
+          draft: '',
+          target: 'auto' as const,
+          attachments: [],
+          busy: false,
+          error: '',
+        };
   const {
     learningDays,
     soundDays,

@@ -124,7 +124,7 @@ export default function ProfileScreen() {
             </ThemedText>
           </View>
           <Pressable onPress={() => router.push('/profile-edit')} accessibilityLabel="编辑公开资料">
-            <ThemedText type="small" style={{ color: theme.tint }}>
+            <ThemedText type="small" style={{ color: theme.tintForeground }}>
               编辑
             </ThemedText>
           </Pressable>
@@ -164,7 +164,7 @@ export default function ProfileScreen() {
           <ThemedText type="smallBold">宠物档案</ThemedText>
           {profile && profile.pets.length === 0 && (
             <Pressable onPress={() => router.push('/setup')}>
-              <ThemedText type="small" style={{ color: theme.tint }}>
+              <ThemedText type="small" style={{ color: theme.tintForeground }}>
                 添加宠物
               </ThemedText>
             </Pressable>
@@ -204,7 +204,7 @@ export default function ProfileScreen() {
                 <ThemedText type="small" themeColor="textSecondary">
                   {speciesLabel(pet.species)} · {pet.breed || '品种未填写'}
                 </ThemedText>
-                <ThemedText type="small" style={{ color: theme.tint }}>
+                <ThemedText type="small" style={{ color: theme.tintForeground }}>
                   查看与编辑资料
                 </ThemedText>
               </View>
@@ -247,6 +247,23 @@ export default function ProfileScreen() {
             />
             <ThemedText type="default" style={styles.menuLabel}>
               助手设定
+            </ThemedText>
+            <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
+          </ThemedView>
+        </Pressable>
+        <Pressable onPress={() => router.push('/notification-settings')} accessibilityRole="button">
+          <ThemedView type="backgroundElement" style={styles.menuRow}>
+            <SymbolView
+              name={{
+                ios: 'bell.badge',
+                android: 'notifications_active',
+                web: 'notifications_active',
+              }}
+              size={20}
+              tintColor={theme.tint}
+            />
+            <ThemedText type="default" style={styles.menuLabel}>
+              通知推送
             </ThemedText>
             <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
           </ThemedView>

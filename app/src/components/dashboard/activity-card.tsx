@@ -77,7 +77,7 @@ export function ActivityCard({
             {hasCoverage && summary ? duration(summary.walkingSeconds) : '—'}
           </ThemedText>
           {share !== null && (
-            <ThemedText type="small" style={{ color: theme.tint }}>
+            <ThemedText type="small" style={{ color: theme.tintForeground }}>
               {share >= 1 ? `占已观测 ${share}%` : '不足已观测 1%'}
             </ThemedText>
           )}
@@ -94,7 +94,7 @@ export function ActivityCard({
       <ThemedText type="small" themeColor="textSecondary">
         按项圈动作识别估算，仅统计项圈在线且识别有效的时段。
       </ThemedText>
-      <ThemedText type="smallBold" style={{ color: theme.tint }}>
+      <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
         查看健康趋势与声音记录 ›
       </ThemedText>
     </Pressable>

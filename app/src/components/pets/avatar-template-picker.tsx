@@ -68,7 +68,7 @@ export function AvatarTemplatePicker({
               setAttempt((value) => value + 1);
             }}
           >
-            <ThemedText type="smallBold" style={{ color: theme.tint }}>
+            <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
               重试
             </ThemedText>
           </Pressable>
@@ -153,7 +153,7 @@ function TemplateOption({
         {template.name}
       </ThemedText>
       {selected && (
-        <ThemedText type="small" style={{ color: theme.tint }}>
+        <ThemedText type="small" style={{ color: theme.tintForeground }}>
           已选择
         </ThemedText>
       )}

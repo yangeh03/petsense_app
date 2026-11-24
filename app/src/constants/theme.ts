@@ -13,7 +13,7 @@ export const Colors = {
     background: '#FBF9F4',
     backgroundElement: '#FFFFFF',
     backgroundSelected: '#F3EAE0',
-    textSecondary: '#94836F',
+    textSecondary: '#776653',
     /** 品牌主色：珊瑚橙 */
     tint: '#E8835C',
     /** 珊瑚橙实底上的文字与图标 */
@@ -25,10 +25,14 @@ export const Colors = {
     /** 提醒 / 未完成 */
     warning: '#E8A13A',
     warningForeground: '#8A540D',
-    /** 告警严重级（critical） */
-    danger: '#E5484D',
+    /** 告警严重级（critical）：红要同时满足「压白底作文字」与「承白字」两种用法 */
+    danger: '#C62B2B',
+    /** danger 实底上的文字（徽标数字） */
+    onDanger: '#FFFFFF',
     /** 告警提示级（数据失联等） */
     info: '#5B8DEF',
+    /** info 作文字时的颜色：info 实底太浅，压白底只有 3.2:1 */
+    infoForeground: '#2F5FBF',
     /** 在线 / 正常状态 */
     online: '#31A66D',
     onlineForeground: '#216A47',
@@ -49,8 +53,10 @@ export const Colors = {
     tintBackground: '#4A2A1D',
     warning: '#F0BC6B',
     warningForeground: '#F0BC6B',
-    danger: '#FF6369',
+    danger: '#FF7176',
+    onDanger: '#17120E',
     info: '#7FA8F2',
+    infoForeground: '#7FA8F2',
     online: '#4CC38A',
     onlineForeground: '#4CC38A',
     onlineBackground: '#1F3A2A',

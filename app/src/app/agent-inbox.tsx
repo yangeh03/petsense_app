@@ -6,7 +6,7 @@
  */
 
 import { SymbolView } from 'expo-symbols';
-import { useRouter } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -26,42 +26,48 @@ export default function AgentInboxScreen() {
   const signedIn = user != null;
 
   return (
-    <View
-      style={[
-        styles.screen,
-        { backgroundColor: theme.background, paddingTop: insets.top + Spacing.two },
-      ]}
-    >
-      <View style={styles.header}>
-        <View style={styles.headerLead}>
-          <Pressable
-            onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))}
-            hitSlop={10}
-            accessibilityRole="button"
-            accessibilityLabel="返回"
-          >
-            <SymbolView
-              name={{ ios: 'chevron.left', android: 'arrow_back', web: 'arrow_back' }}
-              size={24}
-              tintColor={theme.tint}
-            />
-          </Pressable>
-          <ThemedText type="title">收件箱</ThemedText>
-        </View>
-        {unreadCount > 0 ? (
-          <Pressable
-            onPress={() => void markAllRead()}
-            hitSlop={10}
-            accessibilityRole="button"
-            accessibilityLabel="全部标为已读"
-            style={[styles.action, { backgroundColor: theme.tintBackground }]}
-          >
-            <Text style={[styles.actionText, { color: theme.tintForeground }]}>全部已读</Text>
-          </Pressable>
-        ) : null}
-      </View>
-
+    <View style={[styles.screen, { backgroundColor: theme.background }]}>
+      <Stack.Screen
+        options={{
+          headerShown: true,
+          title: '收件箱',
+          headerBackTitle: '返回',
+          headerBackButtonDisplayMode: 'minimal',
+          headerLeft: !router.canGoBack()
+            ? () => (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="返回今日"
+                  onPress={() => router.replace('/')}
+                  style={styles.backAction}
+                >
+                  <SymbolView
+                    name={{ ios: 'chevron.left', android: 'arrow_back', web: 'arrow_back' }}
+                    size={22}
+                    tintColor={theme.text}
+                  />
+                </Pressable>
+              )
+            : undefined,
+          headerRight:
+            unreadCount > 0
+              ? () => (
+                  <Pressable
+                    onPress={() => void markAllRead()}
+                    accessibilityRole="button"
+                    accessibilityLabel="全部标为已读"
+                    style={[styles.action, { backgroundColor: theme.tintBackground }]}
+                  >
+                    <Text style={[styles.actionText, { color: theme.tintForeground }]}>
+                      全部已读
+                    </Text>
+                  </Pressable>
+                )
+              : undefined,
+        }}
+      />
       <ScrollView
+        contentInsetAdjustmentBehavior="automatic"
         contentContainerStyle={[styles.list, { paddingBottom: insets.bottom + Spacing.four }]}
         refreshControl={undefined}
       >
@@ -101,6 +107,13 @@ export default function AgentInboxScreen() {
               : item.sourceKind === 'reply'
                 ? theme.tint
                 : theme.info;
+          // 来源类别是文字，要用压白底达标的变体；图标与圆点仍用实底品牌色
+          const kindTextColor =
+            item.sourceKind === 'device_fact'
+              ? theme.danger
+              : item.sourceKind === 'reply'
+                ? theme.tintForeground
+                : theme.infoForeground;
           return (
             <Pressable
               key={item.id}
@@ -117,7 +130,7 @@ export default function AgentInboxScreen() {
               </View>
               <View style={styles.texts}>
                 <View style={styles.titleRow}>
-                  <Text style={[styles.kind, { color }]}>
+                  <Text style={[styles.kind, { color: kindTextColor }]}>
                     {INBOX_SOURCE_LABEL[item.sourceKind]}
                   </Text>
                   <ThemedText type="smallBold" style={styles.title} numberOfLines={1}>
@@ -144,22 +157,16 @@ export default function AgentInboxScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: Spacing.four,
-    paddingTop: Spacing.two,
-    paddingBottom: Spacing.three,
-  },
-  headerLead: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  backAction: { minWidth: 44, minHeight: 44, justifyContent: 'center' },
   action: {
     borderRadius: 999,
     paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.one,
+    paddingVertical: Spacing.two,
+    minHeight: 44,
+    justifyContent: 'center',
   },
   actionText: { fontSize: 13, fontWeight: '600' },
-  list: { paddingHorizontal: Spacing.four, gap: Spacing.two },
+  list: { paddingHorizontal: Spacing.four, paddingTop: Spacing.three, gap: Spacing.two },
   empty: { alignItems: 'center', gap: Spacing.two, paddingVertical: Spacing.six },
   emptyEmoji: { fontSize: 34 },
   row: {

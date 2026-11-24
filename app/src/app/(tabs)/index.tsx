@@ -119,7 +119,7 @@ export default function DashboardScreen() {
             style={[styles.notice, { backgroundColor: theme.tintBackground }]}
           >
             <ThemedText type="small">{error}</ThemedText>
-            <ThemedText type="smallBold" style={{ color: theme.tint }}>
+            <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
               重新加载
             </ThemedText>
           </Pressable>
@@ -163,7 +163,7 @@ export default function DashboardScreen() {
               onPress={() => router.push('/login')}
               style={[styles.button, { backgroundColor: theme.tintBackground }]}
             >
-              <ThemedText type="smallBold" style={{ color: theme.tint }}>
+              <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
                 登录 / 注册
               </ThemedText>
             </Pressable>
@@ -176,7 +176,7 @@ export default function DashboardScreen() {
               onPress={() => router.push('/setup')}
               style={[styles.button, { backgroundColor: theme.tintBackground }]}
             >
-              <ThemedText type="smallBold" style={{ color: theme.tint }}>
+              <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
                 建立档案与连接项圈
               </ThemedText>
             </Pressable>

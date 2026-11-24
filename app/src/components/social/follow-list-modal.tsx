@@ -170,7 +170,7 @@ export function FollowListModal({
                 <ThemedText type="small" style={{ color: theme.danger }}>
                   {loadError}
                 </ThemedText>
-                <ThemedText type="small" style={{ color: theme.tint }}>
+                <ThemedText type="small" style={{ color: theme.tintForeground }}>
                   点击重试
                 </ThemedText>
               </Pressable>
@@ -227,7 +227,7 @@ export function FollowListModal({
                         <ThemedText
                           type="smallBold"
                           style={{
-                            color: item.is_following ? theme.textSecondary : '#ffffff',
+                            color: item.is_following ? theme.textSecondary : theme.onTint,
                             fontSize: 12,
                             lineHeight: 16,
                           }}
@@ -242,7 +242,7 @@ export function FollowListModal({
             )}
             {!!nextCursor && (
               <Pressable onPress={() => void loadMore()}>
-                <ThemedText type="small" style={{ color: theme.tint }}>
+                <ThemedText type="small" style={{ color: theme.tintForeground }}>
                   {loadingMore ? '加载中…' : '加载更多'}
                 </ThemedText>
               </Pressable>

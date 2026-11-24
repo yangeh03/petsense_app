@@ -19,6 +19,7 @@ function load(file, dependencies = {}) {
       setInterval: () => 0,
       clearInterval: () => {},
       Date,
+      AbortController,
     },
   );
   return module.exports;

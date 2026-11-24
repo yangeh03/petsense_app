@@ -133,6 +133,99 @@ def _store_eligibility(session, item, eligibility, now=None):
     item.updated_at = now
 
 
+# ── W13 发布缝：条目首次成为推送候选时入队（单向：inbox → push） ────────────
+
+def push_facts(session, item):
+    """按来源**当前**状态生成 W13 发布缝入参（push.ITEM_CONTRACT 形状）。
+
+    是否可推（``pushCandidate``）由中心策略按实时来源状态判定，与今日预览同口径。
+    """
+    policy = _live_policy(session, item)
+    return {
+        'id': str(item.id),
+        'userId': item.user_id,
+        'petId': item.pet_id,
+        'kind': item.source_kind,
+        'pushCandidate': bool(policy.push_candidate()),
+        'severity': policy.severity or '',
+        'sourceStatus': policy.source_status or '',
+        'relevance': policy.relevance,
+        'frozenEvidence': policy.frozen_evidence,
+        'deliveryApproved': policy.delivery_approved,
+        'highRelevance': bool(policy.frozen_evidence and policy.relevance == 'high'
+                              and policy.delivery_approved),
+        'backfilled': bool(item.backfilled),
+        'createdAt': iso_z(item.created_at),
+    }
+
+
+def _push_source(session, inbox_item_id):
+    """W13 发送前复核用的「当前来源」解析器（push.SOURCE_CONTRACT 形状）。
+
+    返回 None 表示条目已不存在（来源不可用）。宠物被转走/删除时 ``petOwnerId``
+    与 ``userId`` 不同/为空，W13 据此判定 pet_scope_changed。
+    """
+    try:
+        item_id = int(inbox_item_id)
+    except (TypeError, ValueError):
+        return None
+    item = session.get(AgentInboxItem, item_id)
+    if item is None:
+        return None
+    pet = session.get(Pet, item.pet_id)
+    policy = _live_policy(session, item)
+    return {
+        'userId': item.user_id,
+        'petId': item.pet_id,
+        'petOwnerId': pet.user_id if pet is not None else None,
+        'sourceKind': item.source_kind,
+        'backfilled': bool(item.backfilled),
+        'published': bool(policy.published),
+        'severity': policy.severity or '',
+        'sourceStatus': policy.source_status or '',
+        'relevance': policy.relevance,
+        'frozenEvidence': policy.frozen_evidence,
+        'deliveryApproved': policy.delivery_approved,
+        'highRelevance': bool(policy.frozen_evidence and policy.relevance == 'high'
+                              and policy.delivery_approved),
+        'pushCandidate': bool(policy.push_candidate()),
+    }
+
+
+def install_push_bridge():
+    """把当前来源解析器安装到 W13（app 启动时调用一次；幂等）。
+
+    只把 W12 的读取函数交给 W13，不引入反向依赖；未安装时 W13 发送前复核一律
+    保守抑制（宁可少发，不错发）。
+    """
+    from petsense.agent import push
+    push.set_inbox_source(_push_source)
+
+
+def offer_push(session, item):
+    """把条目**当前**的候选状态交给 W13（每轮投影、富化与资格写入后都会调用；幂等）。
+
+    - 是否可推只看中心策略对**当前**来源状态的判定；本函数不改写条目上的候选位，
+      ``push_candidate`` 始终如实反映 W12 的判定。
+    - 「入队恰好一次」由 W13 按 ``(收件箱条目, 安装实例)`` 去重。闸门关闭、用户尚未
+      开启或设备尚不具备接收条件时 W13 不建行，之后每轮重新递交；开闸后只补新事件
+      窗口内的事件，开启之前发生的事件不补推（截止规则在 W13 侧）。
+    - 历史补入条目中心策略恒为非候选，天然不会递交。
+    """
+    try:
+        from petsense.agent import push
+    except Exception:  # pragma: no cover - 推送域不可用时收件箱仍要工作
+        return
+    facts = push_facts(session, item)
+    if not facts['pushCandidate']:
+        return
+    try:
+        push.publish_inbox_item(session, facts)
+    except Exception:  # noqa: BLE001 - 推送入队失败不得影响收件箱投影与来源事务
+        logger.exception('push offer failed for inbox item %s', item.id)
+
+
+
 # ── 精确的来源→回合身份 ───────────────────────────────────────────────────
 
 def _resolve_turn_id(session, pet_id, topic=None, delivery=None):
@@ -273,6 +366,8 @@ def _project_topic(session, pet, topic, *, backfilled=False, now=None):
     _item, created = _insert_item(session, pet, source_kind, event_key,
                                   source_ref=source_ref, eligibility=eligibility,
                                   backfilled=backfilled, now=now)
+    if created:
+        offer_push(session, _item)
     return created
 
 
@@ -288,6 +383,8 @@ def _project_delivery(session, pet, delivery, now=None):
                   'instanceKey': delivery.instance_key}
     _item, created = _insert_item(session, pet, SOURCE_REPLY, 'delivery:%d' % delivery.id,
                                   source_ref=source_ref, eligibility=eligibility, now=now)
+    if created:
+        offer_push(session, _item)
     return created
 
 
@@ -351,6 +448,7 @@ def _enrich_item(session, item, now=None):
                           push_candidate=push_candidate(policy),
                           backfilled=updated.backfilled, reason=updated.reason)
     _store_eligibility(session, item, updated, now=now)
+    offer_push(session, item)
     return updated
 
 
@@ -401,10 +499,11 @@ def project_pet(session, pet, now=None):
                 created += 1
             state.delivery_watermark = delivery.id
         state.updated_at = now
-    # 富化：发布可能晚于水位推进，重新解析精确回合身份并刷新判定
+    # 富化：发布可能晚于水位推进，重新解析精确回合身份并刷新判定。
+    # 取**最新**的一批：迟到的发布总是落在新条目上，条目累计超过一批后最旧的不再刷新。
     rows = session.execute(select(AgentInboxItem).where(
-        AgentInboxItem.pet_id == pet.id).order_by(AgentInboxItem.id).limit(ENRICH_LIMIT)
-    ).scalars().all()
+        AgentInboxItem.pet_id == pet.id).order_by(AgentInboxItem.id.desc())
+        .limit(ENRICH_LIMIT)).scalars().all()
     for row in rows:
         _enrich_item(session, row, now=now)
     return created
@@ -532,11 +631,11 @@ def mark_personal_eligibility(session, user_id, item_id, *, relevance=None,
     row = session.get(AgentInboxItem, item_id)
     if row is None or row.user_id != user_id:
         return None
-    current = _eligibility_of(row)
-    updated = current.with_personal(relevance=relevance,
-                                    frozen_evidence=frozen_evidence,
-                                    delivery_approved=delivery_approved)
+    updated = _eligibility_of(row).with_personal(relevance=relevance,
+                                                 frozen_evidence=frozen_evidence,
+                                                 delivery_approved=delivery_approved)
     _store_eligibility(session, row, updated, now=now)
+    offer_push(session, row)
     return row
 
 
@@ -665,4 +764,5 @@ def public_list(session, rows):
 __all__ = ['project_pet', 'project_user', 'project_source', 'project_all', 'list_items',
            'public_list', 'unread_count', 'preview_item', 'mark_read', 'mark_all_read',
            'mark_personal_eligibility', 'push_candidates', 'resolve_target', 'source_detail',
-           'public', 'capability', 'visible_watermark', 'hydrate', 'PAGE_LIMIT']
+           'public', 'capability', 'visible_watermark', 'hydrate', 'push_facts',
+           'install_push_bridge', 'PAGE_LIMIT']

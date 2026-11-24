@@ -320,7 +320,7 @@ function ActionButton({
         opacity: disabled ? 0.45 : 1,
       }}
     >
-      <ThemedText type="smallBold" style={{ color: theme.tint }}>
+      <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
         {label}
       </ThemedText>
     </Pressable>

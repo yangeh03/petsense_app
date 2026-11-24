@@ -79,7 +79,7 @@ export default function StoryCreateScreen() {
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.header}>
           <Pressable onPress={() => router.back()}>
-            <ThemedText style={{ color: theme.tint }}>取消</ThemedText>
+            <ThemedText style={{ color: theme.tintForeground }}>取消</ThemedText>
           </Pressable>
           <ThemedText type="subtitle">发布故事</ThemedText>
           <View style={styles.spacer} />

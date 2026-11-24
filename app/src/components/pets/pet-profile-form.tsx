@@ -55,7 +55,7 @@ export function PetProfileForm({
               onPress={onPickPhoto}
               style={[styles.smallButton, { backgroundColor: theme.tintBackground }]}
             >
-              <ThemedText type="smallBold" style={{ color: theme.tint }}>
+              <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
                 {picking ? '正在选择…' : '选择照片'}
               </ThemedText>
             </Pressable>
@@ -72,7 +72,7 @@ export function PetProfileForm({
               onChange({ avatarMode: 'keep', photo: null, avatarEmoji: pet.avatar_emoji })
             }
           >
-            <ThemedText type="small" style={{ color: theme.tint }}>
+            <ThemedText type="small" style={{ color: theme.tintForeground }}>
               恢复已保存头像
             </ThemedText>
           </Pressable>
