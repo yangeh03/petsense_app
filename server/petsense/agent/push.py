@@ -1,10 +1,15 @@
 """W13 原生推送领域（首版仅 iOS）：发布缝、资格复核、投递状态机与审计。
 
 与 W12 的关系是**单向**：W12 在持久化收件箱条目的事务里调用
-``publish_inbox_item(session, item)``；本模块不反向依赖 W12，也不读写 W12 的表。
-入参 ``item`` 是普通 dict，形状由本模块定义并在
-``docs/agent-w13-integration-seam.md`` 固定（见 ``ITEM_CONTRACT``）。W12 只需保证
-产出满足契约的 dict，W13 负责分类、资格、去重与投递。
+``publish_inbox_item(session, facts)``，并安装「当前来源解析器」
+（``set_inbox_source``）。本模块**不 import** W12 的 ``inbox``，也不读写 W12 的表；
+只 import W12 的中心策略模块 ``inbox_eligibility``（该模块不依赖 ``petsense``，
+不会形成环）。
+
+**资格判定只有一处**：是否可推由 W12 的中心策略给出（``facts['pushCandidate']``），
+本模块不重新推导严重度、状态或证据门槛，避免口径分叉。本模块只补 W13 自己的
+几件事：平台闸门、用户开关、系统权限、安装实例与 token 有效性、归属、去重，
+以及个人变化的安静档。
 
 推送语义（D2/D4/D5/D7/D8）：
 
@@ -30,15 +35,14 @@ import hashlib
 import json
 import logging
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, update
 
+from petsense.agent import inbox_eligibility
 from petsense.agent import push_provider
 from petsense.agent import settings as settings_service
 from petsense.db import iso_z, session_scope, utc_now
-from petsense.db.models import Pet
-from petsense.db.models.agent import AgentCareTopic, AgentTask, AgentTaskDelivery
 from petsense.db.models.push import PushDelivery, PushInstallation, PushPreference
 
 logger = logging.getLogger(__name__)
@@ -46,24 +50,19 @@ logger = logging.getLogger(__name__)
 # ── 平台与分类 ──────────────────────────────────────────────────────────────
 PLATFORM_IOS = 'ios'
 SUPPORTED_PLATFORMS = (PLATFORM_IOS,)   # 本轮只交付 iOS；Android 与 Web 保持站内
-CATEGORY_DEVICE_ALERT = 'device_alert'
-CATEGORY_DUE_LETTER = 'due_letter'
-CATEGORY_PERSONAL_CHANGE = 'personal_change'
+#: 推送分类**直接沿用 W12 的来源类型**（inbox_eligibility 的唯一口径）。
+#: 不维护第二套映射：W12 的来源类型即 W13 的分类，载荷不能自选分类或归属。
+CATEGORY_DEVICE_ALERT = inbox_eligibility.SOURCE_DEVICE_FACT   # device_fact
+CATEGORY_DUE_LETTER = inbox_eligibility.SOURCE_REPLY            # reply
+CATEGORY_PERSONAL_CHANGE = inbox_eligibility.SOURCE_CARE        # care
+KIND_LEARNING = inbox_eligibility.SOURCE_LEARNING
+SOURCE_KINDS = inbox_eligibility.SOURCE_KINDS
 
-#: W12 来源类型 → 推送分类的**唯一**映射（无别名：载荷不能自行决定分类）。
-KIND_DEVICE_FACT = 'device_fact'
-KIND_DUE_LETTER = 'due_letter'
-KIND_CARE = 'care'
-KIND_LEARNING = 'learning'
-SOURCE_KINDS = (KIND_DEVICE_FACT, KIND_DUE_LETTER, KIND_CARE, KIND_LEARNING)
-CATEGORY_SOURCE_KIND = {
-    CATEGORY_DEVICE_ALERT: KIND_DEVICE_FACT,
-    CATEGORY_DUE_LETTER: KIND_DUE_LETTER,
-    CATEGORY_PERSONAL_CHANGE: KIND_CARE,
-}
+#: W13 只推这三类来源。学习完成（learning）只进收件箱，永不推送。
+PUSHABLE_KINDS = (CATEGORY_DEVICE_ALERT, CATEGORY_DUE_LETTER, CATEGORY_PERSONAL_CHANGE)
 
 #: 设备事实严重度：与 W12 共用口径（D8）。只有 warning/critical 可推。
-SEVERITY_PUSHABLE = ('warning', 'critical')
+SEVERITY_PUSHABLE = inbox_eligibility.KEY_DEVICE_SEVERITIES
 SEVERITY_INFO = 'info'
 
 # 安装实例状态
@@ -97,6 +96,7 @@ GENERIC_TEXT = {
     CATEGORY_DUE_LETTER: '有一份委托回信待查看',
     CATEGORY_PERSONAL_CHANGE: '有一条值得留意的新变化',
 }
+
 PUSH_TITLE = 'PetSense'
 
 MAX_ATTEMPTS = int(os.environ.get('PETSENSE_PUSH_MAX_ATTEMPTS', '3'))
@@ -106,24 +106,48 @@ RECEIPT_POLL_INTERVAL_S = 60   # 回执未就绪时的下次轮询间隔
 RECEIPT_BATCH = 100            # 单次回执查询的票据上限
 RECEIPT_WINDOW_S = 24 * 3600   # 回执窗口：超过 24h 未拿到回执即按「未知」处理
 PENDING_MAX_AGE_S = 24 * 3600  # pending 超过此龄期不再补发（避免开闸后刷屏）
+#: 新事件窗口：只推**近 24 小时内创建**的收件箱条目。更早的事件（历史补入、
+#: 迟到恢复的旧事件）永远只在收件箱里，不产生系统通知。
+PUSH_EVENT_MAX_AGE_S = 24 * 3600
 STUCK_SENDING_S = 300          # sending 停留超过此时长即判定为「调用后中断」
 
 #: W12 → W13 的发布缝入参契约（docs/agent-w13-integration-seam.md §1）。
+#: W12 给出**当前**事实；是否可推由 W12 的中心策略决定（``pushCandidate``），
+#: W13 不重新推导严重度、状态或证据门槛。
 ITEM_CONTRACT = {
     'id': 'string，必填。W12 的稳定收件箱 ID（深链唯一键）。',
     'userId': 'int，必填。条目拥有者。',
-    'kind': 'string，必填。W12 来源类型：device_fact / due_letter / care / learning。',
-    'petId': 'int，可选。宠物归属，用于归属复核与审计。',
-    'severity': "string，可选。设备事实严重度：info / warning / critical（device_fact 用）。",
-    'relevance': "string，可选。'high' 表示模型判定高相关（个人变化必需）。",
-    'evidenceRef': 'string，可选。W11 冻结证据引用（个人变化必需）。',
-    'delegateConfirmed': 'bool，可选。明确委托标记；显式 false 则到期回信不推。',
-    'migrated': 'bool，可选。迁移补入条目：永不进入发送队列。',
+    'kind': 'string，必填。W12 来源类型：device_fact / reply / care / learning。',
+    'petId': 'int，必选。宠物归属，用于归属复核与审计。',
+    'pushCandidate': 'bool，必填。W12 中心策略给出的推送候选判定（唯一口径）。',
+    'severity': "string，可选。来源当前严重度：info / warning / critical。",
+    'sourceStatus': "string，可选。来源当前状态（open / ongoing / closed / delivered）。",
+    'relevance': "string，可选。'high' 表示模型判定高相关。",
+    'frozenEvidence': 'bool，可选。W11 已冻结证据（个人变化必需）。',
+    'deliveryApproved': 'bool，可选。W09 已批准交付（个人变化必需）。',
+    'highRelevance': 'bool，可选。W11 写入的高相关标记。',
+    'backfilled': 'bool，可选。历史补入条目：永不进入发送队列。',
+    'createdAt': "string，可选。条目创建时间（ISO-Z）；用于「新事件窗口」判定。",
 }
 
 #: W12 当前来源解析器：fn(session, inbox_item_id) -> dict | None。
-#: 合入 W12 时由 W12 安装（见 docs/agent-w13-integration-seam.md §2）。未安装时
-#: 发送一律保守抑制——绝不凭缓存信息给用户发通知。
+#: 由 W12 安装（``inbox.install_push_bridge()``）。未安装时发送一律保守抑制——
+#: 绝不凭缓存信息给用户发通知。返回的 dict 形状见 ``SOURCE_CONTRACT``。
+SOURCE_CONTRACT = {
+    'userId': 'int，当前条目拥有者（已转让的宠物会与拥有者不一致）。',
+    'petId': 'int，条目所属宠物。',
+    'petOwnerId': 'int，宠物**当前**拥有者；宠物被转走或删除时与 userId 不同/为空。',
+    'sourceKind': 'string，来源类型（device_fact / reply / care / learning）。',
+    'backfilled': 'bool，历史补入。',
+    'published': 'bool，来源当前是否已发布（按实时回合身份判定）。',
+    'severity': 'string，来源当前严重度。',
+    'sourceStatus': 'string，来源当前状态。',
+    'relevance': 'string，W11 明确相关性。',
+    'frozenEvidence': 'bool，W11 已冻结证据。',
+    'deliveryApproved': 'bool，W09 已批准交付。',
+    'highRelevance': 'bool，W11 高相关标记。',
+    'pushCandidate': 'bool，中心策略的**当前**推送候选判定（唯一口径）。',
+}
 SOURCE_RESOLVER = None
 
 
@@ -191,53 +215,69 @@ def token_digest(expo_token):
 
 # ── W12 发布缝：分类与规范化 ────────────────────────────────────────────────
 
-def classify_item(item):
-    """把 W12 条目规范化成推送候选；不可推返回 None。
+def classify_item(facts):
+    """把 W12 的**当前**事实规范化成推送候选；不可推返回 None。
 
-    判定顺序：迁移补入 → 来源类型（唯一映射，无别名）→ D8 严重度 → 个人变化门槛。
+    资格判定**不在这里**：是否可推由 W12 中心策略给出（``facts['pushCandidate']``，
+    已含 D8 严重度口径、当前开放状态、W11 证据门槛与历史补入排除）。本函数只做
+    形状校验与分类映射，不重复推导策略。
     """
-    if not isinstance(item, dict):
+    if not isinstance(facts, dict):
         return None
-    item_id = str(item.get('id') or '').strip()
+    item_id = str(facts.get('id') or '').strip()
     if not item_id:
         return None
-    if item.get('migrated') or item.get('backfilled'):
-        return None  # 迁移补入条目不进入发送队列
-    kind = str(item.get('kind') or '').strip()
-    user_id = item.get('userId')
-    if user_id is None or kind not in SOURCE_KINDS:
+    user_id = facts.get('userId')
+    if user_id is None:
         return None
-    relevance = item.get('relevance')
-    relevance = str(relevance).strip().lower() if relevance else None
-    evidence_ref = str(item.get('evidenceRef') or '').strip() or None
-    delegate_confirmed = item.get('delegateConfirmed')
-    severity = item.get('severity')
-    severity = str(severity).strip().lower() if severity else None
-    if kind == KIND_DEVICE_FACT:
-        category = CATEGORY_DEVICE_ALERT
-        if severity is not None and severity not in SEVERITY_PUSHABLE:
-            return None  # D8：info 设备事实只进收件箱
-    elif kind == KIND_DUE_LETTER:
-        if delegate_confirmed is False:
-            return None  # 明确标注未确认委托的回信不推
-        category = CATEGORY_DUE_LETTER
-    elif kind == KIND_CARE:
-        # 关怀类里只有「W11 高相关个人变化」可推，且必须带证据引用
-        if relevance != 'high' or not evidence_ref:
-            return None
-        category = CATEGORY_PERSONAL_CHANGE
-    else:  # KIND_LEARNING
+    kind = str(facts.get('kind') or '').strip()
+    if kind not in SOURCE_KINDS:
         return None
+    if kind not in PUSHABLE_KINDS:
+        return None          # 学习完成只进收件箱
+    if facts.get('backfilled'):
+        return None          # 历史补入不追溯推送
+    if not facts.get('pushCandidate'):
+        return None          # 中心策略判定不是推送候选
+    severity = str(facts.get('severity') or '').strip().lower() or None
+    relevance = str(facts.get('relevance') or '').strip().lower() or None
     return {
         'inboxItemId': item_id,
         'userId': int(user_id),
-        'petId': item.get('petId'),
-        'category': category,
+        'petId': facts.get('petId'),
+        'category': kind,
         'severity': severity,
         'relevance': relevance,
-        'evidenceRef': evidence_ref,
-        'delegateConfirmed': bool(delegate_confirmed) if delegate_confirmed is not None else None,
+        'sourceStatus': str(facts.get('sourceStatus') or '').strip() or None,
+        'frozenEvidence': bool(facts.get('frozenEvidence')),
+        'deliveryApproved': bool(facts.get('deliveryApproved')),
+        'highRelevance': bool(facts.get('highRelevance')),
+        'createdAt': facts.get('createdAt'),
     }
+
+
+def _parse_iso(value):
+    """解析 ISO-Z 时间；解析不了返回 None（不做年龄判定，交给调用方兜底）。"""
+    if not value:
+        return None
+    text = str(value).strip()
+    if text.endswith('Z'):
+        text = text[:-1] + '+00:00'
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _event_age_seconds(facts, now):
+    """条目创建至今的秒数；无法解析时返回 None（表示「未知龄期」）。"""
+    created = _parse_iso(facts.get('createdAt'))
+    if created is None:
+        return None
+    return (now - created).total_seconds()
 
 
 def dedup_key(inbox_item_id, installation_id):
@@ -474,23 +514,33 @@ def delivery_public(row):
 
 # ── 发布：为每个可发送安装实例建投递行 ──────────────────────────────────────
 
-def publish_inbox_item(session, item, now=None):
-    """W12 发布缝入口：在 W12 的事务里调用。
+def publish_inbox_item(session, facts, now=None):
+    """W12 发布缝入口：当前事件成为推送候选时入队。
 
-    返回 ``{'published': n, 'reason': str|None, 'category': str|None}``。
-    不可推、闸门关闭或没有可发送安装实例时 published=0。
+    入参是 W12 给出的**当前**事实（形状见 ``ITEM_CONTRACT``）。返回
+    ``{'published': n, 'reason': str|None, 'category': str|None}``；
+    不可推、闸门关闭、用户未开启、安静档或没有可发送安装实例时 published=0。
+
+    幂等：去重键为 ``(收件箱条目, 安装实例)``，同一事件被重复投影时只会有一行。
     """
     now = now or utc_now()
-    candidate = classify_item(item)
+    candidate = classify_item(facts)
     if candidate is None:
         return {'published': 0, 'reason': 'not_pushable', 'category': None}
     category = candidate['category']
     if not platform_enabled(PLATFORM_IOS):
-        # 闸门关闭时不建行：开闸后也不补发历史条目
+        # 闸门关闭时不建行；开闸后也只补「新事件窗口」内的事件，不补历史。
         return {'published': 0, 'reason': 'platform_disabled', 'category': category}
+    age = _event_age_seconds(candidate, now)
+    if age is not None and age > PUSH_EVENT_MAX_AGE_S:
+        # 历史事件不补推（迟到恢复的旧事件也算历史）。
+        return {'published': 0, 'reason': 'stale_event', 'category': category}
     user_id = candidate['userId']
     if not user_enabled(session, user_id):
         return {'published': 0, 'reason': 'user_disabled', 'category': category}
+    if category == CATEGORY_PERSONAL_CHANGE and proactivity_level(session, user_id) <= 0:
+        # 安静档：**延迟**而非作废——安静结束后由下一次投影补入队（仍在新事件窗口内）。
+        return {'published': 0, 'reason': 'quiet_mode', 'category': category}
     installations = active_installations(session, user_id, PLATFORM_IOS)
     published = 0
     for installation in installations:
@@ -505,9 +555,11 @@ def publish_inbox_item(session, item, now=None):
             continue  # 同一 (条目, 安装实例) 只发一次
         meta = {
             'severity': candidate.get('severity'),
+            'sourceStatus': candidate.get('sourceStatus'),
             'relevance': candidate.get('relevance'),
-            'evidenceRef': candidate.get('evidenceRef'),
-            'delegateConfirmed': candidate.get('delegateConfirmed'),
+            'frozenEvidence': candidate.get('frozenEvidence'),
+            'deliveryApproved': candidate.get('deliveryApproved'),
+            'highRelevance': candidate.get('highRelevance'),
             'petId': candidate.get('petId'),
         }
         row = PushDelivery(
@@ -567,60 +619,32 @@ def evaluate_eligibility(session, delivery, installation, now=None):
 def check_current_source(session, delivery, source):
     """按 W12 **当前**来源复核（不信任发布时的缓存 meta）。返回 ``(ok, reason)``。
 
-    覆盖：来源已被删除/替换、拥有者已变、宠物已转走、告警已关闭、info 设备事实、
-    个人变化缺 W11 冻结证据或缺模型高相关接受、W09 对象未发布或已关闭、安静档。
+    W12 的中心策略已经判过「是不是推送候选」（``source['pushCandidate']``），
+    本函数**不重复推导**严重度、开放状态与证据门槛，只做 W13 自己的核对：
+
+    - 来源已被删除/替换 → source_unavailable；
+    - 历史补入 → backfilled；
+    - 条目拥有者已变（换账号）→ ownership_changed；
+    - 来源类型被换 → source_kind_changed；
+    - 宠物已转走或被删 → pet_scope_changed；
+    - 当前不再满足中心策略（告警已关闭、证据缺失等）→ not_push_candidate；
+    - 个人变化且处于安静档 → quiet_mode（设备告警与到期回信不受安静档影响）。
     """
     if source is None:
         return False, 'source_unavailable'
-    if source.get('backfilled') or source.get('migrated'):
+    if source.get('backfilled'):
         return False, 'backfilled'
-    owner_id = source.get('ownerId')
+    owner_id = source.get('userId')
     if owner_id is None or int(owner_id) != delivery.user_id:
         return False, 'ownership_changed'
-    kind = source.get('kind')
-    if kind != CATEGORY_SOURCE_KIND.get(delivery.category):
+    if source.get('sourceKind') != delivery.category:
         return False, 'source_kind_changed'
-    pet_id = source.get('petId')
-    pet = None
-    if pet_id is not None:
-        pet = session.get(Pet, pet_id)
-        if pet is None or pet.user_id != delivery.user_id:
-            return False, 'pet_scope_changed'
-    if delivery.category == CATEGORY_DEVICE_ALERT:
-        severity = source.get('severity')
-        if severity not in SEVERITY_PUSHABLE:
-            return False, 'info_not_pushable'
-        if source.get('status') not in (None, 'open'):
-            return False, 'alert_closed'
-    elif delivery.category == CATEGORY_DUE_LETTER:
-        delivery_id = source.get('deliveryId')
-        if not delivery_id:
-            return False, 'no_published_delivery'
-        letter = session.get(AgentTaskDelivery, delivery_id)
-        if letter is None:
-            return False, 'delivery_missing'
-        task = session.get(AgentTask, letter.task_id)
-        if task is None:
-            return False, 'delivery_missing'
-        if pet is not None and task.pet_id != pet.id:
-            return False, 'delivery_scope_changed'
-    elif delivery.category == CATEGORY_PERSONAL_CHANGE:
-        if not source.get('evidenceRef'):
-            return False, 'missing_evidence'
-        if not source.get('modelHighAccepted'):
-            return False, 'not_high_accepted'
-        topic_id = source.get('topicId')
-        if not topic_id:
-            return False, 'no_published_topic'
-        topic = session.get(AgentCareTopic, topic_id)
-        if topic is None:
-            return False, 'topic_missing'
-        if topic.status in ('closed', 'recovered'):
-            return False, 'topic_closed'
-        if pet is not None and topic.pet_id != pet.id:
-            return False, 'topic_scope_changed'
-        if not topic.delivered:
-            return False, 'topic_not_published'
+    pet_owner = source.get('petOwnerId')
+    if pet_owner is None or int(pet_owner) != delivery.user_id:
+        return False, 'pet_scope_changed'
+    if not source.get('pushCandidate'):
+        return False, 'not_push_candidate'
+    if delivery.category == CATEGORY_PERSONAL_CHANGE:
         if proactivity_level(session, delivery.user_id) <= 0:
             return False, 'quiet_mode'
     return True, None

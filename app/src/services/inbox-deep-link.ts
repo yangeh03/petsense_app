@@ -1,51 +1,24 @@
 /**
- * 收件箱深链缝（W13 ↔ W12）：把「稳定的收件箱 ID」解析成应用内路由。
+ * 收件箱深链缝（W13 → W12）：把「稳定的收件箱 ID」解析成应用内路由。
  *
  * W13 的职责到此为止：通知载荷里只带稳定的收件箱 ID（服务端保证同一 ID 指向同一
- * 对象），客户端负责把它交给 W12 的统一解析（前台、后台、冷启动走同一条路径）。
+ * 对象）。路由一律指向 W12 的权威解析页 `/inbox/[id]`——登录续接、来源不可用、
+ * 账号变更与「展示后才标已读」都由该页统一处理，W13 不维护第二套解析状态。
  *
- * 合入 W12 时只需做一件事：
- *
- * ```ts
- * import { setInboxDeepLinkResolver } from '@/services/inbox-deep-link';
- *
- * setInboxDeepLinkResolver((itemId) => {
- *   // 用 W12 实际提交的路由与参数格式定位原始对象
- *   return `/agent-inbox?item=${encodeURIComponent(itemId)}`;
- * });
- * ```
- *
- * 未安装解析器时，`resolveInboxDeepLink` 返回默认路由（`INBOX_DEEP_LINK_ROUTE`）；
- * 若该路由在当前构建中不存在，调用方会回退到伙伴页，不会崩。
+ * 解析失败（空 ID）返回 null，调用方回退到伙伴页，不会崩。
  */
 
-/** W12 收件箱路由：合入时按 W12 实际提交的路由名调整（或改用上面的解析器）。 */
-export const INBOX_DEEP_LINK_ROUTE = '/agent-inbox';
+/** W12 权威深链解析页：按稳定收件箱 ID 向服务端解析目标后跳转。 */
+export const INBOX_DEEP_LINK_ROUTE = '/inbox';
 
 /** 解析失败时的兜底页（当前构建里一定存在）。 */
 export const INBOX_FALLBACK_ROUTE = '/agent';
 
-export type InboxDeepLinkResolver = (inboxItemId: string) => string | null;
-
-let resolver: InboxDeepLinkResolver | null = null;
-
-/** 安装 W12 的解析器（合入时调用一次即可）。 */
-export function setInboxDeepLinkResolver(next: InboxDeepLinkResolver | null) {
-  resolver = next;
-}
-
-/** 稳定的收件箱 ID → 应用内路由。返回 null 表示无法定位。 */
+/** 稳定的收件箱 ID → W12 权威解析页路由。返回 null 表示无法定位。 */
 export function resolveInboxDeepLink(inboxItemId: string): string | null {
   const itemId = (inboxItemId ?? '').trim();
   if (!itemId) return null;
-  if (resolver) {
-    try {
-      return resolver(itemId);
-    } catch {
-      return null;
-    }
-  }
-  return `${INBOX_DEEP_LINK_ROUTE}?item=${encodeURIComponent(itemId)}`;
+  return `${INBOX_DEEP_LINK_ROUTE}/${itemId}`;
 }
 
 /** 从通知载荷里取稳定的收件箱 ID（服务端只带这一个稳定键）。 */

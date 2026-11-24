@@ -25,11 +25,9 @@ from helpers import fresh_db
 from petsense import db
 from petsense.agent import push, push_jobs, push_provider
 from petsense.agent.push_routes import bp
-from petsense.db import utc_now
+from petsense.db import iso_z, utc_now
 from petsense.db.models import AuthSession, Pet, User
-from petsense.db.models.agent import (AgentCareTopic, AgentJob, AgentLearningDay, AgentTask,
-                                       AgentTaskDelivery, CareDeviceState, CarePetState,
-                                       AgentTurn, CompanionSettings)
+from petsense.db.models.agent import CompanionSettings
 from petsense.db.models.push import PushDelivery, PushInstallation
 from sqlalchemy import select
 
@@ -103,9 +101,20 @@ class W13PushTests(unittest.TestCase):
         self.app.register_blueprint(bp)
         self.client = self.app.test_client()
         self.now = utc_now()
-        # 假 W12 当前来源解析器：默认返回一条「仍开放的 warning 设备告警」
+        # 假 W12 当前来源解析器：登记的状态 + 实时 petOwnerId（与真解析器同语义，
+        # 宠物被转走时即使不改登记状态也立刻反映）
         self.sources = {}
-        push.set_inbox_source(lambda _session, item_id: self.sources.get(item_id))
+
+        def fake_source(session, item_id):
+            source = self.sources.get(item_id)
+            if source is None:
+                return None
+            merged = dict(source)
+            pet = session.get(Pet, merged.get('petId'))
+            merged['petOwnerId'] = pet.user_id if pet is not None else None
+            return merged
+
+        push.set_inbox_source(fake_source)
         self.addCleanup(push.clear_inbox_source)
         with db.session_scope() as s:
             user = User(username='w13', display_name='w13', password_hash='x', salt='s',
@@ -166,14 +175,21 @@ class W13PushTests(unittest.TestCase):
             row.updated_at = self.now
 
     def _item(self, kind='device_fact', **kwargs):
-        item = {'id': 'inbox-1', 'userId': kwargs.pop('userId', self.uid), 'kind': kind}
+        """W12 发布缝入参（push.ITEM_CONTRACT 形状）。是否可推由 W12 给出。"""
+        item = {'id': 'inbox-1', 'userId': kwargs.pop('userId', self.uid), 'kind': kind,
+                'petId': kwargs.pop('petId', self.pet),
+                'pushCandidate': kwargs.pop('pushCandidate', True),
+                'createdAt': kwargs.pop('createdAt', iso_z(self.now))}
         item.update(kwargs)
         return item
 
     def _source(self, item_id='inbox-1', **kwargs):
-        """登记一条 W12「当前来源」状态（发送时按它复核）。"""
-        source = {'ownerId': self.uid, 'kind': 'device_fact', 'severity': 'warning',
-                  'status': 'open', 'backfilled': False}
+        """登记一条 W12「当前来源」状态（发送时按它复核；push.SOURCE_CONTRACT 形状）。"""
+        source = {'userId': self.uid, 'petId': self.pet, 'petOwnerId': self.uid,
+                  'sourceKind': 'device_fact', 'backfilled': False, 'published': True,
+                  'severity': 'warning', 'sourceStatus': 'open', 'relevance': '',
+                  'frozenEvidence': False, 'deliveryApproved': False, 'highRelevance': False,
+                  'pushCandidate': True}
         source.update(kwargs)
         self.sources[item_id] = source
         return source
@@ -198,43 +214,18 @@ class W13PushTests(unittest.TestCase):
 
     def _default_source(self, item):
         kind = item['kind']
-        source = {'ownerId': item['userId'], 'kind': kind, 'backfilled': False,
-                  'petId': self.pet}
+        source = {'userId': item['userId'], 'petId': self.pet, 'petOwnerId': item['userId'],
+                  'sourceKind': kind, 'backfilled': False, 'published': True,
+                  'sourceStatus': 'open', 'relevance': '', 'frozenEvidence': False,
+                  'deliveryApproved': False, 'highRelevance': False, 'pushCandidate': True}
         if kind == 'device_fact':
-            source.update({'severity': item.get('severity') or 'warning', 'status': 'open'})
+            source['severity'] = item.get('severity') or 'warning'
+        elif kind == 'reply':
+            source['sourceStatus'] = 'delivered'
         elif kind == 'care':
-            source.update({'evidenceRef': item.get('evidenceRef'), 'modelHighAccepted': True,
-                           'topicId': self._published_topic(item)})
-        elif kind == 'due_letter':
-            source.update({'deliveryId': self._published_letter(item)})
+            source.update({'severity': 'info', 'relevance': 'high', 'frozenEvidence': True,
+                           'deliveryApproved': True, 'highRelevance': True})
         return source
-
-    def _published_topic(self, item=None):
-        """造一个已发布的 W09 关怀主题（delivered > 0 视为已发布）。"""
-        with db.session_scope() as s:
-            topic = AgentCareTopic(pet_id=self.pet, kind='observation', category='walk_volume',
-                                   anchor='anchor-1', instance=1, status='open', severity='info',
-                                   title='t', detail='d', evidence='[]', delivered=1,
-                                   opened_at=self.now, updated_at=self.now)
-            s.add(topic)
-            s.flush()
-            return topic.id
-
-    def _published_letter(self, item=None):
-        """造一个已交付的 W08 委托回信。"""
-        with db.session_scope() as s:
-            task = AgentTask(pet_id=self.pet, task_key='task-1', current_version=1,
-                             status='observing', timezone='Asia/Shanghai',
-                             deadline_at=self.now + timedelta(days=1), effective_from=self.now,
-                             paused_intervals='[]', created_at=self.now, updated_at=self.now)
-            s.add(task)
-            s.flush()
-            letter = AgentTaskDelivery(task_id=task.id, plan_version=1, kind='letter',
-                                        instance_key='letter:v1', payload='{}',
-                                        created_at=self.now)
-            s.add(letter)
-            s.flush()
-            return letter.id
 
     def _deliveries(self):
         with db.session_scope() as s:
@@ -257,24 +248,31 @@ class W13PushTests(unittest.TestCase):
 
     # ── A1：消息分类 ────────────────────────────────────────────────────────
 
-    def test_classify_covers_four_sources(self):
+    def test_classify_follows_w12_push_candidate_flag(self):
+        """资格判定只有一处（W12 中心策略）：W13 只按 pushCandidate 做分类映射。"""
         cases = [
             (self._item('device_fact'), push.CATEGORY_DEVICE_ALERT),
-            (self._item('due_letter'), push.CATEGORY_DUE_LETTER),
-            (self._item('care', relevance='high', evidenceRef='ev-1'),
-             push.CATEGORY_PERSONAL_CHANGE),
+            (self._item('reply'), push.CATEGORY_DUE_LETTER),
+            (self._item('care'), push.CATEGORY_PERSONAL_CHANGE),
         ]
         for item, expected in cases:
             self.assertEqual(push.classify_item(item)['category'], expected)
-        # 关怀但非高相关 / 无证据 → 只留站内
-        self.assertIsNone(push.classify_item(self._item('care')))
-        self.assertIsNone(push.classify_item(self._item('care', relevance='high')))
-        self.assertIsNone(push.classify_item(self._item('care', evidenceRef='ev-1')))
-        # 学习完成、迁移补入 → 不推
-        self.assertIsNone(push.classify_item(self._item('learning')))
-        self.assertIsNone(push.classify_item(self._item('device_fact', migrated=True)))
-        # 明确未确认委托的回信 → 不推
-        self.assertIsNone(push.classify_item(self._item('due_letter', delegateConfirmed=False)))
+            self.assertEqual(push.classify_item(item)['inboxItemId'], 'inbox-1')
+        # 中心策略判定不可推（info 设备事实、未发布的回信、证据不全的个人变化）
+        self.assertIsNone(push.classify_item(self._item('device_fact', pushCandidate=False)))
+        self.assertIsNone(push.classify_item(self._item('reply', pushCandidate=False)))
+        self.assertIsNone(push.classify_item(self._item('care', pushCandidate=False)))
+        # 学习完成只进收件箱，永不推送
+        self.assertIsNone(push.classify_item(self._item('learning', pushCandidate=True)))
+        # 历史补入不追溯推送
+        self.assertIsNone(push.classify_item(self._item('device_fact', backfilled=True)))
+        # 形状不合法（缺 id / 缺归属 / 未知来源类型）
+        self.assertIsNone(push.classify_item({'userId': self.uid, 'kind': 'device_fact',
+                                              'pushCandidate': True}))
+        self.assertIsNone(push.classify_item({'id': 'inbox-1', 'kind': 'device_fact',
+                                              'pushCandidate': True}))
+        self.assertIsNone(push.classify_item(self._item('neighbor_news', pushCandidate=True)))
+        self.assertIsNone(push.classify_item('not-a-dict'))
 
     def test_publish_requires_user_opt_in(self):
         self._register()
@@ -294,16 +292,37 @@ class W13PushTests(unittest.TestCase):
         self.assertEqual(self._publish()['published'], 0)
         self.assertEqual(len(self._deliveries()), 2)
 
+    def test_stale_event_outside_new_event_window_is_not_enqueued(self):
+        """新事件窗口：超过 24h 才成为候选的历史条目不补推（只留站内）。"""
+        self._enable()
+        self._register()
+        stale_time = self.now - timedelta(seconds=push.PUSH_EVENT_MAX_AGE_S + 60)
+        result = self._publish(self._item(createdAt=iso_z(stale_time)))
+        self.assertEqual(result['published'], 0)
+        self.assertEqual(result['reason'], 'stale_event')
+        self.assertEqual(self._deliveries(), [])
+
     # ── A1：安静档 ──────────────────────────────────────────────────────────
 
-    def test_quiet_mode_suppresses_personal_change_only(self):
+    def test_quiet_mode_blocks_personal_change_at_publish(self):
+        """安静档在发布时不建行（延迟而非作废）：不进入发送队列。"""
         self._enable()
         self._register()
         self._proactivity(0)
+        result = self._publish(self._item('care'))
+        self.assertEqual(result['published'], 0)
+        self.assertEqual(result['reason'], 'quiet_mode')
+        self.assertEqual(self._deliveries(), [])
+
+    def test_quiet_mode_set_after_publish_suppresses_at_send(self):
+        """发布后才调到安静档：发送前复核按当前主动程度抑制。"""
+        self._enable()
+        self._register()
+        self._publish(self._item('care'))
+        delivery_id = self._delivery().id
+        self._proactivity(0)
         with self._gate_on():
-            self._publish(self._item('care', relevance='high', evidenceRef='ev-1'))
-            self.assertEqual(self._delivery().state, push.STATE_PENDING)
-            push.dispatch_delivery(self._delivery().id, now=self.now, provider=self.provider)
+            push.dispatch_delivery(delivery_id, now=self.now, provider=self.provider)
         row = self._delivery()
         self.assertEqual(row.state, push.STATE_SUPPRESSED)
         self.assertEqual(row.reason, 'quiet_mode')
@@ -318,33 +337,33 @@ class W13PushTests(unittest.TestCase):
             push.dispatch_delivery(self._delivery().id, now=self.now, provider=self.provider)
         self.assertEqual(self._delivery().state, push.STATE_SENT)
 
-    def test_personal_change_recheck_requires_high_relevance_and_evidence(self):
+    def test_personal_change_recheck_follows_current_policy(self):
         """个人变化的证据门槛按 W12 **当前来源**复核（不信任发布时的缓存）。"""
         self._enable()
         self._register()
         self._proactivity(2)
-        item = self._item('care', relevance='high', evidenceRef='ev-1')
-        self._publish(item)
+        self._publish(self._item('care'))
         delivery_id = self._delivery().id
-        # 当前来源的相关性被降级 → 抑制
+        # 当前来源的相关性被降级（缺高相关）→ 中心策略翻为不可推 → 抑制
         self.sources['inbox-1']['relevance'] = 'normal'
-        self.sources['inbox-1']['modelHighAccepted'] = False
+        self.sources['inbox-1']['highRelevance'] = False
+        self.sources['inbox-1']['pushCandidate'] = False
         with self._gate_on():
             push.dispatch_delivery(delivery_id, now=self.now, provider=self.provider)
         self.assertEqual(self._delivery().state, push.STATE_SUPPRESSED)
-        self.assertEqual(self._delivery().reason, 'not_high_accepted')
-        # 证据引用缺失同样抑制
+        self.assertEqual(self._delivery().reason, 'not_push_candidate')
+        # 证据缺失同样按当前策略抑制
         with db.session_scope() as s:
             row = s.get(PushDelivery, delivery_id)
             row.state = push.STATE_PENDING
             row.reason = None
             s.flush()
-        self.sources['inbox-1']['modelHighAccepted'] = True
-        self.sources['inbox-1']['evidenceRef'] = None
+        self.sources['inbox-1'].update({'relevance': 'high', 'highRelevance': True,
+                                        'frozenEvidence': False, 'pushCandidate': False})
         with self._gate_on():
             push.dispatch_delivery(delivery_id, now=self.now, provider=self.provider)
         self.assertEqual(self._delivery().state, push.STATE_SUPPRESSED)
-        self.assertEqual(self._delivery().reason, 'missing_evidence')
+        self.assertEqual(self._delivery().reason, 'not_push_candidate')
         self.assertEqual(self.provider.sent, [])
 
     # ── A1：关闭平台 ────────────────────────────────────────────────────────
@@ -679,26 +698,27 @@ class W13PushTests(unittest.TestCase):
         """D8：info 设备事实只进收件箱，warning/critical 才可推。"""
         self._enable()
         self._register()
-        # 发布时就带 info → 根本不建投递行
-        self.assertEqual(self._publish(self._item('device_fact', severity='info'))['published'], 0)
-        # 发布时没带严重度，但当前来源是 info → 发送前抑制
+        # 发布时中心策略已按 info 判为不可推 → 根本不建投递行
+        self.assertEqual(self._publish(self._item('device_fact', severity='info',
+                                                  pushCandidate=False))['published'], 0)
+        # 发布时可推，但当前来源降为 info（策略翻为不可推）→ 发送前抑制
         self._publish(self._item('device_fact'))
-        self.sources['inbox-1']['severity'] = 'info'
+        self.sources['inbox-1'].update({'severity': 'info', 'pushCandidate': False})
         with self._gate_on():
             push.dispatch_delivery(self._delivery().id, now=self.now, provider=self.provider)
         self.assertEqual(self._delivery().state, push.STATE_SUPPRESSED)
-        self.assertEqual(self._delivery().reason, 'info_not_pushable')
+        self.assertEqual(self._delivery().reason, 'not_push_candidate')
         self.assertEqual(self.provider.sent, [])
 
     def test_closed_alert_is_suppressed_at_send_time(self):
         self._enable()
         self._register()
         self._publish(self._item('device_fact'))
-        self.sources['inbox-1']['status'] = 'closed'
+        self.sources['inbox-1'].update({'sourceStatus': 'closed', 'pushCandidate': False})
         with self._gate_on():
             push.dispatch_delivery(self._delivery().id, now=self.now, provider=self.provider)
         self.assertEqual(self._delivery().state, push.STATE_SUPPRESSED)
-        self.assertEqual(self._delivery().reason, 'alert_closed')
+        self.assertEqual(self._delivery().reason, 'not_push_candidate')
 
     def test_missing_source_suppresses(self):
         """W12 来源读不到（未接入/已删除）→ 保守不发送。"""
@@ -715,7 +735,7 @@ class W13PushTests(unittest.TestCase):
         self._enable()
         self._register()
         self._publish(self._item('device_fact'))
-        self.sources['inbox-1']['ownerId'] = self.other_uid
+        self.sources['inbox-1']['userId'] = self.other_uid
         with self._gate_on():
             push.dispatch_delivery(self._delivery().id, now=self.now, provider=self.provider)
         self.assertEqual(self._delivery().state, push.STATE_SUPPRESSED)
@@ -725,7 +745,7 @@ class W13PushTests(unittest.TestCase):
         self._enable()
         self._register()
         self._publish(self._item('device_fact'))
-        self.sources['inbox-1']['kind'] = 'learning'
+        self.sources['inbox-1']['sourceKind'] = 'learning'
         with self._gate_on():
             push.dispatch_delivery(self._delivery().id, now=self.now, provider=self.provider)
         self.assertEqual(self._delivery().state, push.STATE_SUPPRESSED)
@@ -755,7 +775,7 @@ class W13PushTests(unittest.TestCase):
         self.assertEqual(self._delivery().reason, 'pet_scope_changed')
 
     def test_quiet_mode_allows_warning_but_not_personal_change(self):
-        """D7：安静档仍放行 warning 设备告警与明确委托的回信，只抑制个人变化。"""
+        """D7：安静档仍放行 warning 设备告警与到期回信，只抑制个人变化。"""
         self._enable()
         self._register()
         self._proactivity(0)
@@ -763,25 +783,24 @@ class W13PushTests(unittest.TestCase):
         with self._gate_on():
             push.dispatch_delivery(self._delivery().id, now=self.now, provider=self.provider)
         self.assertEqual(self._delivery().state, push.STATE_SENT)
-
+        # 到期回信同样不受安静档影响（发布路径不检查主动程度）
         self._register(INSTALLATION_B, TOKEN_B)
-        self._publish(self._item('care', id='inbox-2', relevance='high', evidenceRef='ev-1'))
-        with self._gate_on():
-            push.dispatch_delivery(self._delivery_by_item('inbox-2').id, now=self.now,
-                                   provider=self.provider)
-        personal = self._delivery_by_item('inbox-2')
-        self.assertEqual(personal.state, push.STATE_SUPPRESSED)
-        self.assertEqual(personal.reason, 'quiet_mode')
+        result = self._publish(self._item('reply', id='inbox-2'))
+        self.assertEqual(result['published'], 2, '回信入队不受安静档影响')
+
+        # 个人变化在安静档下发布 → 不建行
+        result = self._publish(self._item('care', id='inbox-3'))
+        self.assertEqual(result['published'], 0)
+        self.assertEqual(result['reason'], 'quiet_mode')
 
     def test_due_letter_requires_published_delivery(self):
+        """未交付的回信中心策略判为不可推 → 不建投递行（已交付后转交推送）。"""
         self._enable()
         self._register()
-        self._publish(self._item('due_letter'))
-        self.sources['inbox-1']['deliveryId'] = None
-        with self._gate_on():
-            push.dispatch_delivery(self._delivery().id, now=self.now, provider=self.provider)
-        self.assertEqual(self._delivery().state, push.STATE_SUPPRESSED)
-        self.assertEqual(self._delivery().reason, 'no_published_delivery')
+        result = self._publish(self._item('reply', pushCandidate=False))
+        self.assertEqual(result['published'], 0)
+        self.assertEqual(result['reason'], 'not_pushable')
+        self.assertEqual(self._deliveries(), [])
 
     # ── token 版本与归属 ────────────────────────────────────────────────────
 

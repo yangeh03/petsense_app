@@ -97,17 +97,13 @@ function loadPush(options = {}) {
 
 // ── 深链缝 ──────────────────────────────────────────────────────────────────
 
-test('深链缝：默认路由带稳定收件箱 ID，解析器可覆盖', () => {
+test('深链缝：一律指向 W12 权威解析页 /inbox/[id]，无第二套解析状态', () => {
   assert.equal(
     seam.resolveInboxDeepLink('inbox-42'),
-    '/agent-inbox?item=inbox-42',
-    '默认路由携带稳定收件箱 ID',
+    '/inbox/inbox-42',
+    '稳定收件箱 ID 指向 W12 的统一解析页',
   );
   assert.equal(seam.resolveInboxDeepLink('  '), null, '空 ID 不定位');
-  seam.setInboxDeepLinkResolver((id) => `/w12/inbox/${id}`);
-  assert.equal(seam.resolveInboxDeepLink('inbox-42'), '/w12/inbox/inbox-42');
-  seam.setInboxDeepLinkResolver(null);
-  assert.equal(seam.resolveInboxDeepLink('inbox-42'), '/agent-inbox?item=inbox-42');
 });
 
 test('深链缝：只认稳定收件箱 ID，载荷里的其它键不当作定位依据', () => {

@@ -44,6 +44,8 @@ def create_app(start_background=True):
     from petsense.agent.routes import bp as agent_bp
     from petsense.agent.inbox_routes import bp as agent_inbox_bp
     from petsense.agent.push_routes import bp as push_bp
+    from petsense.agent import inbox as agent_inbox
+    agent_inbox.install_push_bridge()  # W13 发送前复核用 W12 当前来源解析器（幂等）
     app = Flask('petsense')
     app.register_blueprint(agent_bp)
     app.register_blueprint(agent_inbox_bp)  # W12：收件箱（独立 blueprint，不与 agent/routes.py 冲突）
