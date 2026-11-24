@@ -286,6 +286,39 @@ class EligibilityTests(ChangeTestBase):
         self.assertEqual(record['range']['p90'], 1)
 
 
+# ── 比较断言的识别：否定式说明不算 ──────────────────────────────────────────
+
+class ComparisonClaimTests(unittest.TestCase):
+    """原句取自真实模型轮次里被误拒的回信（W08 E48、W11 E72）。"""
+
+    def test_negated_disclaimers_are_not_claims(self):
+        for text in (
+                '它目前仍在学习期（有效观测 0 天，需要 7 天），还没有个人参照范围，所以无法判断这是否比平时少。',
+                '个人基线仍在学习，有效0/7天，无可用基线范围，因此无法判断比平时多或少。',
+                '所以没有可参照的走动范围，也不能说比平时多或少。',
+                '无法就“上午走动是否高于平时”下结论。',
+        ):
+            self.assertFalse(change.asserts_comparison(text), text)
+            self.assertEqual(change.claim_directions(text), set(), text)
+
+    def test_affirmed_comparisons_are_claims(self):
+        for text in ('它昨天下午走动比平时多很多。', '上午走动明显少于平时。',
+                     '走动 7000 秒，高于该时段的平时范围。'):
+            self.assertTrue(change.asserts_comparison(text), text)
+
+    def test_mixed_sentence_keeps_the_affirmed_direction(self):
+        text = '不是比平时多，而是明显少于平时。'
+        self.assertTrue(change.asserts_comparison(text))
+        self.assertEqual(change.claim_directions(text), {'below'})
+
+    def test_negation_does_not_leak_across_clauses(self):
+        # 否定只作用于同一条分句：下一条分句里的比较仍是断言
+        self.assertTrue(change.asserts_comparison('无法判断它是否休息好，上午走动明显比平时多。'))
+
+    def test_substring_helper_still_reports_mentions(self):
+        self.assertTrue(change.claims_personal_change('无法判断是否比平时多'))
+
+
 # ── A2：周期回顾合流 ───────────────────────────────────────────────────────
 
 class ReviewChangeTests(ChangeTestBase):
@@ -434,6 +467,56 @@ class ReviewChangeTests(ChangeTestBase):
         topics, agent_turns = self._run_review(output)
         self.assertEqual([t for t in topics if t.category == 'personal_change'], [])
         self.assertTrue(any('观察小结' in t.reply for t in agent_turns))
+
+    def test_review_stays_strict_about_comparison_phrases(self):
+        """周期回顾更严：没有合格候选时，正文只要出现「比平时」就回退事实摘要。
+
+        否定式的说明也一样（「还不能说活动量比平时多或少」）——这是 W05/W09
+        「认识中不说比平时」的服务端兜底，与到期回信路径的否定感知判定不同。
+        """
+        self.seed_baseline(walks=[10] * 7)
+        self.seed_minutes(_day(-1), 1, walk=10)   # 在范围内
+        say = '它昨天上午走动约 11 分钟；个人基线还在认识中，无法判断是否比平时多。'
+        output = json.dumps({'say': say, 'level': 'high', 'findings': [
+            {'category': 'coverage', 'anchor': 'coverage-morning-only', 'text': '昨天只有上午有数据。'}]})
+        topics, agent_turns = self._run_review(output)
+        self.assertFalse(any('比平时' in t.reply for t in agent_turns), [t.reply for t in agent_turns])
+        self.assertTrue(any('观察小结' in t.reply for t in agent_turns))
+
+    def test_checkpoint_letter_with_negated_disclaimer_is_kept(self):
+        """到期回信如实说明「无法判断是否比平时少」（无合格证据）不得被拒。
+
+        原句取自真实模型轮次（W08 E48）：基线学习期的阈值委托回信因此稳定落降级信。
+        """
+        from petsense.agent import checkpoint
+        letter = ('这两分钟它走动约 45 秒，没有达到你设定的 60 秒门槛。'
+                  '它目前仍在学习期，还没有个人参照范围，所以无法判断这是否比平时少。')
+        ctx = {'mode': 'due', 'plan': {'kind': 'fact_watch', 'question': '它这两分钟走动多吗'},
+               'evidence': {'changeSlots': [], 'observedSeconds': 120, 'gapSeconds': 0,
+                            'pausedSeconds': 0, 'windowStart': None, 'windowEnd': None},
+               'pet_id': self.pet_id, 'user_id': self.uid, 'status': 'observing',
+               'version': 1, 'task_id': 1}
+        script = [json.dumps({'decision': 'letter', 'text': letter}, ensure_ascii=False)]
+        with patch('petsense.agent.model.respond', _fake_model(script)):
+            outcome = checkpoint.evaluate(ctx, utc_now())
+        self.assertEqual(outcome['decision'], 'letter')
+        self.assertIsNone(outcome['error'])
+        self.assertEqual(outcome['text'], letter)
+
+    def test_checkpoint_letter_affirming_comparison_without_evidence_is_rejected(self):
+        from petsense.agent import checkpoint
+        ctx = {'mode': 'due', 'plan': {'kind': 'fact_watch', 'question': '它这两分钟走动多吗'},
+               'evidence': {'changeSlots': [], 'observedSeconds': 120, 'gapSeconds': 0,
+                            'pausedSeconds': 0, 'windowStart': None, 'windowEnd': None},
+               'pet_id': self.pet_id, 'user_id': self.uid, 'status': 'observing',
+               'version': 1, 'task_id': 1}
+        for text in ('这两分钟它走动比平时多。', '不是比平时多，而是明显少于平时。'):
+            with self.subTest(text=text):
+                script = [json.dumps({'decision': 'letter', 'text': text}, ensure_ascii=False)]
+                with patch('petsense.agent.model.respond', _fake_model(script)):
+                    outcome = checkpoint.evaluate(ctx, utc_now())
+                self.assertIsNone(outcome['decision'])
+                self.assertEqual(outcome['error'], 'comparison_without_evidence')
 
     def test_same_window_rerun_is_deduplicated(self):
         """同一窗口重跑不重复开题（同锚点合并）。"""

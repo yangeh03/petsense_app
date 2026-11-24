@@ -463,6 +463,9 @@ def handle_review(job, now):
         # b) 模型措辞的方向与已接受证据相反 → 用服务端锚定的比较句替换
         #    （比较仍被锚定，绝对事实叙述保留）。
         accepted = [f for f in findings if f['category'] == 'personal_change']
+        # 回顾路径保持严格：学习期/无合格证据时，正文出现「比平时」等说法一律回退事实摘要
+        # （W05/W09 的「认识中不说比平时」由服务端兜底；E51 按原文子串断言）。
+        # 到期回信才用否定感知的 asserts_comparison——「无法判断是否比平时少」是如实交代。
         if change_service.claims_personal_change(say):
             if not accepted:
                 degraded.append('personal_change_without_evidence')
@@ -510,6 +513,14 @@ def handle_review(job, now):
             care.open_topic(s, pet.id, 'observation', finding['category'], finding['anchor'],
                             severity='info', title=finding['title'], detail=finding['text'],
                             evidence=evidence_rows, now=now)
+            # 稳定 run id：把本次回顾运行挂到主题上，W12 据此把「已确认高相关发布」
+            # 与该主题精确关联（运行 + 宠物 + 已交付回合三重匹配，见 inbox_publication）。
+            topic = s.execute(select(AgentCareTopic).where(
+                AgentCareTopic.pet_id == pet.id, AgentCareTopic.kind == 'observation',
+                AgentCareTopic.anchor == finding['anchor'],
+                AgentCareTopic.status.in_(('open', 'ongoing')))).scalars().first()
+            if topic is not None:
+                topic.run_id = topic.run_id or run_id
         if deliverable:
             blocks = [{'type': 'text', 'speaker': 'assistant', 'text': say}]
             for finding in findings:

@@ -5,16 +5,17 @@
  * 404、他人 ID、离线与目标加载失败都不标已读（明确状态文案，见 spec W12-A3/A4）。
  */
 
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, type Href } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
+import { ApiError } from '@/services/api';
 import { Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
 import { resolveInboxItem } from '@/services/agent-inbox';
-type State = 'loading' | 'unavailable' | 'error';
+type State = 'loading' | 'unavailable' | 'missing' | 'error';
 
 export default function InboxDeepLinkScreen() {
   const theme = useTheme();
@@ -51,9 +52,15 @@ export default function InboxDeepLinkScreen() {
           .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
           .join('&');
         // 只跳转，不在此处标已读：目标在伙伴页**定位并展示**那条来源后才标（W12-A3）
-        router.replace(`${target.route}${query ? `?${query}` : ''}`);
-      } catch {
+        router.replace(`${target.route}${query ? `?${query}` : ''}` as Href);
+      } catch (exc) {
         if (ownerRef.current !== requestOwner) return;
+        // 404：条目不存在或不属于当前账号——不会「稍后」变好，如实说明
+        if (exc instanceof ApiError && exc.status === 404) {
+          setState('missing');
+          setMessage('这条通知不存在，或不属于当前账号');
+          return;
+        }
         setState('error');
         setMessage('暂时打不开这条通知，请稍后再试');
       }
@@ -75,7 +82,9 @@ export default function InboxDeepLinkScreen() {
       ? '链接无效'
       : state === 'unavailable'
         ? '来源已不可用'
-        : '打不开';
+        : state === 'missing'
+          ? '找不到这条通知'
+          : '打不开';
 
   return (
     <View style={[styles.screen, { backgroundColor: theme.background }]}>
@@ -92,14 +101,14 @@ export default function InboxDeepLinkScreen() {
           onPress={() => router.push('/login')}
           style={[styles.action, { backgroundColor: theme.tintBackground }]}
         >
-          <Text style={[styles.actionText, { color: theme.tint }]}>登录 / 注册</Text>
+          <Text style={[styles.actionText, { color: theme.tintForeground }]}>登录 / 注册</Text>
         </Pressable>
       ) : (
         <Pressable
           onPress={() => router.replace('/agent-inbox')}
           style={[styles.action, { backgroundColor: theme.tintBackground }]}
         >
-          <Text style={[styles.actionText, { color: theme.tint }]}>去收件箱</Text>
+          <Text style={[styles.actionText, { color: theme.tintForeground }]}>去收件箱</Text>
         </Pressable>
       )}
     </View>

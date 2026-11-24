@@ -259,3 +259,9 @@ parameters={'type':'object','properties':{
 - 变更：本 spec、`server/petsense/agent/`（§3.1）、alembic `0012`、`server/tests/`、`server/tools/agent_memory.py`、P00 契约 §4（补 `forget_memory` 一句）、V11 §5.2 工具清单（同步）、AGENTS.md（W04 状态与记忆口径）。
 - 契约核对：P00 §4 已含分级写入、FTS5、认识卡、报告导出语义；`search_memories`/`write_memory` 已在 V11 §5.2——`forget_memory` 为新增，按「先改契约再注册」在本 PR 内先行更新。
 - 交接：W03 就绪后注册 `preference` 确认写路径（`write_level`/`confirmation` 字段已预留）；W08 `task_result`、W09 `change_event` 写入按本包 source_refs/version 模式接入；W12 记忆引用卡与深链、W14「它记得什么」页面以报告与记忆对象为底料；W05 学习进度项与认识卡的快照裁剪顺序按 §3.9 协调。
+
+
+### 2026-11-23 视觉补验
+
+伙伴页已随主会话完成浅色历史消息和深色抽查。本轮范围为 UI 回归，记忆写入和忘记的行为验收沿用前述记录。
+详见 [W01–W10 视觉验收与证据](agent-visual-acceptance-handoff-20261123.md#6-接手后验收记录2026-11-23)。

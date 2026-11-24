@@ -16,17 +16,23 @@ export const Colors = {
     textSecondary: '#94836F',
     /** 品牌主色：珊瑚橙 */
     tint: '#E8835C',
+    /** 珊瑚橙实底上的文字与图标 */
+    onTint: '#3A2E26',
+    /** 珊瑚橙浅底上的文字与链接 */
+    tintForeground: '#9A4423',
     /** 品牌主色的浅色背景，用于标签、卡片点缀 */
     tintBackground: '#FBEBE1',
     /** 提醒 / 未完成 */
     warning: '#E8A13A',
+    warningForeground: '#8A540D',
     /** 告警严重级（critical） */
     danger: '#E5484D',
     /** 告警提示级（数据失联等） */
     info: '#5B8DEF',
     /** 在线 / 正常状态 */
     online: '#31A66D',
-    /** 在线状态胶囊底色（配 online 文字） */
+    onlineForeground: '#216A47',
+    /** 在线状态胶囊底色 */
     onlineBackground: '#E4F2EA',
     /** 等待状态胶囊底色（配 warning 文字） */
     warningBackground: '#FBF1DD',
@@ -38,11 +44,15 @@ export const Colors = {
     backgroundSelected: '#33291F',
     textSecondary: '#B5A390',
     tint: '#F0987A',
+    onTint: '#17120E',
+    tintForeground: '#F0987A',
     tintBackground: '#4A2A1D',
     warning: '#F0BC6B',
+    warningForeground: '#F0BC6B',
     danger: '#FF6369',
     info: '#7FA8F2',
     online: '#4CC38A',
+    onlineForeground: '#4CC38A',
     onlineBackground: '#1F3A2A',
     warningBackground: '#3B2F19',
   },

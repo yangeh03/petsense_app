@@ -91,3 +91,9 @@
 - 修复：本轮发现 care 卡证据行以文案为 React key，两条同分钟同电量证据会触发重复 key 告警；已改为 index 前缀（`app/src/components/agent/agent-message.tsx`），lint/typecheck/format/test 全过（109/109）。
 
 结论：W09-A4 通过。真项圈在线时段（实机失联/低电/长期无效读数）仍待硬件验收。
+
+
+### 2026-11-23 视觉补验
+
+已有低电关怀卡以深色复验了图标、标题、证据、持续状态及追问入口；浅色覆盖沿用交接前截图。主动程度三档由 W03 设定页复验。
+详见 [W01–W10 视觉验收与证据](agent-visual-acceptance-handoff-20261123.md#6-接手后验收记录2026-11-23)。
