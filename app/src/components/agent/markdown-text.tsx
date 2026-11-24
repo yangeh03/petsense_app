@@ -18,7 +18,10 @@ function Spans({ spans }: { spans: MarkdownSpan[] }) {
   return (
     <>
       {spans.map((span, index) => (
-        <Text key={index} style={[span.bold && styles.bold, span.code && styles.code]}>
+        <Text
+          key={index}
+          style={[span.bold && styles.bold, span.code && styles.code, span.italic && styles.italic]}
+        >
           {span.code ? span.text : span.text.replaceAll('——', JOINED_EM_DASH)}
         </Text>
       ))}
@@ -61,6 +64,7 @@ export function AgentMarkdownText({ text }: { text: string }) {
 const styles = StyleSheet.create({
   column: { gap: 6 },
   bold: { fontWeight: '700' },
+  italic: { fontStyle: 'italic' },
   code: { fontFamily: Fonts.mono },
   quote: { borderLeftWidth: 3, paddingLeft: 10 },
   listItem: { paddingLeft: 4 },

@@ -137,7 +137,7 @@ export default function PostEditScreen() {
                 >
                   <ThemedText
                     type="smallBold"
-                    style={{ color: audience === item ? '#ffffff' : theme.text }}
+                    style={{ color: audience === item ? theme.onTint : theme.text }}
                   >
                     {item === 'public' ? '公开' : '仅粉丝可见'}
                   </ThemedText>
@@ -154,7 +154,7 @@ export default function PostEditScreen() {
               disabled={!original || saving}
               style={[styles.save, { backgroundColor: theme.tint }]}
             >
-              <ThemedText type="smallBold" style={{ color: '#ffffff' }}>
+              <ThemedText type="smallBold" style={{ color: theme.onTint }}>
                 {saving ? '保存中…' : '保存'}
               </ThemedText>
             </Pressable>

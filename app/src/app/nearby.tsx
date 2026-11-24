@@ -244,7 +244,10 @@ export default function NearbyScreen() {
                 { backgroundColor: radius === item ? theme.tint : theme.backgroundSelected },
               ]}
             >
-              <ThemedText type="small" style={{ color: radius === item ? '#ffffff' : theme.text }}>
+              <ThemedText
+                type="small"
+                style={{ color: radius === item ? theme.onTint : theme.text }}
+              >
                 {item} km
               </ThemedText>
             </Pressable>
@@ -255,7 +258,7 @@ export default function NearbyScreen() {
           disabled={loading}
           style={[styles.primary, { backgroundColor: theme.tint, opacity: loading ? 0.6 : 1 }]}
         >
-          <ThemedText type="smallBold" style={{ color: '#ffffff' }}>
+          <ThemedText type="smallBold" style={{ color: theme.onTint }}>
             查找附近宠友
           </ThemedText>
         </Pressable>
@@ -308,7 +311,10 @@ export default function NearbyScreen() {
                 { backgroundColor: section === item ? theme.tint : theme.backgroundSelected },
               ]}
             >
-              <ThemedText type="small" style={{ color: section === item ? '#ffffff' : theme.text }}>
+              <ThemedText
+                type="small"
+                style={{ color: section === item ? theme.onTint : theme.text }}
+              >
                 {item === 'users' ? '附近宠友' : '附近动态'}
               </ThemedText>
             </Pressable>

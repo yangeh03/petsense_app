@@ -19,6 +19,7 @@ import {
   type AgentTurn,
 } from '@/services/agent';
 import { ApiError, fetchDashboard } from '@/services/api';
+import { scrollRestorePlan } from '@/services/chat-restore';
 import {
   AGENT_JPEG_QUALITY,
   AGENT_UPLOAD_MAX_EDGE,
@@ -128,13 +129,17 @@ export function useAgentChat(user: { id: number } | null) {
     if (!userId) return;
     let active = true;
     void loadSnapshot(userId).then((snapshot) => {
-      if (!active || !snapshot) return;
+      if (!active) return;
+      const plan = scrollRestorePlan(snapshot);
+      // 没有可恢复的位置时跟到最新一条（W14 F1）：由列表在内容布局后滚到底
+      if (plan.followLatest) setFollowReply(true);
+      if (!snapshot) return;
       const current = useAgentChatStore.getState();
       current.setDraft(snapshot.draft ?? '');
       current.setTarget(snapshot.target ?? 'auto');
       if (snapshot.topic !== undefined) current.setTopic(snapshot.topic);
       current.setReplyTo(snapshot.replyTo);
-      current.setScrollY(snapshot.scrollY ?? 0);
+      current.setScrollY(plan.scrollY);
       if (snapshot.turns?.length) {
         current.setTurns(snapshot.turns);
         current.setLoadedFor(userId);

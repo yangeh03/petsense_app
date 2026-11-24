@@ -56,7 +56,7 @@ export function DeviceStatusCard({
           onPress={() => router.push('/setup')}
           style={[styles.button, { backgroundColor: theme.tint }]}
         >
-          <ThemedText type="smallBold" style={{ color: theme.backgroundElement }}>
+          <ThemedText type="smallBold" style={{ color: theme.onTint }}>
             绑定项圈
           </ThemedText>
         </Pressable>

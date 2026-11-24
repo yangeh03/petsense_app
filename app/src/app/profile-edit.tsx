@@ -121,7 +121,7 @@ export default function ProfileEditScreen() {
           disabled={version == null || saving}
           style={[styles.save, { backgroundColor: theme.tint }]}
         >
-          <ThemedText type="smallBold" style={{ color: '#ffffff' }}>
+          <ThemedText type="smallBold" style={{ color: theme.onTint }}>
             {saving ? '保存中…' : '保存资料'}
           </ThemedText>
         </Pressable>

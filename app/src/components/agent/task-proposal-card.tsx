@@ -95,10 +95,13 @@ function conditionText(plan: AgentTaskPlan): string | null {
   return `${feature} ${conditionSummary(plan.condition)}`;
 }
 
-function planRows(plan: AgentTaskPlan): { label: string; value: string }[] {
-  const rows: { label: string; value: string }[] = [
+type PlanRow = { label: string; value: string; stacked?: boolean };
+
+function planRows(plan: AgentTaskPlan): PlanRow[] {
+  const rows: PlanRow[] = [
     { label: '类型', value: KIND_LABELS[plan.kind] },
-    { label: '关注', value: plan.question },
+    // 整句的关注内容左对齐单独成行：右对齐会把它挤成左缘参差的多行
+    { label: '关注', value: plan.question, stacked: true },
   ];
   const condition = conditionText(plan);
   if (condition) rows.push({ label: '提醒条件', value: condition });
@@ -108,12 +111,17 @@ function planRows(plan: AgentTaskPlan): { label: string; value: string }[] {
       value: plan.comparison.band === 'below' ? '低于它的平时范围' : '高于它的平时范围',
     });
   }
+  // 时区写在标签里：跟着时间放在一行会被从 Asia/Shanghai 中间断开
   rows.push({
-    label: '观察窗口',
-    value: `${formatLocal(plan.startAt)} – ${formatLocal(plan.deadlineAt)}（Asia/Shanghai）`,
+    label: '观察窗口（上海时间）',
+    value: `${formatLocal(plan.startAt)} – ${formatLocal(plan.deadlineAt)}`,
   });
   if (requiresStrategyChoice(plan)) {
-    rows.push({ label: '基线选择', value: '需要你选：等基线就绪，或先记录绝对事实' });
+    rows.push({
+      label: '基线选择',
+      value: '需要你选：等基线就绪，或先记录绝对事实',
+      stacked: true,
+    });
   } else if (plan.baselineStrategy) {
     rows.push({
       label: '基线选择',
@@ -257,16 +265,25 @@ export function TaskProposalCard({
       </View>
       {plan ? (
         <>
-          {planRows(plan).map((row) => (
-            <View key={row.label} style={styles.row}>
-              <ThemedText type="small" themeColor="textSecondary">
-                {row.label}
-              </ThemedText>
-              <ThemedText type="small" style={styles.rowValue}>
-                {row.value}
-              </ThemedText>
-            </View>
-          ))}
+          {planRows(plan).map((row) =>
+            row.stacked ? (
+              <View key={row.label} style={styles.rowStacked}>
+                <ThemedText type="small" themeColor="textSecondary">
+                  {row.label}
+                </ThemedText>
+                <ThemedText type="small">{row.value}</ThemedText>
+              </View>
+            ) : (
+              <View key={row.label} style={styles.row}>
+                <ThemedText type="small" themeColor="textSecondary">
+                  {row.label}
+                </ThemedText>
+                <ThemedText type="small" style={styles.rowValue}>
+                  {row.value}
+                </ThemedText>
+              </View>
+            ),
+          )}
         </>
       ) : (
         <ThemedText type="small" themeColor="textSecondary">
@@ -404,9 +421,9 @@ export function TaskProposalCard({
               style={[styles.primary, { backgroundColor: theme.tint, opacity: busy ? 0.6 : 1 }]}
             >
               {busy ? (
-                <ActivityIndicator size="small" color={theme.backgroundElement} />
+                <ActivityIndicator size="small" color={theme.onTint} />
               ) : (
-                <ThemedText type="smallBold" style={{ color: theme.backgroundElement }}>
+                <ThemedText type="smallBold" style={{ color: theme.onTint }}>
                   按这版修改
                 </ThemedText>
               )}
@@ -466,9 +483,9 @@ export function TaskProposalCard({
             style={[styles.primary, { backgroundColor: theme.tint, opacity: busy ? 0.6 : 1 }]}
           >
             {busy ? (
-              <ActivityIndicator size="small" color={theme.backgroundElement} />
+              <ActivityIndicator size="small" color={theme.onTint} />
             ) : (
-              <ThemedText type="smallBold" style={{ color: theme.backgroundElement }}>
+              <ThemedText type="smallBold" style={{ color: theme.onTint }}>
                 {fields.action === 'cancel' ? '确认取消' : '就这样，开始吧'}
               </ThemedText>
             )}
@@ -517,6 +534,7 @@ const styles = StyleSheet.create({
   headText: { flex: 1 },
   row: { flexDirection: 'row', gap: 10, alignItems: 'flex-start' },
   rowValue: { flex: 1, textAlign: 'right' },
+  rowStacked: { gap: 4 },
   editor: { borderWidth: 1, borderRadius: 12, padding: 10, gap: 8 },
   optionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   option: { borderWidth: 1, borderRadius: 16, paddingHorizontal: 11, paddingVertical: 7 },

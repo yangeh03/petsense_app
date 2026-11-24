@@ -253,7 +253,7 @@ export default function UserScreen() {
                 pressed && { opacity: 0.85 },
               ]}
             >
-              <ThemedText type="smallBold" style={{ color: '#ffffff' }}>
+              <ThemedText type="smallBold" style={{ color: theme.onTint }}>
                 重试
               </ThemedText>
             </Pressable>
@@ -302,7 +302,7 @@ export default function UserScreen() {
                 >
                   <ThemedText
                     type="smallBold"
-                    style={{ color: profile.is_following ? theme.textSecondary : '#ffffff' }}
+                    style={{ color: profile.is_following ? theme.textSecondary : theme.onTint }}
                   >
                     {profile.is_following ? '已关注' : '关注'}
                   </ThemedText>

@@ -33,7 +33,12 @@ export default function RootLayout() {
             <Stack.Screen name="assistant-settings" options={{ presentation: 'modal' }} />
             <Stack.Screen
               name="records"
-              options={{ headerShown: true, title: '记录', headerBackButtonDisplayMode: 'minimal' }}
+              options={{
+                headerShown: true,
+                title: '记录',
+                headerBackButtonDisplayMode: 'minimal',
+                headerBackTitle: '返回',
+              }}
             />
             <Stack.Screen
               name="exercise-diary"
@@ -41,6 +46,7 @@ export default function RootLayout() {
                 headerShown: true,
                 title: '运动日记',
                 headerBackButtonDisplayMode: 'minimal',
+                headerBackTitle: '返回',
               }}
             />
             <Stack.Screen name="monitor" />
@@ -50,6 +56,7 @@ export default function RootLayout() {
                 headerShown: true,
                 title: '委托簿',
                 headerBackButtonDisplayMode: 'minimal',
+                headerBackTitle: '返回',
               }}
             />
             <Stack.Screen name="pet" />
@@ -60,6 +67,7 @@ export default function RootLayout() {
                 headerShown: true,
                 title: '室内地图设置',
                 headerBackButtonDisplayMode: 'minimal',
+                headerBackTitle: '返回',
               }}
             />
             <Stack.Screen
@@ -68,6 +76,7 @@ export default function RootLayout() {
                 headerShown: true,
                 title: '遛狗地图',
                 headerBackButtonDisplayMode: 'minimal',
+                headerBackTitle: '返回',
               }}
             />
           </Stack>

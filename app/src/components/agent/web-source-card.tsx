@@ -58,9 +58,16 @@ export function WebSourceCard({ source }: { source: AgentWebSource }) {
           <ThemedText type="smallBold" numberOfLines={2}>
             {title}
           </ThemedText>
-          <ThemedText type="small" themeColor="textSecondary">
-            {checked ? `${url.hostname} · ${checked}` : url.hostname}
-          </ThemedText>
+          <View style={styles.meta}>
+            <ThemedText type="small" themeColor="textSecondary">
+              {checked ? `${url.hostname} ·` : url.hostname}
+            </ThemedText>
+            {checked ? (
+              <ThemedText type="small" themeColor="textSecondary">
+                {checked}
+              </ThemedText>
+            ) : null}
+          </View>
         </View>
         <SymbolView
           name={{ ios: 'arrow.up.right', android: 'north_east', web: 'north_east' }}
@@ -87,4 +94,6 @@ const styles = StyleSheet.create({
     padding: 10,
   },
   details: { flex: 1, minWidth: 0, gap: 2 },
+  // 域名与「核对」时间各成一个整体：放不下时整段换行，不把「核对」拆到两行
+  meta: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 4, alignItems: 'baseline' },
 });

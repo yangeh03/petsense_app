@@ -92,7 +92,7 @@ export default function ProfileScreen() {
                 pressed && { opacity: 0.85 },
               ]}
             >
-              <ThemedText type="smallBold" style={{ color: '#ffffff' }}>
+              <ThemedText type="smallBold" style={{ color: theme.onTint }}>
                 去登录 / 注册
               </ThemedText>
             </Pressable>
@@ -364,7 +364,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.two,
   },
-  guestEmoji: { fontSize: 42 },
+  // 行高留出 emoji 字形的高度，否则爪印顶部会被行框裁掉
+  guestEmoji: { fontSize: 42, lineHeight: 58 },
   guestText: { textAlign: 'center' },
   primaryButton: {
     marginTop: Spacing.two,

@@ -30,6 +30,7 @@ import { useAgentChatStore } from '@/stores/agent-chat';
 import { assistantDisplayName, useCompanionSettingsStore } from '@/stores/companion-settings';
 import type { AgentCareTopic, AgentTurn } from '@/services/agent';
 import { fetchInboxItem, fetchInboxTurn, markInboxRead } from '@/services/agent-inbox';
+import { careStatusLabel } from '@/services/care-labels';
 import { anchorKey, findAnchorTurnId, parseAnchorParams } from '@/services/inbox-anchor';
 
 export default function CompanionScreen() {
@@ -336,7 +337,7 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
           <ThemedText type="small" themeColor="textSecondary">
             {learningState === 'ready' && soundState === 'ready'
               ? '动作与声音的个人日常参照已建立。'
-              : '区域观察等待接入，个人日常参照仍在建立。'}
+              : '它的个人日常参照还在建立，多记录几天就好了。'}
           </ThemedText>
         </View>
       ) : null}
@@ -480,9 +481,11 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
                     {anchorTopic.detail}
                   </ThemedText>
                 ) : null}
-                <ThemedText type="small" themeColor="textSecondary">
-                  主题 {anchorTopic.id} · {anchorTopic.category} · {anchorTopic.status}
-                </ThemedText>
+                {careStatusLabel(anchorTopic.status) ? (
+                  <ThemedText type="small" themeColor="textSecondary">
+                    {careStatusLabel(anchorTopic.status)}
+                  </ThemedText>
+                ) : null}
               </View>
             ) : null}
           </View>

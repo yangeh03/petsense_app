@@ -176,7 +176,7 @@ export default function SetupScreen() {
                 onPress={() => router.push('/login')}
                 style={[styles.button, { backgroundColor: theme.tint }]}
               >
-                <ThemedText type="smallBold" style={{ color: theme.backgroundElement }}>
+                <ThemedText type="smallBold" style={{ color: theme.onTint }}>
                   去登录
                 </ThemedText>
               </Pressable>
@@ -216,7 +216,7 @@ export default function SetupScreen() {
                     <ThemedText
                       type="smallBold"
                       style={{
-                        color: index <= stepIndex ? theme.backgroundElement : theme.textSecondary,
+                        color: index <= stepIndex ? theme.onTint : theme.textSecondary,
                       }}
                     >
                       {index < stepIndex ? '✓' : index + 1}
@@ -368,9 +368,9 @@ export default function SetupScreen() {
               ]}
             >
               {busy ? (
-                <ActivityIndicator color={theme.backgroundElement} />
+                <ActivityIndicator color={theme.onTint} />
               ) : (
-                <ThemedText type="smallBold" style={{ color: theme.backgroundElement }}>
+                <ThemedText type="smallBold" style={{ color: theme.onTint }}>
                   {step === 'pet'
                     ? '保存档案，下一步'
                     : step === 'device'

@@ -300,7 +300,7 @@ export default function PetScreen() {
               onPress={() => router.push('/login')}
               style={[styles.primary, { backgroundColor: theme.tint }]}
             >
-              <ThemedText type="smallBold" style={{ color: theme.backgroundElement }}>
+              <ThemedText type="smallBold" style={{ color: theme.onTint }}>
                 去登录
               </ThemedText>
             </Pressable>
@@ -392,9 +392,9 @@ export default function PetScreen() {
                         ]}
                       >
                         {weightBusy ? (
-                          <ActivityIndicator size="small" color={theme.backgroundElement} />
+                          <ActivityIndicator size="small" color={theme.onTint} />
                         ) : (
-                          <ThemedText type="smallBold" style={{ color: theme.backgroundElement }}>
+                          <ThemedText type="smallBold" style={{ color: theme.onTint }}>
                             记一笔
                           </ThemedText>
                         )}
@@ -463,9 +463,9 @@ export default function PetScreen() {
                     ]}
                   >
                     {saving ? (
-                      <ActivityIndicator color={theme.backgroundElement} />
+                      <ActivityIndicator color={theme.onTint} />
                     ) : (
-                      <ThemedText type="smallBold" style={{ color: theme.backgroundElement }}>
+                      <ThemedText type="smallBold" style={{ color: theme.onTint }}>
                         保存修改
                       </ThemedText>
                     )}
@@ -579,7 +579,7 @@ export default function PetScreen() {
                     onPress={() => router.push('/setup')}
                     style={[styles.primary, { backgroundColor: theme.tint }]}
                   >
-                    <ThemedText type="smallBold" style={{ color: theme.backgroundElement }}>
+                    <ThemedText type="smallBold" style={{ color: theme.onTint }}>
                       建立宠物档案
                     </ThemedText>
                   </Pressable>

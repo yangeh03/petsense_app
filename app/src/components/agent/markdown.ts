@@ -1,18 +1,20 @@
 /**
  * 助手回复的 Markdown 子集解析（W01 自建渲染层的补齐）：
- * 只处理模型实际产出的语法——**加粗**、`行内代码`、- 无序列表、1. 有序列表、> 引用。
+ * 只处理模型实际产出的语法——**加粗**、`行内代码`、*斜体*、- 无序列表、1. 有序列表、> 引用。
  * 不支持标题语法：聊天文本里「#话题标签」必须保持原样（# 后无空格也不是标题）。
  * 未配对的标记原样保留，解析结果为纯数据，渲染在 markdown-text.tsx。
  */
 
-export type MarkdownSpan = { text: string; bold?: boolean; code?: boolean };
+export type MarkdownSpan = { text: string; bold?: boolean; code?: boolean; italic?: boolean };
 
 export type MarkdownBlock =
   | { kind: 'paragraph'; spans: MarkdownSpan[] }
   | { kind: 'quote'; spans: MarkdownSpan[] }
   | { kind: 'listItem'; marker: string; spans: MarkdownSpan[] };
 
-const INLINE = /(\*\*(?:`[^`\n]+`|`(?![^`\n]+`)|[^*`\n])+\*\*|`[^`\n]+`)/g;
+// 单星号斜体两侧不能紧贴空白或另一个星号，所以「2 * 3 * 4」和「* 列表项」不会被当成斜体。
+const INLINE =
+  /(\*\*(?:`[^`\n]+`|`(?![^`\n]+`)|[^*`\n])+\*\*|`[^`\n]+`|\*(?![\s*])[^*\n]*[^\s*]\*)/g;
 const CODE = /`[^`\n]+`/g;
 
 function parseBold(text: string): MarkdownSpan[] {
@@ -27,7 +29,7 @@ function parseBold(text: string): MarkdownSpan[] {
   return spans;
 }
 
-/** 行内解析：成对的 ** 加粗与 `代码` 之外的字符原样保留 */
+/** 行内解析：成对的 ** 加粗、`代码`、*斜体* 之外的字符原样保留 */
 export function parseInline(line: string): MarkdownSpan[] {
   const spans: MarkdownSpan[] = [];
   let lastIndex = 0;
@@ -36,14 +38,25 @@ export function parseInline(line: string): MarkdownSpan[] {
     const index = match.index ?? 0;
     if (index > lastIndex) spans.push({ text: line.slice(lastIndex, index) });
     if (token.startsWith('**')) spans.push(...parseBold(token.slice(2, -2)));
-    else spans.push({ text: token.slice(1, -1), code: true });
+    else if (token.startsWith('`')) spans.push({ text: token.slice(1, -1), code: true });
+    else spans.push({ text: token.slice(1, -1), italic: true });
     lastIndex = index + token.length;
   }
   if (lastIndex < line.length) spans.push({ text: line.slice(lastIndex) });
   return spans.length ? spans : [{ text: line }];
 }
 
-const LIST_MARKER = /^(?:[-•]|\d+\.)\s+/;
+const LIST_MARKER = /^(?:[-•*]|\d+\.)\s+/;
+
+const SPEAKER_MARK = /^\s*【(?:爱宠|照料助手)】\s*/;
+
+/**
+ * 进渲染的正文：去掉开头的发言人标记。气泡上方已有名字标签；流式阶段，以及后台交付的
+ * 回合（周期回顾、回信）落库的正文块，都可能还带着「【照料助手】」，不该原样显示（W14 F2）。
+ */
+export function visibleReplyText(text: string): string {
+  return text.replace(SPEAKER_MARK, '');
+}
 
 /**
  * 按行分块：连续的普通行合并为一个段落（保留换行），连续的 > 行合并为一个引用块，
@@ -85,7 +98,8 @@ export function parseAgentMarkdown(text: string): MarkdownBlock[] {
       flushParagraph();
       blocks.push({
         kind: 'listItem',
-        marker: listMatch[0].trim(),
+        // 模型用「* 项」写的无序列表按圆点显示；「-」「•」和编号保留原标记
+        marker: listMatch[0].trim() === '*' ? '•' : listMatch[0].trim(),
         spans: parseInline(raw.slice(listMatch[0].length)),
       });
     } else {

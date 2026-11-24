@@ -142,9 +142,9 @@ export function CharacterCardModal({
               ]}
             >
               {busy ? (
-                <ActivityIndicator color="#ffffff" />
+                <ActivityIndicator color={theme.onTint} />
               ) : (
-                <ThemedText type="smallBold" style={{ color: '#ffffff' }}>
+                <ThemedText type="smallBold" style={{ color: theme.onTint }}>
                   ✨ 开始生成
                 </ThemedText>
               )}
@@ -189,7 +189,7 @@ export function CharacterCardModal({
                 pressed && { opacity: 0.85 },
               ]}
             >
-              <ThemedText type="smallBold" style={{ color: '#ffffff' }}>
+              <ThemedText type="smallBold" style={{ color: theme.onTint }}>
                 设为 {petName} 的形象
               </ThemedText>
             </Pressable>

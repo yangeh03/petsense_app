@@ -137,7 +137,7 @@ export default function StoryCreateScreen() {
             >
               <ThemedText
                 type="smallBold"
-                style={{ color: audience === item ? '#ffffff' : theme.text }}
+                style={{ color: audience === item ? theme.onTint : theme.text }}
               >
                 {item === 'followers' ? '仅粉丝可见' : '公开可见'}
               </ThemedText>
@@ -155,9 +155,9 @@ export default function StoryCreateScreen() {
           style={[styles.publish, { backgroundColor: theme.tint }]}
         >
           {sending ? (
-            <ActivityIndicator color="#ffffff" />
+            <ActivityIndicator color={theme.onTint} />
           ) : (
-            <ThemedText type="smallBold" style={{ color: '#ffffff' }}>
+            <ThemedText type="smallBold" style={{ color: theme.onTint }}>
               发布故事
             </ThemedText>
           )}

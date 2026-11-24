@@ -188,9 +188,9 @@ export function ProposalCard({
             style={[styles.primary, { backgroundColor: theme.tint, opacity: busy ? 0.6 : 1 }]}
           >
             {busy ? (
-              <ActivityIndicator size="small" color={theme.backgroundElement} />
+              <ActivityIndicator size="small" color={theme.onTint} />
             ) : (
-              <ThemedText type="smallBold" style={{ color: theme.backgroundElement }}>
+              <ThemedText type="smallBold" style={{ color: theme.onTint }}>
                 确认保存
               </ThemedText>
             )}

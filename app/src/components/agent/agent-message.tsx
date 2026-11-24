@@ -17,6 +17,7 @@ import AgentImageViewer from '@/components/agent/agent-image-viewer';
 import { ActionCard } from '@/components/agent/action-card';
 import { ChangeCard } from '@/components/agent/change-card';
 import { AgentMarkdownText } from '@/components/agent/markdown-text';
+import { visibleReplyText } from '@/components/agent/markdown';
 import { ProposalCard } from '@/components/agent/proposal-card';
 import { TaskProposalCard } from '@/components/agent/task-proposal-card';
 import { TaskResultCard } from '@/components/agent/task-result-card';
@@ -35,6 +36,7 @@ import {
   type AgentWindowSource,
 } from '@/services/agent';
 import type { AgentChangeEvidence } from '@/services/agent-change';
+import { careStatusLabel } from '@/services/care-labels';
 import { assistantDisplayName, useCompanionSettingsStore } from '@/stores/companion-settings';
 
 type Props = {
@@ -333,13 +335,6 @@ function OwnerImage({
 }
 
 /** W09 主动关怀卡：标题 + 状态 + 依据摘要 + 「为什么提醒我」追问（证据下钻走对话） */
-const CARE_STATUS_LABELS: Record<string, string> = {
-  open: '提醒中',
-  ongoing: '持续关注',
-  recovered: '已恢复',
-  closed: '已关闭',
-};
-
 function careEvidenceLines(care: AgentCareInfo): string[] {
   const lines: string[] = [];
   for (const entry of (care.evidence ?? []).slice(-2).reverse()) {
@@ -388,9 +383,9 @@ function CareCard({ care, onAskWhy }: { care: AgentCareInfo; onAskWhy?: () => vo
         <ThemedText type="smallBold" style={styles.careTitle}>
           {care.title || '主动提醒'}
         </ThemedText>
-        {CARE_STATUS_LABELS[care.status] ? (
+        {careStatusLabel(care.status) ? (
           <ThemedText type="small" themeColor="textSecondary">
-            {CARE_STATUS_LABELS[care.status]}
+            {careStatusLabel(care.status)}
             {windowLabel}
           </ThemedText>
         ) : null}
@@ -461,7 +456,7 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry, o
         {
           type: 'text' as const,
           speaker: turn.speaker,
-          text: turn.reply.replace(/^【[^】]+】/, ''),
+          text: visibleReplyText(turn.reply),
         },
       ];
   const textSegments = blocks.filter((block) => block.type === 'text');
@@ -551,7 +546,7 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry, o
                   {segment.speaker === 'pet' ? (petName ?? '爱宠') : assistantName}
                 </ThemedText>
               </Pressable>
-              <AgentMarkdownText text={segment.text || '正在接话…'} />
+              <AgentMarkdownText text={visibleReplyText(segment.text) || '正在接话…'} />
             </View>
           </View>
         ))}
@@ -605,7 +600,9 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry, o
         <View style={styles.replyFootnote}>
           {unknownSources.map(([key, source]) => (
             <ThemedText key={key} type="small" themeColor="textSecondary">
-              {source.type === 'baseline' ? '个人基线暂无可比样本' : '暂不支持展示的来源'}
+              {source.type === 'baseline'
+                ? '它的个人参照范围还在建立中'
+                : '这条依据暂时没法在这里展开'}
             </ThemedText>
           ))}
           {turn.status !== 'pending' ? (
