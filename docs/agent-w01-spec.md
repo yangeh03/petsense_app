@@ -249,3 +249,16 @@ components/agent/          气泡定制（三人格 renderItem）、输入区、
 
 伙伴页浅色历史消息、深色历史消息和原生发送状态已走查。复测了 Markdown 加粗内的代码、列表间距和会话操作文字对比度。
 详见 [W01–W10 视觉验收与证据](agent-visual-acceptance-handoff-20261123.md#6-接手后验收记录2026-11-23)。
+
+### 2026-11-24 修复：发送后主人的话没有立刻上屏
+
+**缺陷**：伙伴页点发送后，主人的话要等整轮生成结束才出现在会话里。根因在客户端没落地 §4.4 与 V11 §18.3 要求的「乐观 UI」：服务端 `POST /api/app/agent/pets/<id>/turns` 阻塞到 `loop.run_dialogue` 结束才返回（§3.2/§3.7），而客户端只在响应回来后才 `applyTurn`。实测该 POST 阻塞 11.5 秒（简单消息；带工具调用的轮次更久），这 11.5 秒里输入区还留着原话、会话里什么都没有。
+
+**修复**（纯客户端，接口与 P00 契约不变——写入仍是同步 POST + 稳定请求键）：
+
+- 新增 `app/src/services/agent-chat-turns.ts`（纯函数，可单测）：乐观回合的插入、与服务端回合的对账、列表排序、流式增量归属；
+- `app/src/stores/agent-chat.ts`：接入该模块，新增 `applyLocalTurn` / `removeLocalTurn`；
+- `app/src/hooks/use-agent-chat.ts`：发送时先落一条本地 pending 回合（负 id + 稳定 requestId）并清空输入区；服务端回合按 requestId 对账替换（POST 响应与 WS turn 帧先到者先用）；流式增量归到本地回合上，不再另建占位气泡；发送失败撤下本地回合并把原话与图片回填输入区（失败保留原话可重试，`pending` 保留同键去重）；
+- 本地乐观回合不进 AsyncStorage 快照：重启后由服务端已保存回合恢复，不留永远 pending 的气泡。
+
+**验收**：iOS 模拟器接生产环境（账号 petsense）实测，点发送后 **1.6 秒**内主人气泡上屏并显示「正在接话…」，整轮回复到达后无重复气泡（本地回合被服务端回合替换）；失败路径用「只让 turns POST 返回 500」的临时转发代理实测：气泡撤下、原话与图片回填输入区、错误提示「暂时没能确认送达，原话和图片已保留，可以重试」，输入区恢复可编辑，无残留 pending 气泡；新增 `app/tools/agent-chat-turns.test.cjs` 11 项单测覆盖插入/对账/排序/增量归属；`npm run lint` / `typecheck` / `format:check` / `npm test` 全绿。
