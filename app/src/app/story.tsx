@@ -1,7 +1,7 @@
 import { Image } from 'expo-image';
 import { SymbolView } from 'expo-symbols';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -25,6 +25,7 @@ import {
   markStoryViewed,
   socialImageSource,
 } from '@/services/api';
+import { useSocialPendingStore } from '@/stores/social-pending';
 import type { Story } from '@/types/social';
 
 export default function StoryScreen() {
@@ -46,7 +47,15 @@ export default function StoryScreen() {
     { id: number; display_name: string; avatar_emoji: string; viewed_at: string }[] | null
   >(null);
   const viewerKey = `${user?.id ?? 'guest'}:${userId}`;
-  const visibleStories = loadedFor === viewerKey ? stories : [];
+  // 乐观发布：服务端还没确认的故事先本地占位，故事页立刻能看到
+  const pendingStories = useSocialPendingStore((state) => state.stories);
+  const visibleStories = useMemo(() => {
+    const base = loadedFor === viewerKey ? stories : [];
+    const locals = pendingStories
+      .filter((entry) => entry.story.user_id === userId)
+      .map((entry) => entry.story);
+    return [...locals, ...base];
+  }, [loadedFor, pendingStories, stories, userId, viewerKey]);
   const story = visibleStories[index];
   const progressRef = useRef(0);
   const activeViewerKey = useRef(viewerKey);
@@ -64,6 +73,8 @@ export default function StoryScreen() {
       .then((data) => {
         if (active) {
           setStories(data.stories);
+          // 服务端已收录的故事：本地占位交回服务端版本
+          useSocialPendingStore.getState().resolveStories(data.stories.map((item) => item.id));
           setViewers(null);
           setReady(false);
           setIndex(0);
@@ -104,7 +115,8 @@ export default function StoryScreen() {
       // 真正可见且未暂停地展示满 1 秒（进度 0.2）才算已读；预加载、刚解码都不算。
       if (progressRef.current >= 0.2 && user && !viewedIds.current.has(story.id)) {
         viewedIds.current.add(story.id);
-        void markStoryViewed(story.id).catch(() => {});
+        // 本地占位故事还没落库，不需要上报已读
+        if (story.id > 0) void markStoryViewed(story.id).catch(() => {});
       }
       if (progressRef.current >= 1) {
         progressRef.current = 0;
@@ -224,16 +236,24 @@ export default function StoryScreen() {
           </View>
           {user?.id === story.user_id && (
             <View style={styles.authorActions}>
-              <Pressable onPress={() => void openViewers()}>
-                <ThemedText type="small" style={{ color: theme.tintForeground }}>
-                  查看者
+              {story.id > 0 ? (
+                <>
+                  <Pressable onPress={() => void openViewers()}>
+                    <ThemedText type="small" style={{ color: theme.tintForeground }}>
+                      查看者
+                    </ThemedText>
+                  </Pressable>
+                  <Pressable onPress={removeStory}>
+                    <ThemedText type="small" style={{ color: theme.danger }}>
+                      删除
+                    </ThemedText>
+                  </Pressable>
+                </>
+              ) : (
+                <ThemedText type="small" themeColor="textSecondary">
+                  正在发布…
                 </ThemedText>
-              </Pressable>
-              <Pressable onPress={removeStory}>
-                <ThemedText type="small" style={{ color: theme.danger }}>
-                  删除
-                </ThemedText>
-              </Pressable>
+              )}
             </View>
           )}
           <View style={styles.viewer}>

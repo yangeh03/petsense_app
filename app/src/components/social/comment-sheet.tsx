@@ -32,6 +32,17 @@ import type { Post, PostComment } from '@/types/social';
 // 从通知定位评论时最多向后翻这么多页；再找不到就提示用户手动翻看。
 const FOCUS_PAGE_LIMIT = 5;
 
+/** 本地待确认的评论（乐观上屏）：服务端确认前先显示，失败则撤下 */
+type PendingComment = PostComment & { pending?: boolean };
+
+let pendingCommentSeq = 0;
+
+/** 本地评论 id：负数递增，与服务端自增 id 不会撞号 */
+function nextPendingCommentId(): number {
+  pendingCommentSeq += 1;
+  return -pendingCommentSeq;
+}
+
 /** 帖子评论抽屉：列表 + 发送框。 */
 export function CommentSheet({
   post,
@@ -166,29 +177,77 @@ export function CommentSheet({
     }
     setSending(true);
     setError('');
+    const id = pendingMutation.current ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    pendingMutation.current = id;
+    const body = draft.trim();
+    const target = replyTarget;
+    // 回复落在根评论下（与服务端 root_id 口径一致：target.root_id || target.id）
+    const rootId = target ? (target.root_id ?? target.id) : null;
+    const localId = nextPendingCommentId();
+    const local: PendingComment = {
+      id: localId,
+      body,
+      created_at: new Date().toISOString(),
+      user_id: user.id,
+      display_name: user.displayName,
+      avatar_emoji: user.avatarEmoji,
+      root_id: rootId,
+      reply_to_comment_id: target?.id ?? null,
+      reply_count: 0,
+      pending: true,
+    };
+    // 乐观上屏：自己这条先出现在列表里，服务端确认后就地换成正式评论
+    if (rootId !== null) {
+      setReplies((current) => ({
+        ...current,
+        [rootId]: [...(current[rootId] ?? []), local],
+      }));
+      setComments((current) =>
+        current.map((item) =>
+          item.id === rootId ? { ...item, reply_count: (item.reply_count ?? 0) + 1 } : item,
+        ),
+      );
+    } else {
+      setComments((current) => [...current, local]);
+    }
+    onCommented(post.id, 1);
+    setDraft('');
+    setReplyTarget(null);
     try {
-      const id = pendingMutation.current ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      pendingMutation.current = id;
-      const data = await addReply(post.id, draft.trim(), id, replyTarget?.id);
-      if (data.comment.root_id) {
-        const rootId = data.comment.root_id;
+      const data = await addReply(post.id, body, id, target?.id);
+      const server = data.comment;
+      if (server.root_id) {
+        const serverRootId = server.root_id;
         setReplies((current) => ({
           ...current,
-          [rootId]: [...(current[rootId] ?? []), data.comment],
+          [serverRootId]: (current[serverRootId] ?? []).map((item) =>
+            item.id === localId ? server : item,
+          ),
+        }));
+      } else {
+        setComments((current) => current.map((item) => (item.id === localId ? server : item)));
+      }
+      pendingMutation.current = null;
+    } catch (exc) {
+      // 服务端没确认：撤下本地评论，原话与回复对象回填，可直接重试
+      if (rootId !== null) {
+        setReplies((current) => ({
+          ...current,
+          [rootId]: (current[rootId] ?? []).filter((item) => item.id !== localId),
         }));
         setComments((current) =>
           current.map((item) =>
-            item.id === rootId ? { ...item, reply_count: (item.reply_count ?? 0) + 1 } : item,
+            item.id === rootId
+              ? { ...item, reply_count: Math.max(0, (item.reply_count ?? 1) - 1) }
+              : item,
           ),
         );
       } else {
-        setComments((current) => [...current, data.comment]);
+        setComments((current) => current.filter((item) => item.id !== localId));
       }
-      setDraft('');
-      setReplyTarget(null);
-      pendingMutation.current = null;
-      onCommented(post.id, 1);
-    } catch (exc) {
+      onCommented(post.id, -1);
+      setDraft(body);
+      setReplyTarget(target);
       setError(exc instanceof Error ? exc.message : '评论发送失败，请重试');
     } finally {
       setSending(false);
@@ -303,6 +362,7 @@ export function CommentSheet({
 
   const renderComment = (comment: PostComment, nested = false) => {
     const highlighted = highlightId === comment.id;
+    const pending = (comment as PendingComment).pending === true;
     return (
       <View
         key={comment.id}
@@ -334,19 +394,27 @@ export function CommentSheet({
             >
               {timeAgo(comment.created_at)}
             </ThemedText>
-            {!comment.deleted && (
-              <Pressable onPress={() => setReplyTarget(comment)}>
-                <ThemedText type="small" style={{ color: theme.tintForeground }}>
-                  回复
-                </ThemedText>
-              </Pressable>
-            )}
-            {user?.id === comment.user_id && !comment.deleted && (
-              <Pressable onPress={() => remove(comment)}>
-                <ThemedText type="small" style={{ color: theme.danger }}>
-                  删除
-                </ThemedText>
-              </Pressable>
+            {pending ? (
+              <ThemedText type="small" themeColor="textSecondary">
+                发送中…
+              </ThemedText>
+            ) : (
+              <>
+                {!comment.deleted && (
+                  <Pressable onPress={() => setReplyTarget(comment)}>
+                    <ThemedText type="small" style={{ color: theme.tintForeground }}>
+                      回复
+                    </ThemedText>
+                  </Pressable>
+                )}
+                {user?.id === comment.user_id && !comment.deleted && (
+                  <Pressable onPress={() => remove(comment)}>
+                    <ThemedText type="small" style={{ color: theme.danger }}>
+                      删除
+                    </ThemedText>
+                  </Pressable>
+                )}
+              </>
             )}
           </View>
         </View>

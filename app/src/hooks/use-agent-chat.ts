@@ -21,6 +21,12 @@ import {
 import { ApiError, fetchDashboard, getToken } from '@/services/api';
 import { scrollRestorePlan } from '@/services/chat-restore';
 import {
+  isLocalTurn,
+  mergeServerTurns,
+  nextLocalTurnId,
+  type LocalAgentTurn,
+} from '@/services/agent-chat-turns';
+import {
   AGENT_JPEG_QUALITY,
   AGENT_UPLOAD_MAX_EDGE,
   normalizeForUpload,
@@ -93,12 +99,7 @@ export function useAgentChat(user: { id: number } | null) {
         if (!currentSession()) return;
         useAgentChatStore
           .getState()
-          .setTurns([
-            ...useAgentChatStore
-              .getState()
-              .turns.filter((turn) => latest.length > 0 && turn.id < latest[0].id),
-            ...latest,
-          ]);
+          .setTurns(mergeServerTurns(useAgentChatStore.getState().turns, latest));
         const end = new Date();
         const start = new Date(end.getTime() - 89 * 86400000);
         const facts = await fetchAgentObservation(
@@ -147,7 +148,7 @@ export function useAgentChat(user: { id: number } | null) {
       current.setReplyTo(snapshot.replyTo);
       current.setScrollY(plan.scrollY);
       if (snapshot.turns?.length) {
-        current.setTurns(snapshot.turns);
+        current.setTurns(snapshot.turns.filter((turn) => !isLocalTurn(turn)));
         current.setLoadedFor(userId);
       }
       // 快照恢复：上传中的附件随进程中断，标记失败等待重试或移除
@@ -181,7 +182,9 @@ export function useAgentChat(user: { id: number } | null) {
         topic: state.topic,
         replyTo: state.replyTo,
         scrollY: state.scrollY,
-        turns: state.turns.slice(-KEEP_TURNS),
+        // 本地乐观回合不进快照：重启后由服务端已保存回合恢复，
+        // 免得留下一条永远 pending 的气泡
+        turns: state.turns.filter((turn) => !isLocalTurn(turn)).slice(-KEEP_TURNS),
         attachments: state.attachments,
         pending: state.pending,
       };
@@ -383,6 +386,39 @@ export function useAgentChat(user: { id: number } | null) {
     setFollowReply(true);
     state.setBusy(true);
     state.setError('');
+    // 乐观 UI：本地先落一条 pending 回合，主人的话立刻出现在会话里。
+    // 服务端 POST 会阻塞到整轮生成结束才返回（W01 spec §3.2），等响应才上屏
+    // 会让主人盯着空输入区等整轮生成——本地这条与服务端结果按 requestId 对账。
+    const attachments = state.attachments;
+    const localTurn: LocalAgentTurn = {
+      id: nextLocalTurnId(),
+      requestId: pending.key,
+      text: pending.text,
+      speaker: pending.target === 'pet' ? 'pet' : 'assistant',
+      readAt: null,
+      target: pending.target,
+      reply: '',
+      status: 'pending',
+      createdAt: new Date().toISOString(),
+      topicId: pending.topic ?? null,
+      replyTo: pending.replyTo ?? null,
+      sources: [],
+      blocks: null,
+      images: attachments
+        .filter((item) => item.status === 'done' && item.imageId)
+        .map((item) => ({
+          id: item.imageId as string,
+          width: item.width,
+          height: item.height,
+          bytes: null,
+        })),
+      local: true,
+    };
+    useAgentChatStore.getState().applyLocalTurn(localTurn);
+    // 原话已进会话，输入区清空；发送失败时再回填（失败保留原话与图片）
+    state.setDraft('');
+    state.setReplyTo(undefined);
+    state.clearAttachments();
     try {
       const result = await sendAgentTurn(
         pending.pet,
@@ -395,7 +431,7 @@ export function useAgentChat(user: { id: number } | null) {
       );
       if (!currentSession()) return;
       const current = useAgentChatStore.getState();
-      current.applyTurn(result.turn);
+      current.applyTurn(result.turn); // 同 requestId：本地乐观回合被服务端结果替换
       current.setPending(null);
       current.setDraft('');
       current.setReplyTo(undefined);
@@ -404,7 +440,14 @@ export function useAgentChat(user: { id: number } | null) {
       void useCompanionSettingsStore.getState().refresh();
     } catch {
       if (!currentSession()) return;
-      useAgentChatStore.getState().setError('暂时没能确认送达，原话和图片已保留，可以重试');
+      const current = useAgentChatStore.getState();
+      // 服务端没确认：撤下本地气泡，原话与图片回填输入区，可直接重试
+      // （pending 保留同键，服务端按 requestId 去重，不会重复落库）
+      current.removeLocalTurn(pending.key);
+      current.setDraft(pending.text);
+      current.setReplyTo(pending.replyTo);
+      if (attachments.length) current.addAttachments(attachments);
+      current.setError('暂时没能确认送达，原话和图片已保留，可以重试');
     } finally {
       if (currentSession()) useAgentChatStore.getState().setBusy(false);
     }

@@ -22,7 +22,8 @@ import { Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { usePetChanges } from '@/hooks/use-pet-changes';
 import { useTheme } from '@/hooks/use-theme';
-import { createPost, fetchPets } from '@/services/api';
+import { fetchPets } from '@/services/api';
+import { publishPost, stagePost } from '@/services/social-publish';
 import {
   dismissAgentSocialDraft,
   fetchAgentSocialDraft,
@@ -300,37 +301,43 @@ function PostForm({ diaryJobId }: { diaryJobId?: string }) {
     }
   };
 
-  const submit = async () => {
+  const submit = () => {
     if (sending) return;
     if (!images.length && !caption.trim()) {
       setError('请先写点内容或选择照片');
       return;
     }
+    if (!user) return;
     setSending(true);
     setError(null);
     const id = mutationId || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setMutationId(id);
-    try {
-      await createPost({
+    const pet = pets.find((item) => item.id === petId) ?? null;
+    // 乐观发布：先在社区列表里落一条本地帖子（本地图片预览 + 发布状态），
+    // 上传与落库在后台跑，主人不用盯着转圈等图片传完。
+    const entry = stagePost(
+      {
         images,
         caption: caption.trim(),
         location: location.trim(),
         petId: petId ?? undefined,
         audience,
-        mutationId: id,
-      });
-      await AsyncStorage.removeItem(draftKey).catch(() => {});
-      try {
-        if (draftDirectory?.exists) draftDirectory.delete();
-      } catch {
-        // 发布已确认成功，草稿文件清理失败不改变发布结果。
-      }
-      router.back();
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : '发布失败，请重试');
-    } finally {
-      setSending(false);
-    }
+      },
+      id,
+      { id: user.id, displayName: user.displayName, avatarEmoji: user.avatarEmoji },
+      pet ? { id: pet.id, name: pet.name, emoji: pet.avatar_emoji } : null,
+      () => {
+        // 发布成功：清掉本地草稿（失败时保留，待重试）
+        void AsyncStorage.removeItem(draftKey).catch(() => {});
+        try {
+          if (draftDirectory?.exists) draftDirectory.delete();
+        } catch {
+          // 发布已确认成功，草稿文件清理失败不改变发布结果。
+        }
+      },
+    );
+    router.back();
+    publishPost(entry);
   };
 
   return (

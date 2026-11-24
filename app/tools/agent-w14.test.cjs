@@ -86,7 +86,10 @@ test('换账号时清空会话、草稿、附件及待执行上下文，并标�
     state = initialize(set);
     return { getState: () => state };
   };
-  const { useAgentChatStore } = load('stores/agent-chat.ts', { zustand: { create } });
+  const { useAgentChatStore } = load('stores/agent-chat.ts', {
+    zustand: { create },
+    '@/services/agent-chat-turns': require('../src/services/agent-chat-turns.ts'),
+  });
   const before = useAgentChatStore.getState();
   before.resetForUser(1);
   before.setLoadedFor(1);
@@ -104,4 +107,39 @@ test('换账号时清空会话、草稿、附件及待执行上下文，并标�
   assert.equal(after.turns.length, 0);
   assert.equal(after.attachments.length, 0);
   assert.equal(after.pending, null);
+});
+
+test('乐观回合：本地先上屏、服务端回合按 requestId 对账、分页无更早回合时不报错', () => {
+  const { load } = require('./helpers/load-ts.cjs');
+  const create = (initialize) => {
+    let state;
+    const set = (patch) => {
+      state = { ...state, ...(typeof patch === 'function' ? patch(state) : patch) };
+    };
+    state = initialize(set);
+    return { getState: () => state };
+  };
+  const { useAgentChatStore } = load('stores/agent-chat.ts', {
+    zustand: { create },
+    '@/services/agent-chat-turns': require('../src/services/agent-chat-turns.ts'),
+  });
+  const store = useAgentChatStore.getState();
+  // mock 的 set 整体替换 state 对象，每次都要重新取快照
+  const ids = () => useAgentChatStore.getState().turns.map((turn) => turn.id);
+  store.setTurns([{ id: 1 }]);
+  store.applyLocalTurn({
+    id: -1,
+    requestId: 'req-1',
+    text: '我刚说的话',
+    status: 'pending',
+    local: true,
+  });
+  // 本地乐观回合排在最后
+  assert.deepEqual(ids(), [1, -1]);
+  // 服务端回合到达后替换本地乐观回合，不重复
+  store.applyTurn({ id: 2, requestId: 'req-1', text: '我刚说的话', status: 'complete' });
+  assert.deepEqual(ids(), [1, 2]);
+  // 分页返回空（没有更早回合）时列表原样保留，不抛错
+  store.prependOlder([]);
+  assert.deepEqual(ids(), [1, 2]);
 });

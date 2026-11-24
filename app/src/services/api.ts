@@ -84,6 +84,8 @@ export function isProtectedSocialMedia(path: string): boolean {
 }
 
 export function socialImageSource(path: string) {
+  // 本地预览（乐观发布的图片还没上传）直接用本机 uri，不要拼到服务端域名后面
+  if (/^(file|content|ph|assets-library|data):/.test(path)) return { uri: path };
   const token = getToken();
   return {
     uri: absoluteUrl(path),

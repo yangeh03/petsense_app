@@ -15,9 +15,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
+import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
-import { createStory } from '@/services/api';
 import { normalizeForUpload } from '@/services/normalize-image';
+import { publishStory, stageStory } from '@/services/social-publish';
 
 type Picture = { uri: string; name: string; type: string };
 
@@ -25,6 +26,7 @@ export default function StoryCreateScreen() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { user } = useAuth();
   const [picture, setPicture] = useState<Picture | null>(null);
   const [caption, setCaption] = useState('');
   const [audience, setAudience] = useState<'public' | 'followers'>('followers');
@@ -55,23 +57,27 @@ export default function StoryCreateScreen() {
     }
   };
 
-  const publish = async () => {
+  const publish = () => {
     if (!picture || sending) {
       setError('请先拍摄或选择一张照片');
+      return;
+    }
+    if (!user) {
+      setError('登录后才能发布故事');
       return;
     }
     setSending(true);
     setError('');
     const id = mutationId || `${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setMutationId(id);
-    try {
-      await createStory({ image: picture, caption: caption.trim(), audience, mutationId: id });
-      router.back();
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : '发布失败，请重试');
-    } finally {
-      setSending(false);
-    }
+    // 乐观发布：故事先落本地占位（故事页立刻能看到），上传在后台跑
+    const entry = stageStory({ image: picture, caption: caption.trim(), audience }, id, {
+      id: user.id,
+      displayName: user.displayName,
+      avatarEmoji: user.avatarEmoji,
+    });
+    router.back();
+    publishStory(entry);
   };
 
   return (
@@ -150,7 +156,7 @@ export default function StoryCreateScreen() {
           </ThemedText>
         )}
         <Pressable
-          onPress={() => void publish()}
+          onPress={publish}
           disabled={sending}
           style={[styles.publish, { backgroundColor: theme.tint }]}
         >
