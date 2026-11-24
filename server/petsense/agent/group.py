@@ -123,24 +123,21 @@ def task_text(role, mode):
 
     mode：auto（默认，爱宠先答）、pet（只点了爱宠）、assistant（只点了照料助手）、
     both（两位都回）、handoff（爱宠转交后由照料助手接手）。
+    分工的细节在角色的系统提示段里（爱宠按形态有三种分工段），这里只给这一轮的语气要求。
     """
     if role == PET_ROLE:
         if mode == 'auto':
-            return ('主人没有点名谁，这一轮由你先回应。消息里需要查证数据、养宠知识、联网核实、'
-                    '修改保存或持续安排的部分你答不了：先用一句话告诉主人你把这件事交给照料助手'
-                    '（不要给任何数值），再调用 handoff_to_assistant 把那部分转交（一次就够，'
-                    'reason 里写清需要接手的是什么）。转交之后不要再回答专业内容。'
-                    '只是闲聊、情绪表达或你们之间的日常陪伴不要转交，直接回应就好。'
-                    '主人这句话看不出想聊什么时，只问一个简短的必要澄清问题，不要猜主题也不要展开。')
+            return ('主人没有点名谁，这一轮由你先回应。闲聊、情绪表达和你们之间的日常陪伴直接回应；'
+                    '答不了的部分转交给照料助手。主人这句话看不出想聊什么时，只问一个简短的必要澄清问题，'
+                    '不要猜主题也不要展开。')
         if mode == 'both':
-            return ('主人要两位都回。你只接陪伴部分（至多两句）；需要查证、知识或操作的部分由'
-                    '照料助手另发一条，你不展开，也不要调用转交。')
-        return ('主人点名了你。你只接陪伴部分；如果这条消息要查证数据、养宠知识或操作，'
-                '你不会也不编造：简短说明你不懂并建议主人去问照料助手。'
-                '本轮没有照料助手发言，不要调用转交。')
+            return '主人要两位都回。你只接陪伴部分（至多两句）。'
+        return ('主人点名了你。本轮没有照料助手发言：你只接陪伴部分，专业部分如实说不懂、'
+                '建议去问照料助手，不要编造。')
     if mode == 'handoff':
         return ('爱宠已经把这条消息里需要查证、知识或操作的部分交给你了：回答那部分。'
-                '结论只来自本次工具结果；不要重复爱宠的话，也不要替它表达感受。')
+                '结论只来自本次工具结果；不要重复爱宠的话，也不要替它表达感受。'
+                '爱宠没有转交、但请求本身超出服务范围时，如实说明不在服务范围内。')
     if mode == 'both':
         return ('只回答主人明确请求的专业部分。爱宠负责陪伴表达，你不替它说话、'
                 '不复述或评价它的感受；陪伴话语里的动作不是另一个求助。')
@@ -165,6 +162,13 @@ _LEGACY_ASSISTANT_INTENTS = {
     'social': '回应主人对你说的话。',
     'unknown': '回答主人这条消息。',
 }
+
+
+def pet_mode_for(target, handoff_allowed):
+    """爱宠本轮的分工形态：handoff=可转交（默认指向）、solo=只点了爱宠、paired=两位都回。"""
+    if handoff_allowed:
+        return 'handoff'
+    return 'paired' if target == 'both' else 'solo'
 
 
 def legacy_task_text(role, kind, intent, scope, together):
@@ -717,6 +721,7 @@ def _context(session, row, turn, pet, now, budget, deadline, assigned_request=No
         'now_iso': iso_z(now), 'turn_id': turn.id, 'settings': settings_service.load(session, pet.user_id),
         'role': row.role, 'route': {'scope': scope, 'intent': intent},
         'handoff_allowed': bool(handoff_allowed),
+        'pet_mode': pet_mode_for(turn.target, bool(handoff_allowed)),
         'assigned_request': assigned_request or turn.text,
         'task': task,
         'message_id': row.id, 'route_id': route.id if route is not None else None, 'pet_name': pet.name,
