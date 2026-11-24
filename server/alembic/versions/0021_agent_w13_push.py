@@ -1,18 +1,6 @@
 """W13 原生推送（iOS 首版）：安装实例、用户开关与投递审计表。
 
-⚠️ 临时修订号，合入时必须改号（见 docs/agent-w13-spec.md §实施记录）。
-
-本工作树的上一版迁移是 0019；W12 正在并行实现 0020。W13 按负责人指示**在本工作树
-内临时接在 0019 之后**，以保证本分支可独立跑通全量单测与 alembic 往返。
-
-合入主干时必须调整为：
-
-    revision = '0021'                # 0020 已被 W12 占用，取下一个空号
-    down_revision = '0020'           # 指向 W12 的头
-    文件名 → 0021_agent_w13_push.py
-
-不改 down_revision 会在主干产生两个 head（0019 → w13_push_tmp 与 0019 → 0020），
-alembic upgrade head 行为不确定。改号后本文件内容无需其他调整。
+接 W12 的 0020（单 head：0019 → 0020 → 0021）。
 
 创建三张表：push_preferences / push_installations / push_deliveries。
 """
@@ -20,8 +8,8 @@ from alembic import op
 import sqlalchemy as sa
 from petsense.db.base import UTCDatetime
 
-revision = 'w13_push_tmp'
-down_revision = '0019'
+revision = '0021'
+down_revision = '0020'
 branch_labels = None
 depends_on = None
 

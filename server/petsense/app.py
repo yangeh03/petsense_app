@@ -42,10 +42,12 @@ def create_app(start_background=True):
     observations.backfill()
 
     from petsense.agent.routes import bp as agent_bp
+    from petsense.agent.inbox_routes import bp as agent_inbox_bp
     from petsense.agent.push_routes import bp as push_bp
     app = Flask('petsense')
     app.register_blueprint(agent_bp)
-    app.register_blueprint(push_bp)
+    app.register_blueprint(agent_inbox_bp)  # W12：收件箱（独立 blueprint，不与 agent/routes.py 冲突）
+    app.register_blueprint(push_bp)  # W13：推送注册与开关（独立 blueprint）
     app.register_blueprint(mqtt_ingest.collection_store.blueprint())
     telemetry_realtime.sock.init_app(app)
     app.register_blueprint(telemetry_realtime.bp)
@@ -95,6 +97,8 @@ def create_app(start_background=True):
         agent_jobs.start_scheduler()  # W08：持久作业调度（PETSENSE_SCHEDULER_DISABLED 可关；kind 执行器随各域注册）
         from petsense.agent import care_jobs
         care_jobs.start_care()  # W09：scan/review/event 执行器注册 + 周期扫描入队（幂等）
+        from petsense.agent import inbox_jobs
+        inbox_jobs.start_inbox()  # W12：收件箱投影作业（注册 + 周期入队，幂等）
         from petsense.agent import push_jobs
         push_jobs.start_push()  # W13：推送派发 + 回执扫描（平台闸门默认关闭）
         from petsense.agent import ws as agent_ws

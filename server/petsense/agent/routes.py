@@ -373,6 +373,10 @@ def proposal_decision(pet_id, proposal_id):
     action = data.get('action') if isinstance(data, dict) else None
     if action not in ('confirm', 'reject'):
         return {'message': '决策动作无效'}, 400
+    # W11 D3：主人对「等基线 / 先记录绝对事实」的实际选择（仅个人比较类候选需要）
+    baseline_strategy = data.get('baselineStrategy') if isinstance(data, dict) else None
+    if baseline_strategy is not None and baseline_strategy not in ('fact_first', 'wait_baseline'):
+        return {'message': '基线策略需为 fact_first / wait_baseline'}, 400
     result = None
     changed = False
     kind = None
@@ -381,7 +385,8 @@ def proposal_decision(pet_id, proposal_id):
         if pet is None or pet.user_id != user['id']:
             return {'message': '宠物不存在'}, 404
         try:
-            row, turn_id, changed = proposal_service.decide(s, pet, proposal_id, action)
+            row, turn_id, changed = proposal_service.decide(
+                s, pet, proposal_id, action, baseline_strategy=baseline_strategy)
             kind = row.kind
         except proposal_service.ProposalError as exc:
             # 409（已被替代/已处理过）带当前提案与其回合快照：App 按响应覆盖，卡片翻终态禁按钮（§5）
@@ -495,6 +500,17 @@ def agent_task_proposal_edit(pet_id):
             payload = task_service.normalize_proposal_fields(arguments)
         except task_service.TaskError as exc:
             return {'message': exc.message}, 400
+        # W11 D3：编辑入口不得丢掉「须由主人明确选择」的要求，也不得悄悄换策略——
+        # 按所选宠物的最新基线状态重判，并保留主人已做过的明确选择。
+        plan = payload.get('plan') or {}
+        base_plan = base_payload.get('plan') or {}
+        if plan.get('kind') == 'comparison':
+            if base_plan.get('baselineStrategyExplicit'):
+                plan['baselineStrategyExplicit'] = True
+            if not task_service.baseline_ready(s, pet, plan):
+                plan['baselineStrategyChoiceRequired'] = True
+            else:
+                plan.pop('baselineStrategyChoiceRequired', None)
         row, refreshed = proposal_service.create_task_proposal(
             s, pet, base.turn_id, payload, now=utc_now())
         result = {'proposal': proposal_service.public(row)}
