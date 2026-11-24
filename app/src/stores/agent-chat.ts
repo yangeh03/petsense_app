@@ -6,6 +6,15 @@
 
 import { create } from 'zustand';
 import type { AgentTurn } from '@/services/agent';
+import {
+  applyDeltaToTurns,
+  isLocalTurn,
+  orderTurns,
+  reconcileTurn,
+  removeLocalTurn,
+  upsertLocalTurn,
+  type LocalAgentTurn,
+} from '@/services/agent-chat-turns';
 
 export type AgentTarget = AgentTurn['target'];
 export type AgentConnection = 'connecting' | 'open' | 'closed' | 'unauthorized';
@@ -54,6 +63,10 @@ export type AgentChatState = {
   setTurns: (turns: AgentTurn[]) => void;
   prependOlder: (turns: AgentTurn[]) => void;
   applyTurn: (turn: AgentTurn) => void;
+  /** 乐观 UI：本地立即落一条 pending 回合（主人刚发出的那条） */
+  applyLocalTurn: (turn: LocalAgentTurn) => void;
+  /** 撤下本地乐观回合（发送失败且服务端未确认） */
+  removeLocalTurn: (requestId: string) => void;
   applyDelta: (petId: number, turnId: number, text: string, speaker: AgentTurn['speaker']) => void;
   setDraft: (draft: string) => void;
   setTarget: (target: AgentTarget) => void;
@@ -70,16 +83,6 @@ export type AgentChatState = {
   setPending: (pending: PendingRequest | null) => void;
   resetForUser: (ownerId?: number | null) => void;
 };
-
-function upsert(turns: AgentTurn[], turn: AgentTurn) {
-  const index = turns.findIndex((item) => item.id === turn.id);
-  if (index === -1) {
-    return [...turns, turn].sort((a, b) => a.id - b.id);
-  }
-  const next = turns.slice();
-  next[index] = turn;
-  return next;
-}
 
 export const useAgentChatStore = create<AgentChatState>((set) => ({
   ownerId: null,
@@ -99,43 +102,27 @@ export const useAgentChatStore = create<AgentChatState>((set) => ({
   pending: null,
   setPet: (pet) => set({ petId: pet ? pet.id : null, petName: pet ? pet.name : null }),
   setLoadedFor: (userId) => set({ loadedFor: userId }),
-  setTurns: (turns) => set({ turns }),
+  setTurns: (turns) => set({ turns: orderTurns(turns) }),
   prependOlder: (older) =>
     set((state) => ({
-      turns: older.length
-        ? [...older, ...state.turns.filter((turn) => turn.id < older[0].id)]
-        : state.turns,
+      turns: orderTurns(
+        older.length
+          ? [
+              ...older,
+              // 本地乐观回合不在服务端分页结果里，保留（它一定比这一页更晚）
+              ...state.turns.filter((turn) => isLocalTurn(turn) || turn.id < older[0].id),
+            ]
+          : state.turns,
+      ),
     })),
-  applyTurn: (turn) => set((state) => ({ turns: upsert(state.turns, turn) })),
+  applyTurn: (turn) => set((state) => ({ turns: reconcileTurn(state.turns, turn) })),
+  applyLocalTurn: (local) => set((state) => ({ turns: upsertLocalTurn(state.turns, local) })),
+  removeLocalTurn: (requestId) =>
+    set((state) => ({ turns: removeLocalTurn(state.turns, requestId) })),
   applyDelta: (petId, turnId, text, speaker) =>
     set((state) => {
       if (state.petId !== petId) return state;
-      const index = state.turns.findIndex((item) => item.id === turnId);
-      if (index === -1) {
-        // 尚未本地建回合（发送请求还在路上）：占位，终态 turn 帧或 POST 返回会覆盖
-        const placeholder: AgentTurn = {
-          id: turnId,
-          requestId: '',
-          text: '',
-          speaker,
-          readAt: null,
-          target: 'auto',
-          reply: text,
-          status: 'pending',
-          createdAt: new Date().toISOString(),
-          topicId: state.topic ?? null,
-          replyTo: null,
-          sources: [],
-          blocks: null,
-          images: [],
-        };
-        return { turns: [...state.turns, placeholder] };
-      }
-      const turns = state.turns.slice();
-      const current = turns[index];
-      if (current.status !== 'pending') return state; // 终态以服务端已保存结果为准
-      turns[index] = { ...current, reply: text, speaker };
-      return { turns };
+      return { turns: applyDeltaToTurns(state.turns, turnId, text, speaker, state.topic ?? null) };
     }),
   setDraft: (draft) => set({ draft }),
   setTarget: (target) => set({ target }),
