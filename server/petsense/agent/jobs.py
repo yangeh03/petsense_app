@@ -13,12 +13,14 @@ W09 接入点：register_handler(kind, fn) 注册事件运行等新 kind；fn(jo
 内部自行开 session_scope；enqueue(session, ...) 可在任意业务事务内追加作业，
 与业务写入同事务提交；handler 返回 {'next_run_at': …} 表示作业保持 pending 等待
 下次触发（周期检查点），返回 None 表示本作业完成。
+
+群聊回合（W 系列 design doc §3）等需要及时执行的作业入队后调用 wake()，调度线程立即跑一轮，
+不必等满 TICK_SECONDS；requeue() 把已结束的作业按原稳定键重新排队（用户主动重试）。
 """
 import json
 import logging
 import os
 import threading
-import time
 from datetime import timedelta
 
 from sqlalchemy import or_, select
@@ -34,6 +36,7 @@ DEFAULT_MAX_ATTEMPTS = 5
 BACKOFF_BASE_S = 60
 
 _HANDLERS = {}
+_wake = threading.Event()   # 入队聊天回合等需要及时执行的作业后置位，调度线程不再等满一个 tick
 
 
 def register_handler(kind, handler):
@@ -69,6 +72,25 @@ def enqueue(session, kind, payload, dedup_key, next_run_at=None, max_attempts=DE
     existing = session.execute(select(AgentJob.id).where(
         AgentJob.dedup_key == dedup_key)).scalar_one()
     return existing, False
+
+
+def requeue(session, kind, payload, dedup_key, now=None):
+    """把一个已结束（done/dead）的作业重新排队；不存在则新建。返回 (job_id, created)。
+
+    用于用户主动重试（如群聊里失败的那条消息）：重试沿用同一个稳定键，所以不会出现第二个作业。
+    """
+    now = now or utc_now()
+    row = session.execute(select(AgentJob).where(AgentJob.dedup_key == dedup_key)).scalar_one_or_none()
+    if row is None:
+        return enqueue(session, kind, payload, dedup_key, next_run_at=now)
+    if row.status in ('done', 'dead'):
+        row.status, row.attempts, row.next_run_at, row.lease_until = 'pending', 0, now, None
+        row.last_error = None
+        row.updated_at = now
+    elif row.status == 'pending' and row.next_run_at > now:
+        row.next_run_at = now  # 还在排队或等待下次触发的作业立即到期
+    row.payload_json = json.dumps(payload, ensure_ascii=False)
+    return row.id, False
 
 
 def cancel(session, dedup_key):
@@ -184,6 +206,11 @@ def recover_interrupted():
         return len(rows)
 
 
+def wake():
+    """让调度线程立即跑一轮（入队需要及时执行的作业后调用；调度线程未启动时无效果）。"""
+    _wake.set()
+
+
 def start_scheduler():
     """app.py start_background 内启动；daemon 线程常驻，异常不退出（同 memory worker 模式）。"""
     if not scheduler_enabled():
@@ -198,6 +225,7 @@ def start_scheduler():
                 tick()
             except Exception:
                 logger.exception('agent scheduler tick failed')
-            time.sleep(TICK_SECONDS)
+            _wake.wait(TICK_SECONDS)
+            _wake.clear()
 
     threading.Thread(target=_loop, name='agent-scheduler', daemon=True).start()

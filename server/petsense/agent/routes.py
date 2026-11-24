@@ -5,6 +5,8 @@ POST turns 组装初始包（含 W02 常驻快照与 W03 助手设定）并触�
 判断（范围/意图/角色）全部由模型在循环内完成（agent-w01-spec.md §3.7）。
 GET 保留为 WS 断线的降级轮询路径。
 W07：POST images 上传聊天图片（内容寻址、按用户隔离），turns 请求可携带 images 引用。
+双 Agent 群聊（docs/agent-dual-agent-chat-design.md §4）：客户端声明 protocol=group-v1 且全局开关开启时，
+turns 走 group 模块（202 受理 + 后台逐条生成，响应带 protocol）；其余请求与旧客户端走原路径，行为不变。
 """
 import json
 import os
@@ -22,6 +24,7 @@ from petsense.agent.observations import query
 from petsense.agent import baseline as baseline_service
 from petsense.agent import care, jobs
 from petsense.agent import attachments, loop, runs, snapshot
+from petsense.agent import group as group_service
 from petsense.agent import actions as actions_service
 from petsense.agent import proposals as proposal_service
 from petsense.agent import settings as settings_service
@@ -33,14 +36,32 @@ bp = Blueprint('agent', __name__, url_prefix='/api/app/agent')
 MAX_IMAGES_PER_TURN = 3  # D2
 
 
-def public(turn):
-    return {'id': turn.id, 'requestId': turn.request_id, 'text': turn.text,
-            'topicId': turn.topic_id, 'replyTo': turn.reply_to, 'sources': json.loads(turn.sources),
-            'speaker': turn.speaker, 'readAt': iso_z(turn.read_at) if turn.read_at else None,
-            'target': turn.target, 'reply': turn.reply, 'status': turn.status,
-            'blocks': json.loads(turn.blocks) if turn.blocks else None,
-            'images': json.loads(turn.images) if turn.images else [],
-            'createdAt': iso_z(turn.created_at)}
+def public(turn, messages=None):
+    """回合公开序列化。messages（群聊协议的消息视图，由 group 组装）只在给出时附带；旧客户端忽略。
+
+    不带 messages 的是旧协议视图：target=both（两位都回复）是群聊新增值，旧客户端的单选指向
+    不认识它，等同未指定。
+    """
+    payload = {'id': turn.id, 'requestId': turn.request_id, 'text': turn.text,
+               'topicId': turn.topic_id, 'replyTo': turn.reply_to, 'sources': json.loads(turn.sources),
+               'speaker': turn.speaker, 'readAt': iso_z(turn.read_at) if turn.read_at else None,
+               'target': 'auto' if (messages is None and turn.target == 'both') else turn.target,
+               'reply': turn.reply, 'status': turn.status,
+               'blocks': json.loads(turn.blocks) if turn.blocks else None,
+               'images': json.loads(turn.images) if turn.images else [],
+               'replyToMessage': turn.reply_to_message, 'createdAt': iso_z(turn.created_at)}
+    if messages is not None:
+        payload['messages'] = messages
+    return payload
+
+
+def history_rows(session, pet_id, turn_id, topic_id, limit=12):
+    """turn_id 之前、同一话题里最近若干已完成回合（按 id 倒序）：话题成员与话题起始回合都算。"""
+    stmt = select(AgentTurn).where(AgentTurn.pet_id == pet_id, AgentTurn.id < turn_id,
+                                   AgentTurn.status == 'complete')
+    if topic_id is not None:
+        stmt = stmt.where((AgentTurn.topic_id == topic_id) | (AgentTurn.id == topic_id))
+    return session.execute(stmt.order_by(AgentTurn.id.desc()).limit(limit)).scalars().all()
 
 
 @bp.route('/pets/<int:pet_id>/baseline')
@@ -165,6 +186,8 @@ def turns(pet_id):
     user, error = require_app_user()
     if error:
         return error
+    data = request.get_json(silent=True)
+    group_client = group_service.client_group(user, data)
     with session_scope() as s:
         pet = s.get(Pet, pet_id)
         if not pet or pet.user_id != user['id']:
@@ -175,24 +198,45 @@ def turns(pet_id):
             if before:
                 stmt = stmt.where(AgentTurn.id < before)
             rows = s.execute(stmt.order_by(AgentTurn.id.desc()).limit(40)).scalars().all()
+            now = utc_now()
+            # 等待超过上限的回合按中断收尾：群聊回合按消息落失败（可只重试失败的那条），旧回合沿用 5 分钟规则
+            routed = group_service.routed_ids(s, rows)
             for row in rows:
-                if row.status == 'pending' and utc_now() - row.created_at > timedelta(minutes=5):
+                if row.status != 'pending':
+                    continue
+                # 重试过的群聊回合从重新开始等待算起（pending_at），不会因为回合本身较早而立刻被判超时
+                age = now - (row.pending_at or row.created_at)
+                if row.id in routed:
+                    if age > timedelta(seconds=group_service.STALE_PENDING_S):
+                        group_service.expire(s, row, now)
+                elif age > timedelta(minutes=5):
                     row.status = 'failed'
                     row.reply = '上次接话中断了，你的话已经保留，可以重新发送。'
+            if group_client:
+                return {'turns': group_service.list_public(s, list(reversed(rows))),
+                        'protocol': group_service.PROTOCOL, 'dualAgent': True}
             return {'turns': [public(t) for t in reversed(rows)]}
-        data = request.get_json(silent=True)
         if not isinstance(data, dict):
             return {'message': '请输入消息'}, 400
         text, key, target = data.get('text'), data.get('requestId'), data.get('target', 'auto')
         raw_images = data.get('images') if data.get('images') is not None else []
+        existing = s.execute(select(AgentTurn).where(
+            AgentTurn.pet_id == pet_id, AgentTurn.request_id == key)).scalar_one_or_none() \
+            if isinstance(key, str) else None
         # 先校验元素类型（非字符串不可哈希，set() 去重必须放在后面，否则 500）
         if not isinstance(raw_images, list) or len(raw_images) > MAX_IMAGES_PER_TURN \
                 or any(not isinstance(i, str) or not attachments.IMAGE_ID_RE.match(i) for i in raw_images) \
                 or len(set(raw_images)) != len(raw_images):
             return {'message': '图片引用无效'}, 400
         # 有图可纯图发送（W07 D2/实现默认）：text 允许为空，但仍须是字符串且 ≤4000
+        if target == 'both' and not group_client and existing is None:
+            # 客户端以为在群聊里（上次响应带 protocol）但账号已回退：给出可识别的代码，客户端改用 auto 重发。
+            # 回执丢失后的重发除外：同一请求键的回合已被受理时照常幂等返回它（见下方 existing）
+            return {'message': '当前账号未开放双 Agent，请刷新后重试', 'code': 'dual_agent_unavailable'}, 400
+        allowed_targets = group_service.TARGETS if group_client else ('auto', 'pet', 'assistant')
         if not isinstance(text, str) or len(text) > 4000 or (not text.strip() and not raw_images) \
-                or not isinstance(key, str) or not 1 <= len(key) <= 80 or target not in ('auto', 'pet', 'assistant'):
+                or not isinstance(key, str) or not 1 <= len(key) <= 80 \
+                or (target not in allowed_targets and existing is None):
             return {'message': '消息、指向或请求标识无效'}, 400
         images_meta = []
         for image_id in raw_images:
@@ -209,15 +253,27 @@ def turns(pet_id):
                 related = s.get(AgentTurn, reference)
                 if related is None or related.pet_id != pet_id:
                     return {'message': '消息引用不存在'}, 404
-        existing = s.execute(select(AgentTurn).where(AgentTurn.pet_id == pet_id, AgentTurn.request_id == key)).scalar_one_or_none()
+        # 消息级引用（群聊协议可选）：精确到被引用回合里的某一条回复，必须与回合级 replyTo 同时出现
+        reply_to_message = data.get('replyToMessage')
+        if reply_to_message is not None and (
+                reply_to is None or not isinstance(reply_to_message, str)
+                or not group_service.message_ref_exists(s, s.get(AgentTurn, reply_to), reply_to_message)):
+            return {'message': '消息引用无效'}, 400
         if existing:
-            if (existing.text, existing.target, existing.topic_id, existing.reply_to, existing.images) \
-                    != (text.strip(), target, topic_id, reply_to, images_json):
+            # 双 Agent 回退后客户端把「两位」改成「未指定」重发同一请求键：仍是同一条主人消息，照常幂等返回
+            same_target = existing.target == target or (existing.target == 'both' and target == 'auto')
+            if not same_target or (existing.text, existing.topic_id, existing.reply_to, existing.images,
+                                   existing.reply_to_message) \
+                    != (text.strip(), topic_id, reply_to, images_json, reply_to_message):
                 return {'message': '请求标识已用于另一条消息'}, 409
+            if group_client:
+                # 幂等重发：返回这条回合的当前状态（已结束则 200，仍在处理则 202），不会再次触发生成
+                return group_service.accepted(group_service.turn_public(s, existing),
+                                              settled=existing.status != 'pending')
             return {'turn': public(existing)}
         turn = AgentTurn(pet_id=pet_id, request_id=key, text=text.strip(), target=target,
                          reply='', sources='[]', topic_id=topic_id, reply_to=reply_to, images=images_json,
-                         status='pending', created_at=utc_now())
+                         reply_to_message=reply_to_message, status='pending', created_at=utc_now())
         try:
             with s.begin_nested():
                 s.add(turn)
@@ -225,17 +281,20 @@ def turns(pet_id):
         except IntegrityError:
             return {'message': '消息正在处理中，请刷新会话'}, 409
         turn_id = turn.id
-        history_query = select(AgentTurn).where(AgentTurn.pet_id == pet_id, AgentTurn.id < turn_id,
-            AgentTurn.status == 'complete')
-        if topic_id is not None:
-            history_query = history_query.where((AgentTurn.topic_id == topic_id) | (AgentTurn.id == topic_id))
-        history_rows = s.execute(history_query.order_by(AgentTurn.id.desc()).limit(12)).scalars().all()
-        history = [{'text': row.text, 'reply': row.reply,
-                    'images': json.loads(row.images) if row.images else []}
-                   for row in reversed(history_rows)]
-        now = utc_now()
-        snap = snapshot.assemble(s, pet, now)
-        companion = settings_service.load(s, user['id'])
+        if group_client:
+            # 双 Agent 群聊：只校验、去重与入队（202）。路由与逐条生成在后台按消息推进，
+            # 结果经 WS 推送，断线由 GET turns 拉齐
+            group_result = group_service.accepted(group_service.accept(s, turn))
+        else:
+            history = [{'text': row.text, 'reply': row.reply,
+                        'images': json.loads(row.images) if row.images else []}
+                       for row in reversed(history_rows(s, pet_id, turn_id, topic_id))]
+            now = utc_now()
+            snap = snapshot.assemble(s, pet, now)
+            companion = settings_service.load(s, user['id'])
+    if group_client:
+        jobs.wake()
+        return group_result
     context = {'pet_id': pet_id, 'user_id': user['id'], 'text': text.strip(),
                'target': target, 'history': history, 'images': images_meta, 'snapshot': snap, 'now_iso': iso_z(now),
                'turn_id': turn_id, 'settings': companion}
@@ -313,6 +372,15 @@ def turns(pet_id):
     return result
 
 
+@bp.post('/pets/<int:pet_id>/turns/<int:turn_id>/retry')
+def retry_turn(pet_id, turn_id):
+    """双 Agent 群聊：只重试回合里失败的那条回复（design doc §4.4）。成功的消息不动，重复点击幂等。"""
+    user, error = require_app_user()
+    if error:
+        return error
+    return group_service.retry(user, pet_id, turn_id)
+
+
 @bp.post('/pets/<int:pet_id>/read')
 def read_turns(pet_id):
     user, error = require_app_user()
@@ -331,6 +399,9 @@ def read_turns(pet_id):
         now = utc_now()
         for row in rows:
             row.read_at = row.read_at or now
+        if group_service.client_group(user):
+            return {'turns': group_service.list_public(session, rows),
+                    'protocol': group_service.PROTOCOL, 'dualAgent': True}
         return {'turns': [public(row) for row in rows]}
 
 
@@ -407,11 +478,11 @@ def proposal_decision(pet_id, proposal_id):
                 body['proposal'] = proposal_service.public(stale)
                 if exc.status == 409 and stale.turn_id:
                     stale_turn = s.get(AgentTurn, stale.turn_id)
-                    body['turn'] = public(stale_turn) if stale_turn else None
+                    body['turn'] = group_service.view(user, s, stale_turn) if stale_turn else None
             return body, exc.status
         turn = s.get(AgentTurn, turn_id) if turn_id else None
         result = {'proposal': proposal_service.public(row),
-                  'turn': public(turn) if turn else None}
+                  'turn': group_service.view(user, s, turn) if turn else None}
     if changed and action == 'confirm' and kind in actions_service.CONFIRM_KINDS:
         # 提交后执行（spec §2）：重复确认被 execute_confirmed 幂等挡住，不重复提交外部系统
         actions_service.execute_confirmed(pet_id, proposal_id)
@@ -420,7 +491,7 @@ def proposal_decision(pet_id, proposal_id):
             result['proposal'] = proposal_service.public(fresh)
             if fresh and fresh.turn_id:
                 fresh_turn = s.get(AgentTurn, fresh.turn_id)
-                result['turn'] = public(fresh_turn) if fresh_turn else result['turn']
+                result['turn'] = group_service.view(user, s, fresh_turn) if fresh_turn else result['turn']
     if result['turn']:
         ws.push_turn(user['id'], pet_id, result['turn'])
     return result
@@ -530,7 +601,7 @@ def agent_task_proposal_edit(pet_id):
         with session_scope() as s:
             stale_turn = s.get(AgentTurn, stale_turn_id) if stale_turn_id else None
             if stale_turn is not None and stale_turn.pet_id == pet_id:
-                ws.push_turn(user['id'], pet_id, public(stale_turn))  # 旧卡翻「已有新候选」
+                ws.push_turn(user['id'], pet_id, group_service.turn_public(s, stale_turn))  # 旧卡翻「已有新候选」
     return result
 
 

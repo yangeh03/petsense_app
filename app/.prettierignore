@@ -9,3 +9,5 @@ firmware/**/build
 .agents/skills/cloud-ssh/
 # Generated bulk data (regenerate with tools/gen-dog-map.cjs instead of formatting).
 src/generated/dog-map-data.ts
+# Recorded server frames for the client replay test (regenerate with server/tools/group_fixture_capture.py).
+tools/fixtures/agent-group-frames.json

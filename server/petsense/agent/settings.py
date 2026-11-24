@@ -82,3 +82,30 @@ def prompt_line(values):
             f"回答详略：{'详细展开' if values['verbosity'] == 'detailed' else '默认简短，主人追问再展开'}。"
             f"正文中可用「{values['assistantName']}」自称；消息开头的身份标注仍固定用【照料助手】，"
             '不因改名改变（两位人格规则不变）。')
+
+
+def group_prompt_line(values):
+    """群聊里照料助手角色的设定行：同 prompt_line，但不带身份标注规则。
+
+    群聊消息的身份由服务端固定、正文不带【照料助手】标记（design doc §3.5），
+    所以这里不再要求「消息开头固定标注」。
+    """
+    owner = values['ownerTitle']
+    owner_clause = (f"称呼主人用「{owner}」（未设置则自然称呼）；" if owner
+                    else '对主人的称呼未设置，自然称呼；')
+    return (f"助手设定（当前生效）：称呼你为「{values['assistantName']}」；"
+            f"{owner_clause}"
+            f"回答详略：{'详细展开' if values['verbosity'] == 'detailed' else '默认简短，主人追问再展开'}。"
+            f"正文中可用「{values['assistantName']}」自称。")
+
+
+def pet_line(values):
+    """双 Agent 群聊里爱宠角色的设定行：只取称呼与照料助手的名字。
+
+    不注入【照料助手】标注规则和助手表达设定——爱宠的身份由服务端固定，不输出身份标记
+    （docs/agent-dual-agent-chat-design.md §3.5）。
+    """
+    owner = values['ownerTitle']
+    owner_clause = (f"称呼主人用「{owner}」（未设置则自然称呼）；" if owner
+                    else '对主人的称呼未设置，自然称呼；')
+    return f"群聊设定：照料助手在群里的名字是「{values['assistantName']}」；{owner_clause}"

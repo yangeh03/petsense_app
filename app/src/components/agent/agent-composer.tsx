@@ -2,6 +2,8 @@
  * 伙伴会话输入区（W01 自建容器层；W07 图片附件）：指向选择、多行输入、发送、
  * 相册/拍照附件（预览条 + 逐张上传状态与重试）；键盘协调由外层的
  * react-native-keyboard-controller 负责（agent-w01-spec.md §4.2，agent-w07-spec.md §4.1）。
+ * 双 Agent 群聊（docs/agent-dual-agent-chat-design.md §4）：账号开放时发言对象多一项「两位都回」；
+ * 引用了某一条回复时在输入框上方显示引用预览，可取消。
  */
 
 import { useState } from 'react';
@@ -34,6 +36,11 @@ type Props = {
   bottomInset: number;
   attachments: AgentAttachment[];
   canAttach: boolean;
+  /** 服务端已确认当前账号开放双 Agent：发言对象里才提供「两位都回」 */
+  dualAgent: boolean;
+  /** 正在引用的回复（发言对象或话题上下文），没有引用时为空 */
+  quote: { name: string; text: string } | null;
+  onCancelQuote: () => void;
   onDraft: (draft: string) => void;
   onTarget: (target: AgentTarget) => void;
   onSend: () => void;
@@ -119,6 +126,9 @@ export function AgentComposer({
   bottomInset,
   attachments,
   canAttach,
+  dualAgent,
+  quote,
+  onCancelQuote,
   onDraft,
   onTarget,
   onSend,
@@ -134,7 +144,16 @@ export function AgentComposer({
   const uploading = attachments.some((item) => item.status === 'uploading');
   const firstFailed = attachments.find((item) => item.status === 'failed');
   const targetLabel =
-    target === 'pet' ? (petName ?? '爱宠') : target === 'assistant' ? assistantName : '大家';
+    target === 'pet'
+      ? (petName ?? '爱宠')
+      : target === 'assistant'
+        ? assistantName
+        : target === 'both'
+          ? '两位'
+          : '大家';
+  const targetOptions: AgentTarget[] = dualAgent
+    ? ['auto', 'pet', 'assistant', 'both']
+    : ['auto', 'pet', 'assistant'];
   return (
     <View style={[styles.footer, !keyboardOpen && { marginBottom: bottomInset }]}>
       {attachments.length ? (
@@ -161,9 +180,35 @@ export function AgentComposer({
             : '有图片未上传成功，可点图片重试或移除后再发送'}
         </ThemedText>
       ) : null}
+      {/* 引用预览：这条话是接着谁的哪一句说的；取消后只是不带上引用，仍留在当前话题 */}
+      {quote ? (
+        <View style={[styles.quote, { backgroundColor: theme.backgroundSelected }]}>
+          <ThemedText
+            type="small"
+            themeColor="textSecondary"
+            numberOfLines={1}
+            style={styles.quoteText}
+          >
+            {`引用 ${quote.name}：${quote.text}`}
+          </ThemedText>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="取消引用"
+            hitSlop={8}
+            style={styles.quoteCancel}
+            onPress={onCancelQuote}
+          >
+            <SymbolView
+              name={{ ios: 'xmark', android: 'close', web: 'close' }}
+              tintColor={theme.text}
+              size={11}
+            />
+          </Pressable>
+        </View>
+      ) : null}
       {showTargets ? (
         <View style={styles.targets}>
-          {(['auto', 'pet', 'assistant'] as const).map((value) => (
+          {targetOptions.map((value) => (
             <Pressable
               key={value}
               accessibilityRole="button"
@@ -181,7 +226,13 @@ export function AgentComposer({
               }}
             >
               <ThemedText type="smallBold">
-                {value === 'auto' ? '大家' : value === 'pet' ? petName : assistantName}
+                {value === 'both'
+                  ? '两位都回'
+                  : value === 'pet'
+                    ? (petName ?? '爱宠')
+                    : value === 'assistant'
+                      ? assistantName
+                      : '大家'}
               </ThemedText>
             </Pressable>
           ))}
@@ -303,7 +354,26 @@ const styles = StyleSheet.create({
     paddingBottom: 5,
     gap: 7,
   },
-  targets: { flexDirection: 'row', gap: 8, paddingLeft: 6 },
+  // 开放双 Agent 后有四项，名字长时自动换行，不挤出屏幕
+  targets: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingLeft: 6 },
+  quote: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginLeft: 6,
+    borderRadius: 12,
+    paddingLeft: 10,
+    paddingRight: 2,
+    minHeight: 34,
+  },
+  quoteText: { flex: 1 },
+  quoteCancel: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   thumbs: { flexDirection: 'row', gap: 8, paddingLeft: 6 },
   uploadHint: { paddingLeft: 6 },
   thumb: {

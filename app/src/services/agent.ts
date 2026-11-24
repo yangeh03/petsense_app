@@ -221,19 +221,59 @@ export type AgentCareTopic = {
   closedReason: string | null;
 };
 
+/**
+ * 双 Agent 群聊协议（docs/agent-dual-agent-chat-design.md §4）。客户端在请求上声明它，是否生效由
+ * 服务端按开关与账号灰度决定：生效时回合带 messages（逐条回复）、POST 立即返回 202；未生效时
+ * 响应与旧协议完全一致，客户端按旧形状渲染。
+ */
+export const AGENT_GROUP_PROTOCOL = 'group-v1';
+
+export type AgentReplyMessageStatus = 'queued' | 'running' | 'complete' | 'failed';
+
+/**
+ * 群聊协议下的一条回复：爱宠或照料助手在一轮里的一条发言。id 自创建起稳定（m<行 id>），
+ * 同一条发言从出字到结束、失败后重试都是同一个 id；旧回合按内容块投影成只读消息（t<回合 id>-<序号>）。
+ */
+export type AgentReplyMessage = {
+  id: string;
+  turnId: number;
+  role: 'pet' | 'assistant';
+  position: number;
+  kind: string;
+  status: AgentReplyMessageStatus;
+  /** 累计正文；失败的发言为空串（已流出的半截由更高版本的快照撤回） */
+  text: string;
+  /** 每次持久化变更递增：客户端只接受不低于已有版本的消息，同版本只接受不更短的正文 */
+  version: number;
+  sources: AgentSource[];
+  blocks: AgentTurn['blocks'];
+  error: string | null;
+  errorNote: string | null;
+  readOnly: boolean;
+  createdAt: string;
+  finishedAt: string | null;
+  /** 仅客户端使用的瞬时进度（如联网核实中）：不是正文，不落库，出字后不再显示 */
+  activity?: 'searching' | null;
+};
+
 export type AgentTurn = {
   id: number;
   requestId: string;
   text: string;
   speaker: 'pet' | 'assistant';
   readAt: string | null;
-  target: 'auto' | 'pet' | 'assistant';
+  /** both（两位都回）是群聊协议新增的取值；未开放双 Agent 时服务端不接受 */
+  target: 'auto' | 'pet' | 'assistant' | 'both';
   reply: string;
   status: 'pending' | 'complete' | 'failed';
   createdAt: string;
   topicId: number | null;
   replyTo: number | null;
+  /** 消息级引用（群聊协议）：精确到被引用回合里的某一条回复 */
+  replyToMessage?: string | null;
   sources: AgentSource[];
+  /** 仅群聊协议的回合带（可以是空数组：还没路由出谁来说话）；旧协议的回合没有这个字段 */
+  messages?: AgentReplyMessage[];
   blocks:
     | (
         | { type: 'text'; speaker: 'pet' | 'assistant'; text: string }
@@ -260,24 +300,61 @@ export type AgentTaskResultBlock = {
   /** W11 D6：回信冻结的个人比较证据。 */
   changeEvidence?: AgentChangeEvidence[];
 };
+/** 历史列表：dualAgent / protocol 只在服务端确认当前账号进入双 Agent 时出现。 */
+export type AgentTurnListing = {
+  turns: AgentTurn[];
+  protocol?: string;
+  dualAgent?: boolean;
+};
+
 export const fetchAgentTurns = (pet: number, before?: number) =>
-  request<{ turns: AgentTurn[] }>(`/agent/pets/${pet}/turns${before ? `?before=${before}` : ''}`);
+  request<AgentTurnListing>(
+    `/agent/pets/${pet}/turns?${new URLSearchParams({
+      ...(before ? { before: String(before) } : {}),
+      protocol: AGENT_GROUP_PROTOCOL,
+    })}`,
+  );
+
+/**
+ * 发送一条主人消息。群聊协议生效时立即返回 202 与带 messages 的回合（生成在后台，结果走 WS）；
+ * 未生效时仍是旧协议的 200。target=both 而账号未开放双 Agent 时返回 400（code=dual_agent_unavailable）。
+ */
 export const sendAgentTurn = (
   pet: number,
   text: string,
   target: AgentTurn['target'],
   requestId: string,
-  topicId?: number,
-  replyTo?: number,
-  images?: string[],
+  options: {
+    topicId?: number;
+    replyTo?: number;
+    images?: string[];
+    replyToMessage?: string;
+  } = {},
 ) =>
-  request<{ turn: AgentTurn }>(`/agent/pets/${pet}/turns`, {
+  request<{ turn: AgentTurn; protocol?: string; accepted?: boolean }>(`/agent/pets/${pet}/turns`, {
     method: 'POST',
-    body: { text, target, requestId, topicId, replyTo, ...(images?.length ? { images } : {}) },
+    body: {
+      text,
+      target,
+      requestId,
+      protocol: AGENT_GROUP_PROTOCOL,
+      topicId: options.topicId,
+      replyTo: options.replyTo,
+      ...(options.replyToMessage ? { replyToMessage: options.replyToMessage } : {}),
+      ...(options.images?.length ? { images: options.images } : {}),
+    },
   });
 
+/**
+ * 群聊协议：只重跑这一轮里失败的发言，成功的保留不动；响应是重新进入 pending 的回合。
+ * 409：没有可重试的发言（nothing_to_retry）、回合还在进行中（turn_running）、不是群聊回合。
+ */
+export const retryAgentTurn = (pet: number, turnId: number) =>
+  request<AgentTurn>(`/agent/pets/${pet}/turns/${turnId}/retry`, { method: 'POST', body: {} });
+
 /** 确认卡决策：幂等；响应带刷新后的 turn（按 id 覆盖本地回合）。
- *  baselineStrategy 为 W11 D3 的主人实际选择（等基线 / 先记录绝对事实）。 */
+ *  baselineStrategy 为 W11 D3 的主人实际选择（等基线 / 先记录绝对事实）。
+ *  声明群聊协议后，刷新的回合带 messages（卡片状态同步到它所属的那条发言）。 */
 export const decideAgentProposal = (
   pet: number,
   proposalId: number,
@@ -286,7 +363,14 @@ export const decideAgentProposal = (
 ) =>
   request<{ proposal: AgentProposal; turn: AgentTurn | null }>(
     `/agent/pets/${pet}/proposals/${proposalId}/decision`,
-    { method: 'POST', body: baselineStrategy ? { action, baselineStrategy } : { action } },
+    {
+      method: 'POST',
+      body: {
+        action,
+        ...(baselineStrategy ? { baselineStrategy } : {}),
+        protocol: AGENT_GROUP_PROTOCOL,
+      },
+    },
   );
 
 /** W08 委托簿：列表 / 详情 / 直接操作（暂停恢复取消即时生效，幂等）。 */
@@ -379,7 +463,10 @@ export const fetchAgentObservation = (pet: number, start: string, end: string) =
   );
 
 export const markAgentRead = (pet: number, ids: number[]) =>
-  request<{ turns: AgentTurn[] }>(`/agent/pets/${pet}/read`, { method: 'POST', body: { ids } });
+  request<AgentTurnListing>(`/agent/pets/${pet}/read`, {
+    method: 'POST',
+    body: { ids, protocol: AGENT_GROUP_PROTOCOL },
+  });
 
 /** W09：主题追溯列表（可选状态过滤；依据随行，供「为什么提醒我」下钻）。 */
 export const fetchCareTopics = (pet: number, status?: string) =>

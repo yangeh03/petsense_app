@@ -1,15 +1,18 @@
 /**
  * Agent WS 直连客户端（W01，模块级单例）：
- * - 连接 <API 根>/api/app/agent/ws?token=…（EXPO_PUBLIC_AGENT_WS_URL 可覆盖）；
+ * - 连接 <API 根>/api/app/agent/ws?token=…&protocol=group-v1（EXPO_PUBLIC_AGENT_WS_URL 可覆盖）；
  * - 服务端推送 {type:'turn'} 整回合快照与 {type:'delta'} 流式增量（累计全文），
  *   另有 30s 心跳 {type:'ping'} 与未登录 {type:'unauthorized'}；
+ * - 双 Agent 群聊（docs/agent-dual-agent-chat-design.md §4.3）：连接声明 group-v1 后，账号开放时
+ *   流式增量按消息推送（message_delta / message / message_status），turn 快照带逐条回复；
+ *   账号未开放时声明不生效，照旧收上面的旧形状帧；
  * - 指数退避自动重连；重连后由调用方 GET turns 拉齐（以服务端已保存结果为准）；
  * - 断线期间调用方降级轮询（agent-w01-spec.md §3.6）。
  */
 
 import { API_BASE_URL } from '@/config';
 import { getToken } from '@/services/api';
-import type { AgentTurn } from '@/services/agent';
+import { AGENT_GROUP_PROTOCOL, type AgentReplyMessage, type AgentTurn } from '@/services/agent';
 
 const MAX_RETRY_DELAY_MS = 15_000;
 /** 服务端心跳 30s；连续 75s 无任何下行视为半死连接，主动断开触发重连 */
@@ -26,7 +29,39 @@ export type AgentDeltaFrame = {
   text: string;
   speaker: AgentTurn['speaker'];
 };
-export type AgentFrame = AgentTurnFrame | AgentDeltaFrame | { type: 'ping'; ts?: number };
+/** 群聊消息的流式增量：text 是这条消息的累计正文，version 是它所属的持久化版本 */
+export type AgentMessageDeltaFrame = {
+  type: 'message_delta';
+  petId: number;
+  turnId: number;
+  messageId: string;
+  role: AgentReplyMessage['role'];
+  text: string;
+  version: number;
+};
+/** 群聊消息快照（领取、终态、卡片同步） */
+export type AgentMessageFrame = {
+  type: 'message';
+  petId: number;
+  turnId: number;
+  message: AgentReplyMessage;
+};
+/** 群聊消息的瞬时状态（如联网核实中）：不是正文 */
+export type AgentMessageStatusFrame = {
+  type: 'message_status';
+  petId: number;
+  turnId: number;
+  messageId: string;
+  role: AgentReplyMessage['role'];
+  status: 'searching';
+};
+export type AgentFrame =
+  | AgentTurnFrame
+  | AgentDeltaFrame
+  | AgentMessageDeltaFrame
+  | AgentMessageFrame
+  | AgentMessageStatusFrame
+  | { type: 'ping'; ts?: number };
 
 type FrameListener = (frame: AgentFrame) => void;
 type StatusListener = (status: AgentChannelStatus) => void;
@@ -122,7 +157,9 @@ class AgentChannel {
       return;
     }
     this.setStatus('connecting');
-    const ws = new WebSocket(`${agentWsUrl()}?token=${encodeURIComponent(token)}`);
+    const ws = new WebSocket(
+      `${agentWsUrl()}?token=${encodeURIComponent(token)}&protocol=${AGENT_GROUP_PROTOCOL}`,
+    );
     this.ws = ws;
     this.lastMessageAt = Date.now();
     ws.onopen = () => {

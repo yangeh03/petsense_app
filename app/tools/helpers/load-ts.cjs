@@ -20,6 +20,7 @@ function load(file, dependencies = {}) {
       clearInterval: () => {},
       Date,
       AbortController,
+      URLSearchParams,
     },
   );
   return module.exports;

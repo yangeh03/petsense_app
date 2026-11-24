@@ -2,6 +2,8 @@
  * 伙伴页（W01 重写为薄 UI）：状态在 zustand store，生命周期在 use-agent-chat，
  * 渲染组件在 components/agent/。键盘协调用 react-native-keyboard-controller；
  * 底部安全区沿用 NativeTabs 结论，只用一次（agent-w01-spec.md §4.2/§4.4）。
+ * 双 Agent 群聊（docs/agent-dual-agent-chat-design.md §4）：逐条回复可以精确引用到某一条，
+ * 失败的发言只重试那一条；账号开放时输入区多一项「两位都回」。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -28,12 +30,24 @@ import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
 import { useAgentChatStore } from '@/stores/agent-chat';
 import { assistantDisplayName, useCompanionSettingsStore } from '@/stores/companion-settings';
-import type { AgentCareTopic, AgentTurn } from '@/services/agent';
+import type { AgentCareTopic, AgentReplyMessage, AgentTurn } from '@/services/agent';
+import { canRetryMessages, quotedReply, sendableTarget } from '@/services/agent-chat-turns';
 import { fetchInboxItem, fetchInboxTurn, markInboxRead } from '@/services/agent-inbox';
 import { careStatusLabel } from '@/services/care-labels';
 import { anchorKey, findAnchorTurnId, parseAnchorParams } from '@/services/inbox-anchor';
 
 const LATEST_MESSAGE_DISTANCE = 48;
+
+type ReplyQuote = { name: string; text: string };
+
+/** 发言人的显示名：与消息行首的名字一致（宠物名缺失时按通称） */
+function speakerName(
+  speaker: AgentTurn['speaker'],
+  petName: string | null,
+  assistantName: string,
+): string {
+  return speaker === 'pet' ? (petName ?? '爱宠') : assistantName;
+}
 
 export default function CompanionScreen() {
   const { user } = useAuth();
@@ -57,10 +71,14 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
     attachments,
     busy,
     error,
+    replyTo,
+    replyToMessage,
+    dualAgent,
     setDraft,
     setTarget,
     setTopic,
     setReplyTo,
+    setReplyToMessage,
     setScrollY,
   } =
     accountChat.ownerId === (user?.id ?? null)
@@ -77,6 +95,9 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
           attachments: [],
           busy: false,
           error: '',
+          replyTo: undefined,
+          replyToMessage: undefined,
+          dualAgent: false,
         };
   const {
     learningDays,
@@ -92,6 +113,7 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
     removeAttachment,
     loadOlder,
     markRead,
+    retryTurn,
   } = useAgentChat(user);
   const settings = useCompanionSettingsStore((state) => state.settings);
   const refreshSettings = useCompanionSettingsStore((state) => state.refresh);
@@ -290,25 +312,68 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
     },
     [onContinueTopic, setTarget, setDraft],
   );
-  const onRetry = useCallback((turn: AgentTurn) => {
-    // 失败回合的图片已在服务端，按完成态放回输入区（失败不丢图，重试免重传）
-    const chat = useAgentChatStore.getState();
-    chat.setDraft(turn.text);
-    chat.setTarget(turn.target);
-    chat.clearAttachments();
-    if (turn.images?.length) {
-      chat.addAttachments(
-        turn.images.map((meta) => ({
-          key: `restore-${meta.id}`,
-          localUri: null,
-          width: meta.width ?? 0,
-          height: meta.height ?? 0,
-          imageId: meta.id,
-          status: 'done' as const,
-        })),
-      );
-    }
-  }, []);
+  /** 双 Agent 群聊：引用某一条回复——定位到它所在的话题，发送时带上这一条，由它的实际发言人接话 */
+  const onReplyTo = useCallback(
+    (turn: AgentTurn, message: AgentReplyMessage) => {
+      setTopic(turn.topicId ?? turn.id);
+      setReplyTo(turn.id);
+      setReplyToMessage(message.id);
+    },
+    [setTopic, setReplyTo, setReplyToMessage],
+  );
+  /** 取消引用：只是不带上引用，仍留在当前话题 */
+  const onCancelQuote = useCallback(() => {
+    setReplyTo(undefined);
+    setReplyToMessage(undefined);
+  }, [setReplyTo, setReplyToMessage]);
+  const onRetry = useCallback(
+    (turn: AgentTurn) => {
+      if (canRetryMessages(turn)) {
+        // 群聊回合里有失败的发言：只重跑失败的那条，成功的保留，原话不需要回填
+        void retryTurn(turn.id);
+        return;
+      }
+      // 失败回合的图片已在服务端，按完成态放回输入区（失败不丢图，重试免重传）
+      const chat = useAgentChatStore.getState();
+      chat.setDraft(turn.text);
+      chat.setTarget(sendableTarget(turn.target, chat.dualAgent));
+      chat.clearAttachments();
+      if (turn.images?.length) {
+        chat.addAttachments(
+          turn.images.map((meta) => ({
+            key: `restore-${meta.id}`,
+            localUri: null,
+            width: meta.width ?? 0,
+            height: meta.height ?? 0,
+            imageId: meta.id,
+            status: 'done' as const,
+          })),
+        );
+      }
+    },
+    [retryTurn],
+  );
+
+  // 引用预览：主人的气泡上标出这条话接着谁的哪一句；输入区上方的引用条同源。
+  // 被引用的回合不在已加载范围时不显示（发送时仍会带上引用）
+  const quotes = useMemo(() => {
+    const resolve = (turn: AgentTurn): ReplyQuote | null => {
+      const found = quotedReply(turns, turn.replyTo, turn.replyToMessage);
+      return found
+        ? { name: speakerName(found.role, petName, assistantName), text: found.text }
+        : null;
+    };
+    const byTurn = new Map<number, ReplyQuote | null>();
+    visible.forEach((turn) => byTurn.set(turn.id, resolve(turn)));
+    if (anchorTurn) byTurn.set(anchorTurn.id, resolve(anchorTurn));
+    const found = quotedReply(turns, replyTo, replyToMessage);
+    return {
+      byTurn,
+      draft: found
+        ? { name: speakerName(found.role, petName, assistantName), text: found.text }
+        : null,
+    };
+  }, [turns, visible, anchorTurn, petName, assistantName, replyTo, replyToMessage]);
 
   return (
     <KeyboardAvoidingView
@@ -538,6 +603,8 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
                   onContinueTopic={onContinueTopic}
                   onRetry={onRetry}
                   onAskWhy={onAskWhy}
+                  onReplyTo={onReplyTo}
+                  quote={quotes.byTurn.get(anchorTurn.id) ?? null}
                 />
               ) : null}
               {anchorTopic ? (
@@ -574,6 +641,8 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
                 onContinueTopic={onContinueTopic}
                 onRetry={onRetry}
                 onAskWhy={onAskWhy}
+                onReplyTo={onReplyTo}
+                quote={quotes.byTurn.get(turn.id) ?? null}
               />
             </View>
           ))}
@@ -626,6 +695,9 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
             bottomInset={insets.bottom}
             attachments={attachments}
             canAttach={canAttach}
+            dualAgent={dualAgent}
+            quote={quotes.draft}
+            onCancelQuote={onCancelQuote}
             onDraft={setDraft}
             onTarget={setTarget}
             onSend={() => void send()}

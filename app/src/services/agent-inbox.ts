@@ -7,7 +7,7 @@
  */
 
 import { request } from '@/services/api';
-import type { AgentTurn } from '@/services/agent';
+import { AGENT_GROUP_PROTOCOL, type AgentTurn } from '@/services/agent';
 
 export type InboxSourceKind = 'device_fact' | 'care' | 'reply' | 'learning';
 
@@ -120,8 +120,11 @@ export function resolveInboxItem(id: number) {
 }
 
 /** 按锚点取回**那一条**来源消息（不依赖会话分页/话题过滤）；跨账号一律 404 */
+/** 声明群聊协议：账号开放双 Agent 时回合带逐条回复（与会话列表同一形状） */
 export function fetchInboxTurn(turnId: number) {
-  return request<{ turn: AgentTurn }>(`/agent/inbox/turn/${turnId}`);
+  return request<{ turn: AgentTurn; protocol?: string }>(
+    `/agent/inbox/turn/${turnId}?protocol=${AGENT_GROUP_PROTOCOL}`,
+  );
 }
 
 /** 单条已读（幂等；已读不解除告警） */

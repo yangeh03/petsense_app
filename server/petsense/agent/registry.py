@@ -42,6 +42,16 @@ ACTION = 'action'        # W10 动作组（日记/草稿）：日记生成走确
 TASK = 'task'            # W08 委托组：read_task 只读 / propose_task_change 只生成候选（P00 §5）
 TOOL_TIMEOUT_S = 15.0
 
+# 双 Agent 群聊的角色门（docs/agent-dual-agent-chat-design.md §2.1/§3.4）：声明与执行都检查。
+# 爱宠只读基础档案与共享记忆；观测、联网、写入与动作归照料助手。权限在代码里，不只在提示词里。
+PET_ROLE = 'pet'
+ASSISTANT_ROLE = 'assistant'
+PET_ROLE_TOOLS = frozenset({'read_pet_profile', 'search_memories'})
+# 有副作用的工具：群聊运行里每次成功调用都记入消息的副作用日志（重试核对与审计）。
+SIDE_EFFECT_TOOLS = frozenset({'write_memory', 'forget_memory', 'prepare_profile_update',
+                               'prepare_role_settings', 'draft_social_post', 'create_diary',
+                               'control_device', 'propose_task_change'})
+
 _TOOLS = {}
 
 
@@ -64,19 +74,21 @@ def register(spec):
     _TOOLS[spec.name] = spec
 
 
-def schemas_for(form, stance_scope, search_enabled=True, recording_enabled=None):
+def schemas_for(form, stance_scope, search_enabled=True, recording_enabled=None, role=None):
     """渲染该运行形态与范围下可用的工具 schema。out_of_scope 下业务与网络工具全部不可用（V11 §12.1）。
     search_enabled=False（PETSENSE_SEARCH_DISABLED 灰度开关）时 EXTERNAL_READ 组不进 schemas；
     recording_enabled 缺省解析 W10 D3 开关（PETSENSE_AGENT_RECORDING_ENABLED，默认关停），
     关闭时 DEVICE_CONTROL 组不进 schemas——能力描述与真实可用性保持一致
-    （W06 spec §4.5、agent-w10-spec.md §3）。"""
+    （W06 spec §4.5、agent-w10-spec.md §3）。
+    role='pet'（双 Agent 群聊的爱宠角色）时只声明 PET_ROLE_TOOLS；None/assistant 不额外限制。"""
     if stance_scope == 'out_of_scope':
         return []
     if recording_enabled is None:
         recording_enabled = actions_service.recording_enabled()
     return [spec.schema() for spec in _TOOLS.values()
             if form in spec.forms and (search_enabled or spec.group != EXTERNAL_READ)
-            and (recording_enabled or spec.group != DEVICE_CONTROL)]
+            and (recording_enabled or spec.group != DEVICE_CONTROL)
+            and (role != PET_ROLE or spec.name in PET_ROLE_TOOLS)]
 
 
 def _parse_time(value):
@@ -695,7 +707,7 @@ register(ToolSpec(
 
 
 def execute_tool(name, arguments, form, stance_scope, context):
-    """权限矩阵先于执行：存在性 → 形态 → 范围；通过后带超时执行。
+    """权限矩阵先于执行：存在性 → 形态 → 角色（群聊爱宠）→ 范围；通过后带超时执行。
 
     返回 {'allowed', 'reason', 'result', 'duration_ms'}；拒绝与失败都以结构化
     result 交给模型（不抛裸异常，V11 §5.1），由调用方记入轨迹。
@@ -709,6 +721,15 @@ def execute_tool(name, arguments, form, stance_scope, context):
     if form not in spec.forms:
         return {'allowed': False, 'reason': 'form_not_allowed', 'duration_ms': 0,
                 'result': {'error': f'工具 {name} 不适用于当前运行形态。'}}
+    if context.get('role') == PET_ROLE and name not in PET_ROLE_TOOLS:
+        # 角色门先于范围与执行：即使模型在声明之外调用，爱宠身份也读不到观测、更不能写入或操作
+        return {'allowed': False, 'reason': 'role_not_allowed', 'duration_ms': 0,
+                'result': {'error': '以爱宠身份只能读取基础档案和共享记忆；查证、写入与操作'
+                                     '由照料助手负责，本次调用没有执行。'}}
+    if stance_scope == 'unknown':
+        # 群聊单角色运行：路由没确认范围时只发有限澄清，任何工具都不执行
+        return {'allowed': False, 'reason': 'scope_not_allowed', 'duration_ms': 0,
+                'result': {'error': '范围尚未确认，本次调用没有执行：先问清主人想聊什么，不要猜测主题。'}}
     if stance_scope == 'out_of_scope':
         return {'allowed': False, 'reason': 'scope_not_allowed', 'duration_ms': 0,
                 'result': {'error': '当前请求不在服务范围内，业务与联网工具不可用。'}}

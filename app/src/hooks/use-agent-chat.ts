@@ -4,6 +4,8 @@
  * - AsyncStorage 按用户持久化草稿/主题/滚动/最近回合（替换旧模块级内存 Map）；
  * - 发送乐观 UI + 同键重试去重；失败保留原话与图片；
  * - W07：相册/拍照选取 → 压缩 → 逐张上传（失败可重试），发送引用服务端 imageId。
+ * - 双 Agent 群聊（docs/agent-dual-agent-chat-design.md §4）：是否进入双 Agent 以服务端声明为准
+ *   （列表的 dualAgent / 回执的 protocol）；逐条回复按消息 ID/版本合并；失败的发言可只重试那一条。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -11,9 +13,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { agentChannel } from '@/services/agent-channel';
 import {
+  AGENT_GROUP_PROTOCOL,
   fetchAgentObservation,
   fetchAgentTurns,
   markAgentRead,
+  retryAgentTurn,
   sendAgentTurn,
   uploadAgentImage,
   type AgentTurn,
@@ -24,6 +28,7 @@ import {
   isLocalTurn,
   mergeServerTurns,
   nextLocalTurnId,
+  sendableTarget,
   type LocalAgentTurn,
 } from '@/services/agent-chat-turns';
 import {
@@ -32,7 +37,12 @@ import {
   normalizeForUpload,
 } from '@/services/normalize-image';
 import { refreshCareRules } from '@/services/care-rules';
-import { useAgentChatStore, type AgentAttachment } from '@/stores/agent-chat';
+import {
+  useAgentChatStore,
+  type AgentAttachment,
+  type AgentTarget,
+  type PendingRequest,
+} from '@/stores/agent-chat';
 import { useCompanionSettingsStore } from '@/stores/companion-settings';
 
 const STORAGE_PREFIX = 'petsense.agent.chat.';
@@ -42,21 +52,14 @@ const MAX_ATTACHMENTS = 3;
 
 type Snapshot = {
   draft: string;
-  target: 'auto' | 'pet' | 'assistant';
+  target: AgentTarget;
   topic?: number;
   replyTo?: number;
+  replyToMessage?: string;
   scrollY: number;
   turns: AgentTurn[];
   attachments?: AgentAttachment[];
-  pending: {
-    text: string;
-    target: 'auto' | 'pet' | 'assistant';
-    pet: number;
-    key: string;
-    topic?: number;
-    replyTo?: number;
-    images?: string[];
-  } | null;
+  pending: PendingRequest | null;
 };
 
 async function loadSnapshot(userId: number): Promise<Snapshot | null> {
@@ -66,6 +69,23 @@ async function loadSnapshot(userId: number): Promise<Snapshot | null> {
   } catch {
     return null;
   }
+}
+
+/** 「两位都回」发给了未开放双 Agent 的账号：服务端在落库前拒绝，可用同一请求键改按未指定重发 */
+function isDualAgentUnavailable(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    error.status === 400 &&
+    (error.payload as { code?: string } | undefined)?.code === 'dual_agent_unavailable'
+  );
+}
+
+/** 服务端在列表与回执上声明当前账号是否进入双 Agent：以它为准，不从本地推断 */
+function learnDualAgent(enabled: boolean) {
+  const state = useAgentChatStore.getState();
+  if (state.dualAgent === enabled) return;
+  state.setDualAgent(enabled);
+  if (!enabled && state.target === 'both') state.setTarget('auto');
 }
 
 export function useAgentChat(user: { id: number } | null) {
@@ -95,11 +115,12 @@ export function useAgentChat(user: { id: number } | null) {
       // W09：按当前宠物探测后端受管理告警规则（切宠/退出时内部恢复本地逻辑）
       void refreshCareRules(data.pet?.id ?? null);
       if (data.pet) {
-        const latest = (await fetchAgentTurns(data.pet.id)).turns;
+        const listing = await fetchAgentTurns(data.pet.id);
         if (!currentSession()) return;
+        learnDualAgent(listing.dualAgent === true);
         useAgentChatStore
           .getState()
-          .setTurns(mergeServerTurns(useAgentChatStore.getState().turns, latest));
+          .setTurns(mergeServerTurns(useAgentChatStore.getState().turns, listing.turns));
         const end = new Date();
         const start = new Date(end.getTime() - 89 * 86400000);
         const facts = await fetchAgentObservation(
@@ -146,6 +167,7 @@ export function useAgentChat(user: { id: number } | null) {
       current.setTarget(snapshot.target ?? 'auto');
       if (snapshot.topic !== undefined) current.setTopic(snapshot.topic);
       current.setReplyTo(snapshot.replyTo);
+      current.setReplyToMessage(snapshot.replyToMessage);
       current.setScrollY(plan.scrollY);
       if (snapshot.turns?.length) {
         current.setTurns(snapshot.turns.filter((turn) => !isLocalTurn(turn)));
@@ -181,6 +203,7 @@ export function useAgentChat(user: { id: number } | null) {
         target: state.target,
         topic: state.topic,
         replyTo: state.replyTo,
+        replyToMessage: state.replyToMessage,
         scrollY: state.scrollY,
         // 本地乐观回合不进快照：重启后由服务端已保存回合恢复，
         // 免得留下一条永远 pending 的气泡
@@ -197,6 +220,7 @@ export function useAgentChat(user: { id: number } | null) {
     store.target,
     store.topic,
     store.replyTo,
+    store.replyToMessage,
     store.turns,
     store.pending,
     store.attachments,
@@ -216,7 +240,9 @@ export function useAgentChat(user: { id: number } | null) {
         if (wasOpen.current || useAgentChatStore.getState().turns.length) {
           void fetchAgentTurns(useAgentChatStore.getState().petId ?? -1)
             .then((data) => {
-              if (currentSession()) useAgentChatStore.getState().setTurns(data.turns);
+              if (!currentSession()) return;
+              learnDualAgent(data.dualAgent === true);
+              useAgentChatStore.getState().syncTurns(data.turns);
             })
             .catch(() => {});
         }
@@ -225,12 +251,24 @@ export function useAgentChat(user: { id: number } | null) {
     });
     const unsubscribeFrames = agentChannel.subscribe((frame) => {
       if (!currentSession()) return;
+      const chat = useAgentChatStore.getState();
       if (frame.type === 'turn') {
-        useAgentChatStore.getState().applyTurn(frame.turn);
+        chat.applyTurn(frame.turn);
       } else if (frame.type === 'delta') {
-        useAgentChatStore
-          .getState()
-          .applyDelta(frame.petId, frame.turnId, frame.text, frame.speaker);
+        chat.applyDelta(frame.petId, frame.turnId, frame.text, frame.speaker);
+      } else if (frame.type === 'message_delta') {
+        chat.applyMessageDelta(
+          frame.petId,
+          frame.turnId,
+          frame.messageId,
+          frame.role,
+          frame.text,
+          frame.version,
+        );
+      } else if (frame.type === 'message') {
+        chat.applyMessage(frame.petId, frame.message);
+      } else if (frame.type === 'message_status') {
+        chat.applyMessageStatus(frame.petId, frame.turnId, frame.messageId, frame.status);
       }
     });
     agentChannel.reconnect();
@@ -249,7 +287,9 @@ export function useAgentChat(user: { id: number } | null) {
     const timer = setInterval(() => {
       void fetchAgentTurns(store.petId as number)
         .then((data) => {
-          if (active) useAgentChatStore.getState().setTurns(data.turns);
+          if (!active) return;
+          learnDualAgent(data.dualAgent === true);
+          useAgentChatStore.getState().syncTurns(data.turns);
         })
         .catch(() => {});
     }, POLL_INTERVAL_MS);
@@ -371,16 +411,18 @@ export function useAgentChat(user: { id: number } | null) {
       state.pending.pet === state.petId &&
       state.pending.topic === state.topic &&
       state.pending.replyTo === state.replyTo &&
+      state.pending.replyToMessage === state.replyToMessage &&
       (state.pending.images ?? []).join(',') === images.join(',');
-    const pending =
+    const pending: PendingRequest =
       sameContent && state.pending
         ? state.pending
         : {
             text: draft,
-            target: state.target,
+            target: sendableTarget(state.target, state.dualAgent),
             pet: state.petId,
             topic: state.topic,
             replyTo: state.replyTo,
+            replyToMessage: state.replyToMessage,
             images: images.length ? images : undefined,
             key: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
           };
@@ -388,8 +430,9 @@ export function useAgentChat(user: { id: number } | null) {
     state.setBusy(true);
     state.setError('');
     // 乐观 UI：本地先落一条 pending 回合，主人的话立刻出现在会话里。
-    // 服务端 POST 会阻塞到整轮生成结束才返回（W01 spec §3.2），等响应才上屏
-    // 会让主人盯着空输入区等整轮生成——本地这条与服务端结果按 requestId 对账。
+    // 旧协议下服务端 POST 会阻塞到整轮生成结束才返回（W01 spec §3.2），等响应才上屏
+    // 会让主人盯着空输入区等整轮生成；群聊协议立即返回 202、回复走 WS。
+    // 本地这条与服务端结果按 requestId 对账。
     const attachments = state.attachments;
     const localTurn: LocalAgentTurn = {
       id: nextLocalTurnId(),
@@ -398,6 +441,7 @@ export function useAgentChat(user: { id: number } | null) {
       speaker: pending.target === 'pet' ? 'pet' : 'assistant',
       readAt: null,
       target: pending.target,
+      replyToMessage: pending.replyToMessage ?? null,
       reply: '',
       status: 'pending',
       createdAt: new Date().toISOString(),
@@ -413,44 +457,98 @@ export function useAgentChat(user: { id: number } | null) {
           height: item.height,
           bytes: null,
         })),
+      // 群聊回合带逐条回复：本地这条从空开始，路由后由服务端快照填上谁来说话
+      ...(state.dualAgent ? { messages: [] } : {}),
       local: true,
     };
     useAgentChatStore.getState().applyLocalTurn(localTurn);
     // 原话已进会话，输入区清空；发送失败时再回填（失败保留原话与图片）
     state.setDraft('');
     state.setReplyTo(undefined);
+    state.setReplyToMessage(undefined);
     state.clearAttachments();
+    const transmit = async (): Promise<void> => {
+      let request = pending;
+      for (;;) {
+        try {
+          const result = await sendAgentTurn(
+            request.pet,
+            request.text,
+            request.target,
+            request.key,
+            {
+              topicId: request.topic,
+              replyTo: request.replyTo,
+              images: request.images,
+              replyToMessage: request.replyToMessage,
+            },
+          );
+          if (!currentSession()) return;
+          learnDualAgent(result.protocol === AGENT_GROUP_PROTOCOL);
+          const current = useAgentChatStore.getState();
+          current.applyTurn(result.turn); // 同 requestId：本地乐观回合被服务端结果替换
+          current.setPending(null);
+          current.setDraft('');
+          current.setReplyTo(undefined);
+          current.setReplyToMessage(undefined);
+          current.clearAttachments();
+          // W03：聊天内可能直写了助手设定（如改名），拉齐让副标题/指向 pill/消息标签即时生效
+          void useCompanionSettingsStore.getState().refresh();
+          return;
+        } catch (error) {
+          if (!currentSession()) return;
+          const current = useAgentChatStore.getState();
+          if (request.target === 'both' && isDualAgentUnavailable(error)) {
+            // 账号已不在双 Agent 里（服务端在落库前拒绝）：同一个请求键按未指定重发，不会重复落回合
+            learnDualAgent(false);
+            request = { ...request, target: 'auto' };
+            current.setPending(request);
+            current.applyLocalTurn({ ...localTurn, target: 'auto', messages: undefined });
+            continue;
+          }
+          // 服务端没确认：撤下本地气泡，原话与图片回填输入区，可直接重试
+          // （pending 保留同键，服务端按 requestId 去重，不会重复落库）
+          current.removeLocalTurn(request.key);
+          current.setDraft(request.text);
+          current.setReplyTo(request.replyTo);
+          current.setReplyToMessage(request.replyToMessage);
+          if (attachments.length) current.addAttachments(attachments);
+          current.setError('暂时没能确认送达，原话和图片已保留，可以重试');
+          return;
+        }
+      }
+    };
     try {
-      const result = await sendAgentTurn(
-        pending.pet,
-        pending.text,
-        pending.target,
-        pending.key,
-        pending.topic,
-        pending.replyTo,
-        pending.images,
-      );
-      if (!currentSession()) return;
-      const current = useAgentChatStore.getState();
-      current.applyTurn(result.turn); // 同 requestId：本地乐观回合被服务端结果替换
-      current.setPending(null);
-      current.setDraft('');
-      current.setReplyTo(undefined);
-      current.clearAttachments();
-      // W03：聊天内可能直写了助手设定（如改名），拉齐让副标题/指向 pill/消息标签即时生效
-      void useCompanionSettingsStore.getState().refresh();
-    } catch {
-      if (!currentSession()) return;
-      const current = useAgentChatStore.getState();
-      // 服务端没确认：撤下本地气泡，原话与图片回填输入区，可直接重试
-      // （pending 保留同键，服务端按 requestId 去重，不会重复落库）
-      current.removeLocalTurn(pending.key);
-      current.setDraft(pending.text);
-      current.setReplyTo(pending.replyTo);
-      if (attachments.length) current.addAttachments(attachments);
-      current.setError('暂时没能确认送达，原话和图片已保留，可以重试');
+      await transmit();
     } finally {
       if (currentSession()) useAgentChatStore.getState().setBusy(false);
+    }
+  }, []);
+
+  /** 双 Agent 群聊：只重跑这一轮里失败的那条发言，成功的保留不动（服务端 409 时以拉齐结果为准） */
+  const retryTurn = useCallback(async (turnId: number) => {
+    const session = getToken();
+    const currentSession = () => !!session && getToken() === session;
+    const petId = useAgentChatStore.getState().petId;
+    if (!petId) return;
+    try {
+      const turn = await retryAgentTurn(petId, turnId);
+      if (!currentSession()) return;
+      setFollowReply(true);
+      useAgentChatStore.getState().applyTurn(turn);
+    } catch (error) {
+      if (!currentSession()) return;
+      if (error instanceof ApiError && error.status === 409) {
+        // 没有可重试的发言 / 回合还在进行中 / 双 Agent 已停用：界面按服务端当前状态刷新
+        try {
+          const data = await fetchAgentTurns(petId);
+          if (currentSession()) useAgentChatStore.getState().syncTurns(data.turns);
+        } catch {
+          // 下次轮询或聚焦时再拉齐
+        }
+        return;
+      }
+      useAgentChatStore.getState().setError('暂时没能重新发送，稍后再试');
     }
   }, []);
 
@@ -507,5 +605,6 @@ export function useAgentChat(user: { id: number } | null) {
     removeAttachment,
     loadOlder,
     markRead,
+    retryTurn,
   };
 }

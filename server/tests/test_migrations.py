@@ -62,6 +62,38 @@ class MigrationTests(unittest.TestCase):
             row = connection.execute(text('SELECT caption, audience, version FROM posts WHERE id=1')).one()
             self.assertEqual(tuple(row), ('legacy', 'public', 1))
 
+    def test_dual_agent_migration_keeps_legacy_turns(self):
+        """0021 → 0022：旧回合原样保留并可投影；新表、消息级引用与运行关联列到位；可降级回去。"""
+        from alembic import command
+        command.upgrade(db._alembic_config(), '0021')
+        with db.engine().begin() as connection:
+            connection.execute(text("INSERT INTO users(id, username, display_name, password_hash, salt, "
+                                    "avatar_emoji, bio, created_at) VALUES "
+                                    "(1, 'old', 'old', 'x', 's', '🙂', '', '2026-01-01T00:00:00Z')"))
+            connection.execute(text("INSERT INTO pets(id, user_id, name, species, breed, avatar_emoji, "
+                                    "device_id, created_at) VALUES "
+                                    "(1, 1, '阿黄', 'dog', '', '🐾', '', '2026-01-01T00:00:00Z')"))
+            connection.execute(text("INSERT INTO agent_turns(id, pet_id, request_id, text, target, sources, "
+                                    "speaker, reply, status, created_at) VALUES "
+                                    "(1, 1, 'k1', '今天走了多久', 'assistant', '[]', 'assistant', "
+                                    "'【照料助手】40 分钟', 'complete', '2026-01-01T00:00:00Z')"))
+        command.upgrade(db._alembic_config(), 'head')
+        inspector = inspect(db.engine())
+        self.assertTrue({'agent_routes', 'agent_messages'} <= set(inspector.get_table_names()))
+        turn_columns = {column['name'] for column in inspector.get_columns('agent_turns')}
+        self.assertTrue({'reply_to_message', 'pending_at'} <= turn_columns)
+        self.assertIn('message_id', {column['name'] for column in inspector.get_columns('agent_runs')})
+        with db.engine().connect() as connection:
+            row = connection.execute(text('SELECT reply, reply_to_message FROM agent_turns WHERE id=1')).one()
+            self.assertEqual(tuple(row), ('【照料助手】40 分钟', None))
+        self.assertEqual([constraint['column_names'] for constraint in
+                          inspect(db.engine()).get_unique_constraints('agent_messages')], [['turn_id', 'role']])
+        command.downgrade(db._alembic_config(), '0021')
+        inspector = inspect(db.engine())
+        self.assertFalse({'agent_routes', 'agent_messages'} & set(inspector.get_table_names()))
+        self.assertFalse({'reply_to_message', 'pending_at'}
+                        & {column['name'] for column in inspector.get_columns('agent_turns')})
+
 
 if __name__ == '__main__':
     unittest.main()
