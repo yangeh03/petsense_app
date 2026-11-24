@@ -251,6 +251,23 @@ export default function ProfileScreen() {
             <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
           </ThemedView>
         </Pressable>
+        <Pressable onPress={() => router.push('/notification-settings')} accessibilityRole="button">
+          <ThemedView type="backgroundElement" style={styles.menuRow}>
+            <SymbolView
+              name={{
+                ios: 'bell.badge',
+                android: 'notifications_active',
+                web: 'notifications_active',
+              }}
+              size={20}
+              tintColor={theme.tint}
+            />
+            <ThemedText type="default" style={styles.menuLabel}>
+              通知推送
+            </ThemedText>
+            <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
+          </ThemedView>
+        </Pressable>
 
         <View style={styles.sectionHeader}>
           <ThemedText type="smallBold">社区与内容</ThemedText>

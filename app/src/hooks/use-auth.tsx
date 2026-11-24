@@ -19,6 +19,7 @@ import {
   register as apiRegister,
 } from '@/services/api';
 import { reconnectTelemetry } from '@/services/telemetry-service';
+import { clearPendingInboxItem, unregisterInstallation } from '@/services/push';
 import type { AppUser } from '@/types/social';
 
 type AuthContextValue = {
@@ -84,9 +85,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(async () => {
+    // W13：先在**会话仍有效**时解除本机推送绑定，服务端才能认证这次请求并把旧归属
+    // 从发送集合剔除；解绑失败不阻塞登出（服务端还有权限与归属复核兜底）。
+    try {
+      await unregisterInstallation();
+    } catch {
+      // 网络异常按未解绑处理：服务端复核会停发
+    }
     await apiLogout();
     setUser(null);
     reconnectTelemetry();
+    await clearPendingInboxItem();
   }, []);
 
   const refreshUser = useCallback(async () => {
