@@ -63,7 +63,7 @@ export function TrendPanel({
         <View style={styles.titleGroup}>
           <ThemedText style={styles.title}>健康趋势</ThemedText>
         </View>
-        <ThemedText style={{ color: theme.tint }}>{open ? '−' : '＋'}</ThemedText>
+        <ThemedText style={{ color: theme.tintForeground }}>{open ? '−' : '＋'}</ThemedText>
       </Pressable>
       {open && (
         <View style={styles.body}>

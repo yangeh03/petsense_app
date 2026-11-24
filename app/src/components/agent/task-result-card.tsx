@@ -89,7 +89,7 @@ export function TaskResultCard({ block }: { block: AgentTaskResultBlock }) {
         onPress={() => router.push('/agent-tasks')}
         style={styles.link}
       >
-        <ThemedText type="small" style={{ color: theme.tint }}>
+        <ThemedText type="small" style={{ color: theme.tintForeground }}>
           在委托簿查看这项委托
         </ThemedText>
         <SymbolView

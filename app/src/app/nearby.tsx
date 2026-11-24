@@ -295,7 +295,7 @@ export default function NearbyScreen() {
             style={[styles.toggle, { borderColor: theme.tint }]}
             accessibilityLabel="打开系统设置"
           >
-            <ThemedText type="smallBold" style={{ color: theme.tint }}>
+            <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
               打开系统设置
             </ThemedText>
           </Pressable>
@@ -350,7 +350,7 @@ export default function NearbyScreen() {
             ListFooterComponent={
               queryOwner === viewerId && nextCursor ? (
                 <Pressable onPress={() => void loadMore()}>
-                  <ThemedText type="small" style={{ color: theme.tint }}>
+                  <ThemedText type="small" style={{ color: theme.tintForeground }}>
                     加载更多
                   </ThemedText>
                 </Pressable>
@@ -377,7 +377,7 @@ export default function NearbyScreen() {
             ListFooterComponent={
               queryOwner === viewerId && postCursor ? (
                 <Pressable onPress={() => void loadMore()}>
-                  <ThemedText type="small" style={{ color: theme.tint }}>
+                  <ThemedText type="small" style={{ color: theme.tintForeground }}>
                     加载更多
                   </ThemedText>
                 </Pressable>

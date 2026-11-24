@@ -49,7 +49,7 @@ export default function DogMapScreen() {
               onPress={() => setView(view === 'map' ? 'list' : 'map')}
               style={[styles.toggle, { backgroundColor: theme.backgroundSelected }]}
             >
-              <ThemedText type="smallBold" style={{ color: theme.tint }}>
+              <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
                 {view === 'map' ? '列表' : '地图'}
               </ThemedText>
             </Pressable>
@@ -91,7 +91,7 @@ export default function DogMapScreen() {
               onPress={() => setSelected(null)}
               style={styles.sheetClose}
             >
-              <ThemedText type="smallBold" style={{ color: theme.tint }}>
+              <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
                 关闭
               </ThemedText>
             </Pressable>

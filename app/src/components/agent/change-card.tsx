@@ -66,7 +66,7 @@ export function ChangeCard({ change }: { change: AgentChangeEvidence }) {
         onPress={() => setExpanded(!expanded)}
         style={styles.toggle}
       >
-        <ThemedText type="small" style={{ color: theme.tint }}>
+        <ThemedText type="small" style={{ color: theme.tintForeground }}>
           {expanded ? '收起证据' : '为什么这么说？看证据'}
         </ThemedText>
       </Pressable>

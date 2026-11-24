@@ -49,7 +49,7 @@ export function ActionCard({ action, petId }: { action: AgentAction; petId: numb
   };
   const tone = statusTone(action.status);
   const toneColor =
-    tone === 'ok' ? theme.online : tone === 'error' ? theme.danger : theme.textSecondary;
+    tone === 'ok' ? theme.onlineForeground : tone === 'error' ? theme.danger : theme.textSecondary;
   const statusLabel =
     action.status === 'executing'
       ? action.kind === 'record_audio' && action.commandSent
@@ -111,7 +111,7 @@ export function ActionCard({ action, petId }: { action: AgentAction; petId: numb
               tintColor={theme.tint}
               size={14}
             />
-            <ThemedText type="small" style={{ color: theme.tint }}>
+            <ThemedText type="small" style={{ color: theme.tintForeground }}>
               播放录音
             </ThemedText>
           </Pressable>
@@ -119,7 +119,7 @@ export function ActionCard({ action, petId }: { action: AgentAction; petId: numb
       ) : null}
       {action.kind === 'create_diary' && action.status === 'completed' && petId != null ? (
         <Pressable accessibilityRole="link" onPress={openDiary} style={styles.link}>
-          <ThemedText type="small" style={{ color: theme.tint }}>
+          <ThemedText type="small" style={{ color: theme.tintForeground }}>
             打开日记详情
           </ThemedText>
           <SymbolView
@@ -131,7 +131,7 @@ export function ActionCard({ action, petId }: { action: AgentAction; petId: numb
       ) : null}
       {action.kind === 'social_draft' && action.status === 'completed' ? (
         <Pressable accessibilityRole="link" onPress={openCompose} style={styles.link}>
-          <ThemedText type="small" style={{ color: theme.tint }}>
+          <ThemedText type="small" style={{ color: theme.tintForeground }}>
             去发布页查看草稿
           </ThemedText>
           <SymbolView

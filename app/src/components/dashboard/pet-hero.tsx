@@ -192,7 +192,7 @@ export function PetHero({
             hitSlop={8}
             onPress={() => setFailures({ petId: pet.id, refreshVersion, urls: [] })}
           >
-            <ThemedText type="small" style={{ color: theme.tint }}>
+            <ThemedText type="small" style={{ color: theme.tintForeground }}>
               重试形象
             </ThemedText>
           </Pressable>

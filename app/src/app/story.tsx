@@ -184,7 +184,7 @@ export default function StoryScreen() {
           <ThemedText type="small" themeColor="textSecondary">
             {error || '故事已过期或不可见'}
           </ThemedText>
-          <ThemedText type="small" style={{ color: theme.tint }}>
+          <ThemedText type="small" style={{ color: theme.tintForeground }}>
             返回社区
           </ThemedText>
         </Pressable>
@@ -225,7 +225,7 @@ export default function StoryScreen() {
           {user?.id === story.user_id && (
             <View style={styles.authorActions}>
               <Pressable onPress={() => void openViewers()}>
-                <ThemedText type="small" style={{ color: theme.tint }}>
+                <ThemedText type="small" style={{ color: theme.tintForeground }}>
                   查看者
                 </ThemedText>
               </Pressable>

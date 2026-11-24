@@ -74,7 +74,7 @@ export function GpsMap({
                 setAttempt(attempt + 1);
               }}
             >
-              <ThemedText type="smallBold" style={{ color: theme.tint }}>
+              <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
                 重试底图
               </ThemedText>
             </Pressable>
@@ -82,7 +82,7 @@ export function GpsMap({
         </View>
       )}
       <Pressable accessibilityRole="button" onPress={() => setCenterRequest(centerRequest + 1)}>
-        <ThemedText type="smallBold" style={{ color: theme.tint }}>
+        <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
           回到项圈位置
         </ThemedText>
       </Pressable>

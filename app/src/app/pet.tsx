@@ -276,7 +276,7 @@ export default function PetScreen() {
             }}
             style={styles.headerAction}
           >
-            <ThemedText type="smallBold" style={{ color: theme.tint }}>
+            <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
               编辑
             </ThemedText>
           </Pressable>
@@ -313,7 +313,7 @@ export default function PetScreen() {
                   {loadError}
                 </ThemedText>
                 <Pressable onPress={() => void load()} accessibilityRole="button">
-                  <ThemedText type="smallBold" style={{ color: theme.tint }}>
+                  <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
                     重新加载
                   </ThemedText>
                 </Pressable>
@@ -487,7 +487,7 @@ export default function PetScreen() {
                     <ThemedText
                       accessibilityLiveRegion="polite"
                       type="smallBold"
-                      style={{ color: theme.online }}
+                      style={{ color: theme.onlineForeground }}
                     >
                       {success}
                     </ThemedText>
@@ -557,7 +557,7 @@ export default function PetScreen() {
                           onPress={() => router.push('/setup')}
                           style={[styles.secondary, { backgroundColor: theme.tintBackground }]}
                         >
-                          <ThemedText type="smallBold" style={{ color: theme.tint }}>
+                          <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
                             绑定项圈
                           </ThemedText>
                         </Pressable>
@@ -609,7 +609,7 @@ export default function PetScreen() {
               onPress={() => setDiscardOpen(false)}
               style={[styles.primary, { backgroundColor: theme.tintBackground }]}
             >
-              <ThemedText type="smallBold" style={{ color: theme.tint }}>
+              <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
                 继续编辑
               </ThemedText>
             </Pressable>

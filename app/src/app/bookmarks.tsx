@@ -137,7 +137,7 @@ export default function BookmarksScreen() {
           ListFooterComponent={
             cursor ? (
               <Pressable onPress={() => void loadMore()}>
-                <ThemedText type="small" style={{ color: theme.tint }}>
+                <ThemedText type="small" style={{ color: theme.tintForeground }}>
                   加载更多
                 </ThemedText>
               </Pressable>

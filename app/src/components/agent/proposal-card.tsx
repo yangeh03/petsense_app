@@ -162,7 +162,9 @@ export function ProposalCard({
         {statusText ? (
           <ThemedText
             type="small"
-            style={{ color: proposal.status === 'confirmed' ? theme.online : theme.textSecondary }}
+            style={{
+              color: proposal.status === 'confirmed' ? theme.onlineForeground : theme.textSecondary,
+            }}
           >
             {statusText}
           </ThemedText>

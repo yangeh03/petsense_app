@@ -124,7 +124,7 @@ export default function ProfileScreen() {
             </ThemedText>
           </View>
           <Pressable onPress={() => router.push('/profile-edit')} accessibilityLabel="编辑公开资料">
-            <ThemedText type="small" style={{ color: theme.tint }}>
+            <ThemedText type="small" style={{ color: theme.tintForeground }}>
               编辑
             </ThemedText>
           </Pressable>
@@ -164,7 +164,7 @@ export default function ProfileScreen() {
           <ThemedText type="smallBold">宠物档案</ThemedText>
           {profile && profile.pets.length === 0 && (
             <Pressable onPress={() => router.push('/setup')}>
-              <ThemedText type="small" style={{ color: theme.tint }}>
+              <ThemedText type="small" style={{ color: theme.tintForeground }}>
                 添加宠物
               </ThemedText>
             </Pressable>
@@ -204,7 +204,7 @@ export default function ProfileScreen() {
                 <ThemedText type="small" themeColor="textSecondary">
                   {speciesLabel(pet.species)} · {pet.breed || '品种未填写'}
                 </ThemedText>
-                <ThemedText type="small" style={{ color: theme.tint }}>
+                <ThemedText type="small" style={{ color: theme.tintForeground }}>
                   查看与编辑资料
                 </ThemedText>
               </View>

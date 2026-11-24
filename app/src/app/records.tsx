@@ -98,7 +98,7 @@ function RecordsContent() {
           onPress={() => router.replace('/')}
           style={{ padding: 20 }}
         >
-          <ThemedText style={{ color: theme.tint }}>回到今日</ThemedText>
+          <ThemedText style={{ color: theme.tintForeground }}>回到今日</ThemedText>
         </Pressable>
       ) : null}
       <View
@@ -178,7 +178,7 @@ function RecordsContent() {
             style={[styles.notice, { backgroundColor: theme.tintBackground }]}
           >
             <ThemedText type="small">{error}</ThemedText>
-            <ThemedText type="smallBold" style={{ color: theme.tint }}>
+            <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
               重新加载
             </ThemedText>
           </Pressable>
@@ -261,7 +261,7 @@ function EmptyCard({
         onPress={onPress}
         style={[styles.action, { backgroundColor: theme.tintBackground }]}
       >
-        <ThemedText type="smallBold" style={{ color: theme.tint }}>
+        <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
           {action}
         </ThemedText>
       </Pressable>

@@ -91,7 +91,7 @@ export function DeviceCard() {
           <View style={styles.actions}>
             {!device.petId && (
               <Pressable onPress={() => router.push('/setup')}>
-                <ThemedText type="smallBold" style={{ color: theme.tint }}>
+                <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
                   继续设置
                 </ThemedText>
               </Pressable>
@@ -112,7 +112,7 @@ export function DeviceCard() {
             onPress={() => router.push('/setup')}
             style={[styles.button, { backgroundColor: theme.tintBackground }]}
           >
-            <ThemedText type="smallBold" style={{ color: theme.tint }}>
+            <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
               设置宠物与项圈
             </ThemedText>
           </Pressable>

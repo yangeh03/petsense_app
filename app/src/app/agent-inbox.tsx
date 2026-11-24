@@ -107,6 +107,13 @@ export default function AgentInboxScreen() {
               : item.sourceKind === 'reply'
                 ? theme.tint
                 : theme.info;
+          // 来源类别是文字，要用压白底达标的变体；图标与圆点仍用实底品牌色
+          const kindTextColor =
+            item.sourceKind === 'device_fact'
+              ? theme.danger
+              : item.sourceKind === 'reply'
+                ? theme.tintForeground
+                : theme.infoForeground;
           return (
             <Pressable
               key={item.id}
@@ -123,7 +130,7 @@ export default function AgentInboxScreen() {
               </View>
               <View style={styles.texts}>
                 <View style={styles.titleRow}>
-                  <Text style={[styles.kind, { color }]}>
+                  <Text style={[styles.kind, { color: kindTextColor }]}>
                     {INBOX_SOURCE_LABEL[item.sourceKind]}
                   </Text>
                   <ThemedText type="smallBold" style={styles.title} numberOfLines={1}>

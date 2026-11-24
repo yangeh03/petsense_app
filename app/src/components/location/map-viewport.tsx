@@ -255,7 +255,7 @@ export function MapViewport({
       </View>
       {imageError ? (
         <Pressable accessibilityRole="button" accessibilityLabel="重新加载底图" onPress={onRetry}>
-          <ThemedText type="smallBold" themeColor="tint">
+          <ThemedText type="smallBold" themeColor="tintForeground">
             重新加载底图
           </ThemedText>
         </Pressable>
@@ -295,7 +295,7 @@ export function MapViewport({
               accessibilityLabel="重新加载底图"
               onPress={onRetry}
             >
-              <ThemedText type="smallBold" themeColor="tint">
+              <ThemedText type="smallBold" themeColor="tintForeground">
                 重新加载底图
               </ThemedText>
             </Pressable>

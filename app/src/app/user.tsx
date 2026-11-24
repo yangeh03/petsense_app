@@ -225,7 +225,7 @@ export default function UserScreen() {
             size={20}
             tintColor={theme.tint}
           />
-          <ThemedText type="smallBold" style={{ color: theme.tint }}>
+          <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
             返回
           </ThemedText>
         </Pressable>
@@ -406,7 +406,7 @@ export default function UserScreen() {
               )}
               {!!nextCursor && (
                 <Pressable onPress={() => void loadMore()}>
-                  <ThemedText type="small" style={{ color: theme.tint }}>
+                  <ThemedText type="small" style={{ color: theme.tintForeground }}>
                     {loadingMore ? '加载中…' : '加载更多帖子'}
                   </ThemedText>
                 </Pressable>

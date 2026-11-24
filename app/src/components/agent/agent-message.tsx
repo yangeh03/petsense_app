@@ -268,7 +268,7 @@ function SourceCard({ source, petId }: { source: DatedSource; petId: number | nu
             </>
           ) : null}
           <Pressable accessibilityRole="link" onPress={openRecords} style={styles.sourceLink}>
-            <ThemedText type="small" style={{ color: theme.tint }}>
+            <ThemedText type="small" style={{ color: theme.tintForeground }}>
               在记录页看日/周趋势
             </ThemedText>
             <SymbolView
@@ -397,7 +397,7 @@ function CareCard({ care, onAskWhy }: { care: AgentCareInfo; onAskWhy?: () => vo
       ))}
       {onAskWhy ? (
         <Pressable accessibilityRole="button" style={styles.careWhy} onPress={onAskWhy}>
-          <ThemedText type="small" style={{ color: theme.tint }}>
+          <ThemedText type="small" style={{ color: theme.tintForeground }}>
             为什么提醒我？
           </ThemedText>
         </Pressable>

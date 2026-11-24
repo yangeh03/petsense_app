@@ -34,7 +34,9 @@ export function NotificationBell() {
         />
         {badgeCount > 0 && (
           <View style={[styles.badge, { backgroundColor: theme.danger }]}>
-            <Text style={styles.badgeText}>{Math.min(badgeCount, 9)}</Text>
+            <Text style={[styles.badgeText, { color: theme.onDanger }]}>
+              {Math.min(badgeCount, 9)}
+            </Text>
           </View>
         )}
       </Pressable>
@@ -71,7 +73,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 3,
   },
   badgeText: {
-    color: '#ffffff',
     fontSize: 10,
     fontWeight: '700',
     lineHeight: 12,

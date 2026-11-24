@@ -103,7 +103,7 @@ export function DogMapMap({
                 setAttempt(attempt + 1);
               }}
             >
-              <ThemedText type="smallBold" style={{ color: theme.tint }}>
+              <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
                 重试底图
               </ThemedText>
             </Pressable>
@@ -119,7 +119,7 @@ export function DogMapMap({
           <ThemedText type="small" themeColor="textSecondary">
             已离开评分区域
           </ThemedText>
-          <ThemedText type="smallBold" style={{ color: theme.tint }}>
+          <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
             回到评分区域
           </ThemedText>
         </Pressable>

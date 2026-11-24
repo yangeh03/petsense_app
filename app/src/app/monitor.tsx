@@ -52,7 +52,7 @@ export default function MonitorScreen() {
           onPress={() => router.back()}
           style={styles.tap}
         >
-          <ThemedText style={{ color: theme.tint }}>‹ 返回</ThemedText>
+          <ThemedText style={{ color: theme.tintForeground }}>‹ 返回</ThemedText>
         </Pressable>
         <ThemedText style={styles.title}>项圈诊断</ThemedText>
         <ThemedText type="small" themeColor="textSecondary">
@@ -60,13 +60,13 @@ export default function MonitorScreen() {
         </ThemedText>
         {error ? (
           <Pressable accessibilityRole="button" onPress={() => void reload()}>
-            <ThemedText style={{ color: theme.warning }}>{error} 点击重试</ThemedText>
+            <ThemedText style={{ color: theme.warningForeground }}>{error} 点击重试</ThemedText>
           </Pressable>
         ) : null}
         <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
           <ThemedText
             type="smallBold"
-            style={{ color: fresh ? theme.online : theme.textSecondary }}
+            style={{ color: fresh ? theme.onlineForeground : theme.textSecondary }}
           >
             {fresh ? '设备正在上报' : '当前没有新鲜数据'}
           </ThemedText>
@@ -153,7 +153,7 @@ export default function MonitorScreen() {
           onPress={() => setMore(!more)}
           style={styles.tap}
         >
-          <ThemedText type="smallBold" style={{ color: theme.tint }}>
+          <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
             {more ? '收起技术参数 −' : '展开技术参数 ＋'}
           </ThemedText>
         </Pressable>

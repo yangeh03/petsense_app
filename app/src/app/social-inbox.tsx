@@ -134,7 +134,7 @@ export default function SocialInboxScreen() {
           </ThemedText>
           {loadedFor === viewerId && unread > 0 ? (
             <Pressable onPress={() => void readAll()} accessibilityLabel="全部标记已读">
-              <ThemedText type="small" style={{ color: theme.tint }}>
+              <ThemedText type="small" style={{ color: theme.tintForeground }}>
                 全部已读
               </ThemedText>
             </Pressable>
@@ -144,7 +144,7 @@ export default function SocialInboxScreen() {
         </View>
         {!user ? (
           <Pressable onPress={() => router.push('/login')}>
-            <ThemedText type="small" style={{ color: theme.tint }}>
+            <ThemedText type="small" style={{ color: theme.tintForeground }}>
               登录后查看互动通知
             </ThemedText>
           </Pressable>
@@ -209,7 +209,7 @@ export default function SocialInboxScreen() {
           ListFooterComponent={
             cursor ? (
               <Pressable onPress={() => void loadMore()}>
-                <ThemedText type="small" style={{ color: theme.tint }}>
+                <ThemedText type="small" style={{ color: theme.tintForeground }}>
                   加载更多
                 </ThemedText>
               </Pressable>

@@ -171,7 +171,7 @@ export default function TrackingScreen() {
                       onPress={() => router.push('/uwb-setup')}
                       style={[styles.button, { backgroundColor: theme.tintBackground }]}
                     >
-                      <ThemedText type="smallBold" style={{ color: theme.tint }}>
+                      <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
                         开始标定 ›
                       </ThemedText>
                     </Pressable>
@@ -187,7 +187,7 @@ export default function TrackingScreen() {
                     onPress={() => router.push('/setup')}
                     style={[styles.button, { backgroundColor: theme.tintBackground }]}
                   >
-                    <ThemedText type="smallBold" style={{ color: theme.tint }}>
+                    <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
                       去绑定项圈 ›
                     </ThemedText>
                   </Pressable>
@@ -229,7 +229,7 @@ export default function TrackingScreen() {
                   accessibilityState={{ selected: showGpsDetails }}
                   onPress={() => setShowGpsDetails(!showGpsDetails)}
                 >
-                  <ThemedText type="smallBold" style={{ color: theme.tint }}>
+                  <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
                     {showGpsDetails ? '收起坐标详情' : '坐标详情'}
                   </ThemedText>
                 </Pressable>
@@ -271,7 +271,7 @@ export default function TrackingScreen() {
                     onPress={() => router.push('/setup')}
                     style={[styles.button, { backgroundColor: theme.tintBackground }]}
                   >
-                    <ThemedText type="smallBold" style={{ color: theme.tint }}>
+                    <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
                       去绑定项圈 ›
                     </ThemedText>
                   </Pressable>
@@ -359,7 +359,7 @@ function StatusChip({ label, live }: { label: string; live: boolean }) {
       />
       <ThemedText
         type="small"
-        style={{ color: live ? theme.online : theme.textSecondary }}
+        style={{ color: live ? theme.onlineForeground : theme.textSecondary }}
         numberOfLines={1}
       >
         {label}
