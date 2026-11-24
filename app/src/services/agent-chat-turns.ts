@@ -10,7 +10,7 @@
  * 抽成纯函数：store 与 hook 只做状态搬运，行为可单测覆盖。
  */
 
-import type { AgentTurn } from '@/services/agent';
+import type { AgentReplyMessage, AgentTurn } from '@/services/agent';
 
 /**
  * 本地乐观回合：主人刚发出、服务端尚未确认的那一条。
@@ -57,7 +57,7 @@ export function reconcileTurn(turns: AgentTurn[], incoming: AgentTurn): AgentTur
   const index = kept.findIndex((turn) => turn.id === incoming.id);
   if (index === -1) return orderTurns([...kept, incoming]);
   const next = kept.slice();
-  next[index] = incoming;
+  next[index] = mergeTurn(kept[index], incoming);
   return orderTurns(next);
 }
 
@@ -82,8 +82,308 @@ export function removeLocalTurn(turns: AgentTurn[], requestId: string): AgentTur
 export function mergeServerTurns(existing: AgentTurn[], latest: AgentTurn[]): AgentTurn[] {
   if (!latest.length) return orderTurns(existing.filter(isLocalTurn));
   const first = latest[0].id;
+  // HTTP 响应可能晚于同一回合的 WS 帧：已加载过的回合按消息逐条合并，不让旧快照盖掉新状态
+  const known = new Map(existing.map((turn) => [turn.id, turn]));
   const kept = existing.filter((turn) => isLocalTurn(turn) || turn.id < first);
-  return orderTurns([...kept, ...latest]);
+  return orderTurns([
+    ...kept,
+    ...latest.map((turn) => (known.has(turn.id) ? mergeTurn(known.get(turn.id), turn) : turn)),
+  ]);
+}
+
+// ---------------------------------------------------------------------------
+// 双 Agent 群聊：逐条回复消息的合并（docs/agent-dual-agent-chat-design.md §4.3）
+// ---------------------------------------------------------------------------
+
+/** 带逐条回复的回合（群聊协议）；空数组表示还没路由出谁来说话。旧协议的回合没有这个字段。 */
+type GroupTurn = AgentTurn & { messages: AgentReplyMessage[] };
+
+export function hasMessages(turn: AgentTurn): turn is GroupTurn {
+  return Array.isArray(turn.messages);
+}
+
+/** 只收到过增量、还没有完整快照的消息：缺归属（位置、卡片、来源），完整快照到达时补齐。 */
+type PartialMessage = AgentReplyMessage & { partial?: true };
+
+function isPartial(message: AgentReplyMessage): boolean {
+  return (message as PartialMessage).partial === true;
+}
+
+/**
+ * 消息是否比本地已有的更新：版本更高，或同版本且正文更长。
+ * 版本随服务端每次持久化变更递增；同一版本里累计正文只会变长（工具轮之后模型重新起头的
+ * 替换，服务端先落库再推，一定带更高的版本）。其余情况按乱序或重复的旧帧丢弃。
+ */
+export function messageIsNewer(incoming: AgentReplyMessage, current?: AgentReplyMessage): boolean {
+  if (!current) return true;
+  if (incoming.version !== current.version) return incoming.version > current.version;
+  return incoming.text.length > current.text.length;
+}
+
+function isSettled(message: AgentReplyMessage): boolean {
+  return message.status === 'complete' || message.status === 'failed';
+}
+
+/** 联网核实之类的瞬时进度只属于生成中的消息；消息结束或被更新的快照覆盖时清掉。 */
+function carriedActivity(
+  current: AgentReplyMessage | undefined,
+  incoming: AgentReplyMessage,
+): AgentReplyMessage['activity'] {
+  return incoming.status === 'running' ? current?.activity : undefined;
+}
+
+/**
+ * 合并同一条消息的两个快照。返回合并结果与「本次是否带来了更新」（回合级据此判断
+ * 是不是迟到的旧快照）。
+ */
+function mergeMessage(
+  current: AgentReplyMessage | undefined,
+  incoming: AgentReplyMessage,
+): { message: AgentReplyMessage; advanced: boolean } {
+  if (!current) return { message: incoming, advanced: true };
+  const activity = carriedActivity(current, incoming);
+  if (incoming.readOnly || current.readOnly) {
+    // 旧回合的投影消息没有可比较的版本（恒为 1）：卡片状态、已读等变化不体现在正文上，
+    // 以服务端快照为准；只有正文变长或状态推进才算「更新」
+    const advanced =
+      incoming.text.length > current.text.length || (isSettled(incoming) && !isSettled(current));
+    return { message: { ...incoming, activity }, advanced };
+  }
+  if (isPartial(current)) {
+    // 只收到过增量的占位：完整快照补齐归属；仍在生成时保留已流出的更长正文
+    const ahead = incoming.status === 'running' && current.text.length > incoming.text.length;
+    return {
+      message: ahead
+        ? { ...incoming, text: current.text, version: current.version, activity }
+        : incoming,
+      advanced: true,
+    };
+  }
+  if (!messageIsNewer(incoming, current)) return { message: current, advanced: false };
+  return { message: { ...incoming, activity }, advanced: true };
+}
+
+/**
+ * 同一回合的两个快照合并：消息按 id 逐条取新。任一侧不带逐条回复（旧协议）时整体以
+ * 新来的为准；迟到的旧快照不能把已结束的回合拉回等待——重试会让失败的消息先回到排队，
+ * 所以「有消息更新」时才接受回合状态的回退。
+ */
+export function mergeTurn(current: AgentTurn | undefined, incoming: AgentTurn): AgentTurn {
+  if (!current || !hasMessages(incoming) || !hasMessages(current)) return incoming;
+  const known = new Map(current.messages.map((message) => [message.id, message] as const));
+  const seen = new Set<string>();
+  let advanced = false;
+  const messages: AgentReplyMessage[] = [];
+  for (const message of incoming.messages) {
+    seen.add(message.id);
+    const result = mergeMessage(known.get(message.id), message);
+    advanced = advanced || result.advanced;
+    messages.push(result.message);
+  }
+  for (const message of current.messages) if (!seen.has(message.id)) messages.push(message);
+  // 位置未知（只收到过增量）的占位保持到达顺序：两位按发言计划依次生成
+  messages.sort((a, b) => a.position - b.position);
+  const regressed = current.status !== 'pending' && incoming.status === 'pending' && !advanced;
+  return regressed
+    ? { ...current, readAt: incoming.readAt ?? current.readAt, messages }
+    : { ...incoming, messages };
+}
+
+function unknownTurn(id: number, messages: AgentReplyMessage[]): AgentTurn {
+  return {
+    id,
+    requestId: '',
+    text: '',
+    speaker: 'assistant',
+    readAt: null,
+    target: 'auto',
+    reply: '',
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+    topicId: null,
+    replyTo: null,
+    sources: [],
+    blocks: null,
+    images: [],
+    messages,
+  };
+}
+
+function partialMessage(
+  messageId: string,
+  turnId: number,
+  role: AgentReplyMessage['role'],
+  text: string,
+  version: number,
+): PartialMessage {
+  return {
+    id: messageId,
+    turnId,
+    role,
+    // 位置由路由决定，此时还不知道：排到最后，完整快照到达时补齐
+    position: Number.MAX_SAFE_INTEGER,
+    kind: 'answer',
+    status: 'running',
+    text,
+    version,
+    sources: [],
+    blocks: null,
+    error: null,
+    errorNote: null,
+    readOnly: false,
+    createdAt: new Date().toISOString(),
+    finishedAt: null,
+    partial: true,
+  };
+}
+
+function withMessages(
+  turns: AgentTurn[],
+  turn: AgentTurn,
+  messages: AgentReplyMessage[],
+): AgentTurn[] {
+  const next = turns.slice();
+  next[turns.indexOf(turn)] = { ...turn, messages };
+  return next;
+}
+
+/**
+ * 群聊消息的流式增量（WS message_delta）：累计正文 + 所属版本，按「版本更高或同版本更长」
+ * 接受。消息或回合的快照还没到时按 id 建占位，快照到达时补齐归属。
+ */
+export function applyMessageDeltaToTurns(
+  turns: AgentTurn[],
+  turnId: number,
+  messageId: string,
+  role: AgentReplyMessage['role'],
+  text: string,
+  version: number,
+): AgentTurn[] {
+  const turn = turns.find((item) => item.id === turnId);
+  if (!turn) {
+    return orderTurns([
+      ...turns,
+      unknownTurn(turnId, [partialMessage(messageId, turnId, role, text, version)]),
+    ]);
+  }
+  if (!hasMessages(turn)) return turns;
+  const existing = turn.messages.find((message) => message.id === messageId);
+  if (existing && !messageIsNewer({ ...existing, text, version }, existing)) return turns;
+  if (!existing) {
+    // 回合已结束还冒出没见过的消息：不往已收尾的回合里加内容
+    if (turn.status !== 'pending') return turns;
+    return withMessages(turns, turn, [
+      ...turn.messages,
+      partialMessage(messageId, turnId, role, text, version),
+    ]);
+  }
+  // 新正文到了，联网核实之类的瞬时进度不再显示
+  const next: AgentReplyMessage = {
+    ...existing,
+    status: 'running',
+    text,
+    version,
+    activity: undefined,
+  };
+  return withMessages(
+    turns,
+    turn,
+    turn.messages.map((message) => (message.id === messageId ? next : message)),
+  );
+}
+
+/** 群聊消息快照（WS message：领取、终态、卡片同步）：按 id 并入所属回合。 */
+export function applyMessageToTurns(turns: AgentTurn[], message: AgentReplyMessage): AgentTurn[] {
+  const turn = turns.find((item) => item.id === message.turnId);
+  if (!turn) return orderTurns([...turns, unknownTurn(message.turnId, [message])]);
+  const current = hasMessages(turn) ? turn.messages : [];
+  const incoming = {
+    ...turn,
+    messages: [...current.filter((item) => item.id !== message.id), message],
+  };
+  const next = turns.slice();
+  next[turns.indexOf(turn)] = mergeTurn(turn, incoming);
+  return next;
+}
+
+/** 群聊消息的瞬时状态（WS message_status）：不是正文，只挂在生成中的消息上。 */
+export function applyMessageStatusToTurns(
+  turns: AgentTurn[],
+  turnId: number,
+  messageId: string,
+  activity: NonNullable<AgentReplyMessage['activity']>,
+): AgentTurn[] {
+  const turn = turns.find((item) => item.id === turnId);
+  if (!turn || !hasMessages(turn)) return turns;
+  let changed = false;
+  const messages = turn.messages.map((message) => {
+    if (message.id !== messageId || message.status !== 'running' || message.activity === activity) {
+      return message;
+    }
+    changed = true;
+    return { ...message, activity };
+  });
+  return changed ? withMessages(turns, turn, messages) : turns;
+}
+
+/** 这一轮有只重试失败发言的入口：群聊回合里存在失败的真实消息（旧回合的投影不可重试）。 */
+export function canRetryMessages(turn: AgentTurn): boolean {
+  return (
+    turn.status !== 'pending' &&
+    hasMessages(turn) &&
+    turn.messages.some((message) => message.status === 'failed' && !message.readOnly)
+  );
+}
+
+/** 「两位都回」只在服务端确认当前账号开放双 Agent 时可用，否则等同未指定。 */
+export function sendableTarget(
+  target: AgentTurn['target'],
+  dualAgent: boolean,
+): AgentTurn['target'] {
+  return target === 'both' && !dualAgent ? 'auto' : target;
+}
+
+/**
+ * 还没路由出谁来说话时，等待占位归谁：只点名了一位（且这条话没有引用别的发言人的消息）时，
+ * 谁接话已经确定；「两位都回」、带引用和未指定时先发言的要等路由结果，不预设发言人。
+ */
+export function placeholderRole(
+  target: AgentTurn['target'],
+  quoted = false,
+): AgentTurn['speaker'] | null {
+  if (quoted || target === 'auto' || target === 'both') return null;
+  return target;
+}
+
+const SPEAKER_MARK = /^\s*【(?:爱宠|照料助手)】\s*/;
+
+/**
+ * 这条话引用的是哪一条回复（输入区的引用预览与主人气泡上的引用行共用），与服务端
+ * 解析引用的口径一致：消息级引用精确到那一条；只有回合级引用时取该回合最后一条有正文的话。
+ * 被引用的回合不在已加载范围、或已没有正文时返回 null（不显示引用）。
+ */
+export function quotedReply(
+  turns: AgentTurn[],
+  replyTo: number | null | undefined,
+  replyToMessage?: string | null,
+): { role: AgentTurn['speaker']; text: string } | null {
+  if (!replyTo) return null;
+  const turn = turns.find((item) => item.id === replyTo);
+  if (!turn) return null;
+  const messages = hasMessages(turn) ? turn.messages : null;
+  const candidates = messages
+    ? replyToMessage
+      ? messages.filter((message) => message.id === replyToMessage)
+      : messages
+    : // 旧协议的回合没有逐条回复：按回合的发言人与正文回退（解析不了消息级引用）
+      replyToMessage
+      ? []
+      : [{ role: turn.speaker, text: turn.reply }];
+  for (let index = candidates.length - 1; index >= 0; index -= 1) {
+    const text = candidates[index].text.replace(SPEAKER_MARK, '');
+    if (text.trim()) return { role: candidates[index].role, text };
+  }
+  return null;
 }
 
 /**

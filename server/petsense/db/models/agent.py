@@ -19,6 +19,10 @@ class AgentTurn(Base):
     blocks = Column(Text, nullable=True)
     images = Column(Text, nullable=True)  # W07 owner 附件引用 JSON：[{id,width,height,bytes}]
     status = Column(String(16), nullable=False)
+    # 双 Agent 群聊：消息级引用（agent_messages 的稳定 ID 字符串）；与回合级 reply_to 并存
+    reply_to_message = Column(String(32), nullable=True)
+    # 群聊回合重试时刷新：等待过期与整轮时限从这里算，否则较早的回合一重试就会被判为超时
+    pending_at = Column(UTCDatetime, nullable=True)
     created_at = Column(UTCDatetime, nullable=False)
     __table_args__ = (UniqueConstraint('pet_id', 'request_id'),)
 
@@ -27,11 +31,13 @@ class AgentRun(Base):
     """W01 运行轨迹：完整判断与工具路径，可回放可审计；不对 App 开放（P00 §3）。
 
     W02 增加 snapshot：本次运行注入的常驻快照原文（数值溯源取证，agent-w02-spec.md §3.7）。
+    双 Agent 群聊：message_id 关联本次运行产出的那一条回复（同一回合两位各一条运行轨迹）。
     """
     __tablename__ = 'agent_runs'
     id = Column(Integer, primary_key=True)
     pet_id = Column(Integer, ForeignKey('pets.id'), nullable=False, index=True)
     turn_id = Column(Integer, nullable=True)
+    message_id = Column(Integer, nullable=True, index=True)
     form = Column(String(16), nullable=False)
     status = Column(String(16), nullable=False)
     conclusion = Column(Text, nullable=False, default='{}')
@@ -41,6 +47,57 @@ class AgentRun(Base):
     snapshot = Column(Text, nullable=True)
     error = Column(Text, nullable=True)
     created_at = Column(UTCDatetime, nullable=False)
+
+
+class AgentRoute(Base):
+    """双 Agent 群聊的路由记录（docs/agent-dual-agent-chat-design.md §3–§4）。
+
+    路由器只分类不发言；发言者、顺序与任务种类由服务端按校验规则计算后随路由一并持久化，
+    重试沿用同一份分发结果（不重新路由）。raw_json 保留路由器原始输出供审计。
+    """
+    __tablename__ = 'agent_routes'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    turn_id = Column(Integer, nullable=False, unique=True)
+    pet_id = Column(Integer, ForeignKey('pets.id'), nullable=False, index=True)
+    scope = Column(String(16), nullable=False)       # allowed / out_of_scope / unknown
+    intent = Column(String(16), nullable=False)      # loop.INTENTS 或 unknown
+    companion = Column(Integer, nullable=False, default=0)
+    professional = Column(Integer, nullable=False, default=0)
+    follows = Column(Integer, nullable=False, default=0)  # 第二位是否承接第一位已发出的消息
+    reason = Column(Text, nullable=True)
+    source = Column(String(16), nullable=False)      # model / fallback
+    plan_json = Column(Text, nullable=False, default='[]')  # [{'role','kind','follows'}] 按发言顺序
+    raw_json = Column(Text, nullable=True)
+    created_at = Column(UTCDatetime, nullable=False)
+
+
+class AgentMessage(Base):
+    """群聊里的一条 Agent 回复：身份自创建起固定，流式、终态与重连回放共用同一 ID。
+
+    首版每回合每位至多一条（turn_id + role 唯一）。version 随每次持久化变更单调递增，
+    客户端据此丢弃过时帧；effect_json 是本条消息运行里已生效的副作用调用日志，重试时
+    据此短路重复的不可重放调用。status: queued / running / complete / failed。
+    """
+    __tablename__ = 'agent_messages'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    turn_id = Column(Integer, nullable=False, index=True)
+    pet_id = Column(Integer, ForeignKey('pets.id'), nullable=False, index=True)
+    role = Column(String(16), nullable=False)        # pet / assistant
+    position = Column(Integer, nullable=False, default=0)
+    kind = Column(String(16), nullable=False)        # respond / acknowledge / answer / clarify
+    follows = Column(Integer, nullable=False, default=0)
+    status = Column(String(16), nullable=False)
+    text = Column(Text, nullable=False, default='')
+    version = Column(Integer, nullable=False, default=0)
+    sources = Column(Text, nullable=False, default='[]')
+    blocks = Column(Text, nullable=True)
+    error = Column(Text, nullable=True)
+    effect_json = Column(Text, nullable=False, default='[]')
+    attempts = Column(Integer, nullable=False, default=0)
+    created_at = Column(UTCDatetime, nullable=False)
+    started_at = Column(UTCDatetime, nullable=True)
+    finished_at = Column(UTCDatetime, nullable=True)
+    __table_args__ = (UniqueConstraint('turn_id', 'role'),)
 
 
 class AgentLearningDay(Base):

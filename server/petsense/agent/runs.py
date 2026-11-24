@@ -7,8 +7,11 @@ from petsense.db import session_scope, utc_now, iso_z
 from petsense.db.models.agent import AgentRun
 
 
-def save(pet_id, turn_id, trace, status, error=None):
-    """落库一次运行轨迹；trace 由 loop 产出（messages/tool_summary/budget/conclusion/snapshot）。"""
+def save(pet_id, turn_id, trace, status, error=None, message_id=None):
+    """落库一次运行轨迹；trace 由 loop 产出（messages/tool_summary/budget/conclusion/snapshot）。
+
+    message_id：双 Agent 群聊里本次运行产出的那一条回复（每位一条，design doc §3.5）。
+    """
     snapshot = trace.get('snapshot')
     # 触发原因（为什么在此时跑这个形态）随结论落库，不被静默丢弃（可审计）
     conclusion = dict(trace.get('conclusion') or {})
@@ -16,7 +19,8 @@ def save(pet_id, turn_id, trace, status, error=None):
     if trigger is not None:
         conclusion.setdefault('trigger', trigger)
     with session_scope() as s:
-        run = AgentRun(pet_id=pet_id, turn_id=turn_id, form=trace.get('form', 'dialogue'),
+        run = AgentRun(pet_id=pet_id, turn_id=turn_id, message_id=message_id,
+                       form=trace.get('form', 'dialogue'),
                        status=status, error=error, created_at=utc_now(),
                        conclusion=json.dumps(conclusion, ensure_ascii=False),
                        messages=json.dumps(trace.get('messages', []), ensure_ascii=False, default=str),
@@ -45,6 +49,7 @@ def update_conclusion(run_id, patch):
 def summarize(run):
     """回放视图：完整结论与消息序列。"""
     return {'id': run.id, 'petId': run.pet_id, 'turnId': run.turn_id, 'form': run.form,
+            'messageId': run.message_id,
             'status': run.status, 'error': run.error, 'createdAt': iso_z(run.created_at),
             'conclusion': json.loads(run.conclusion), 'messages': json.loads(run.messages),
             'toolSummary': json.loads(run.tool_summary), 'budget': json.loads(run.budget),

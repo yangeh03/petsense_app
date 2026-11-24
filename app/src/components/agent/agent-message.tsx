@@ -6,9 +6,12 @@
  * （宠物 → 档案页，照料助手 → 助手设定页）；助手显示名从设定读取。
  * W09：blocks 另含主动关怀卡（type=care，设备事件/周期回顾/学习完成），
  * 附依据摘要与「为什么提醒我」追问入口（下钻走对话与主题依据）。
+ * 双 Agent 群聊（docs/agent-dual-agent-chat-design.md §4）：带 messages 的回合逐条渲染，
+ * 每条回复有自己的头像、状态、卡片与来源；失败的发言可只重试这一条，有正文的可被消息级引用。
+ * 旧回合由服务端投影成只读消息，旧协议的回合仍按下面的内容块分段渲染。
  */
 
-import { memo, useCallback, useState } from 'react';
+import { memo, useCallback, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import { Image } from 'expo-image';
 import { SymbolView } from 'expo-symbols';
@@ -31,11 +34,13 @@ import {
   type AgentCareInfo,
   type AgentImageMeta,
   type AgentObservation,
+  type AgentReplyMessage,
   type AgentSource,
   type AgentTurn,
   type AgentWindowSource,
 } from '@/services/agent';
 import type { AgentChangeEvidence } from '@/services/agent-change';
+import { canRetryMessages, hasMessages, placeholderRole } from '@/services/agent-chat-turns';
 import { careStatusLabel } from '@/services/care-labels';
 import { assistantDisplayName, useCompanionSettingsStore } from '@/stores/companion-settings';
 
@@ -47,6 +52,10 @@ type Props = {
   onRetry: (turn: AgentTurn) => void;
   /** W09：主动关怀卡追问入口（预填「为什么提醒我？」并定位到该主题） */
   onAskWhy?: (turn: AgentTurn) => void;
+  /** 双 Agent 群聊：引用这一条回复（定位到它所在的话题，发送时带上被引用的消息） */
+  onReplyTo?: (turn: AgentTurn, message: AgentReplyMessage) => void;
+  /** 主人这条话引用的回复（已发送的消息级/回合级引用）；没有引用或缺参数时为空 */
+  quote?: { name: string; text: string } | null;
 };
 
 type DatedSource = AgentWindowSource & { startAt: string; endAt: string };
@@ -438,35 +447,107 @@ function OwnerImages({
   );
 }
 
-export const AgentMessage = memo(function AgentMessage({
-  turn,
-  petId,
-  petName,
-  onContinueTopic,
-  onRetry,
-  onAskWhy,
-}: Props) {
+type CardBlock = NonNullable<AgentTurn['blocks']>[number];
+
+/** 来源去重只算一次：可展示卡（web/带日期）与未知来源回退分别派生（UI 一致性调整）。 */
+function uniqueSources(sources: AgentSource[]): [string, AgentSource][] {
+  return [...new Map(sources.map((source) => [sourceKey(source), source] as const))];
+}
+
+function cardSources(sources: AgentSource[]): [string, AgentSource][] {
+  return uniqueSources(sources).filter(
+    ([, source]) => source.type === 'web' || isDatedSource(source),
+  );
+}
+
+function fallbackSources(sources: AgentSource[]): [string, AgentSource][] {
+  return uniqueSources(sources).filter(
+    ([, source]) => source.type !== 'web' && !isDatedSource(source),
+  );
+}
+
+/** 回复气泡容器：旧协议的分段回复与群聊的逐条回复共用 */
+function Bubble({ children }: { children: ReactNode }) {
   const theme = useTheme();
-  const router = useRouter();
-  const settings = useCompanionSettingsStore((state) => state.settings);
-  const assistantName = assistantDisplayName(settings);
-  const [viewerIndex, setViewerIndex] = useState(0);
-  const [viewerOpen, setViewerOpen] = useState(false);
-  const images = turn.images ?? [];
-  const openViewer = useCallback((index: number) => {
-    setViewerIndex(index);
-    setViewerOpen(true);
-  }, []);
-  const blocks = turn.blocks?.length
-    ? turn.blocks
-    : [
+  return (
+    <View
+      style={[
+        styles.replyBubble,
         {
-          type: 'text' as const,
-          speaker: turn.speaker,
-          text: turn.reply,
+          backgroundColor: theme.backgroundElement,
+          borderColor: theme.backgroundSelected,
         },
-      ];
-  const textSegments = blocks.filter((block) => block.type === 'text');
+      ]}
+    >
+      {children}
+    </View>
+  );
+}
+
+/** 一条回复的行首：头像 + 名字，点击进入成员详情（宠物 → 档案页，照料助手 → 助手设定页） */
+function ReplyRow({
+  speaker,
+  name,
+  onOpen,
+  children,
+}: {
+  speaker: AgentTurn['speaker'];
+  name: string;
+  onOpen: () => void;
+  children: ReactNode;
+}) {
+  const theme = useTheme();
+  return (
+    <View style={styles.replyRow}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={speaker === 'pet' ? `查看${name}的档案` : `查看${name}的设定`}
+        onPress={onOpen}
+        style={[
+          styles.avatar,
+          {
+            backgroundColor: speaker === 'pet' ? theme.tintBackground : theme.backgroundSelected,
+          },
+        ]}
+      >
+        {speaker === 'pet' ? (
+          <SymbolView
+            name={{ ios: 'pawprint.fill', android: 'pets', web: 'pets' }}
+            tintColor={theme.tint}
+            size={17}
+          />
+        ) : (
+          <SymbolView
+            name={{ ios: 'sparkles', android: 'auto_awesome', web: 'auto_awesome' }}
+            tintColor={theme.text}
+            size={17}
+          />
+        )}
+      </Pressable>
+      <View style={styles.replyBody}>
+        <Pressable accessibilityRole="button" onPress={onOpen}>
+          <ThemedText type="smallBold" themeColor="textSecondary">
+            {name}
+          </ThemedText>
+        </Pressable>
+        {children}
+      </View>
+    </View>
+  );
+}
+
+/** 结构化卡与来源卡：与正文同列，左缘统一缩进到头像右侧的文本列（34 头像 + 9 间距 = 43）。 */
+function ReplyCards({
+  blocks,
+  sources,
+  petId,
+  onAskWhy,
+}: {
+  blocks: CardBlock[];
+  sources: AgentSource[];
+  petId: number | null;
+  onAskWhy?: () => void;
+}) {
   const proposals = blocks.filter((block) => block.type === 'proposal');
   const actions = blocks.filter((block) => block.type === 'action');
   const taskResults = blocks.filter((block) => block.type === 'task_result');
@@ -479,29 +560,263 @@ export const AgentMessage = memo(function AgentMessage({
   );
   const hasUnknownBlocks =
     blocks.length >
-    textSegments.length +
+    blocks.filter((block) => block.type === 'text').length +
       proposals.length +
       actions.length +
       taskResults.length +
       careBlocks.length +
       changeBlocks.length;
-  // 来源去重只算一次：可展示卡（web/带日期）与未知来源回退分别派生（UI 一致性调整）。
-  const uniqueSources = [...new Map((turn.sources ?? []).map((s) => [sourceKey(s), s]))];
-  const cardSources = uniqueSources.filter(
-    ([, source]) => source.type === 'web' || isDatedSource(source),
+  const cards = cardSources(sources);
+  if (!(
+    hasUnknownBlocks ||
+    proposals.length ||
+    actions.length ||
+    taskResults.length ||
+    careBlocks.length ||
+    changeBlocks.length ||
+    cards.length
+  )) {
+    return null;
+  }
+  return (
+    <View style={styles.replyCards}>
+      {hasUnknownBlocks ? (
+        <ThemedText type="small" themeColor="textSecondary">
+          这条消息里有暂不支持的内容。
+        </ThemedText>
+      ) : null}
+      {proposals.map((block) =>
+        block.proposal.kind === 'task_change' ? (
+          <TaskProposalCard key={block.proposal.id} petId={petId} proposal={block.proposal} />
+        ) : (
+          <ProposalCard key={block.proposal.id} petId={petId} proposal={block.proposal} />
+        ),
+      )}
+      {taskResults.map((block, index) => (
+        <TaskResultCard key={`${block.task.deliveryId}-${index}`} block={block.task} />
+      ))}
+      {careBlocks.map((block, index) => (
+        <CareCard
+          key={`${block.care.topicId ?? 'x'}-${index}`}
+          care={block.care}
+          onAskWhy={onAskWhy}
+        />
+      ))}
+      {changeBlocks.map((block, index) => (
+        <ChangeCard key={`${block.change.evidenceId}-${index}`} change={block.change} />
+      ))}
+      {actions.map((block) => (
+        <ActionCard key={block.action.id} action={block.action} petId={petId} />
+      ))}
+      {cards.map(([key, source]) =>
+        source.type === 'web' ? (
+          <WebSourceCard key={key} source={source} />
+        ) : isDatedSource(source) ? (
+          <SourceCard key={key} source={source} petId={petId} />
+        ) : null,
+      )}
+    </View>
   );
-  const unknownSources = uniqueSources.filter(
-    ([, source]) => source.type !== 'web' && !isDatedSource(source),
-  );
+}
 
+/** 没法在这里展开的来源：留在脚注区如实说明 */
+function SourceFallbacks({ sources }: { sources: AgentSource[] }) {
+  return (
+    <>
+      {fallbackSources(sources).map(([key, source]) => (
+        <ThemedText key={key} type="small" themeColor="textSecondary">
+          {source.type === 'baseline' ? '它的个人参照范围还在建立中' : '这条依据暂时没法在这里展开'}
+        </ThemedText>
+      ))}
+    </>
+  );
+}
+
+/** 群聊里一条回复的正文：排队、生成中（含联网核实）、失败各有如实的状态文案 */
+function MessageBubble({ message }: { message: AgentReplyMessage }) {
+  const theme = useTheme();
+  if (message.status === 'failed' && !message.readOnly) {
+    // 已流出的半截话由服务端撤回（正文为空、版本更高），这里只说明没接上
+    return (
+      <Bubble>
+        <ThemedText type="small" themeColor="textSecondary">
+          {message.errorNote ?? '这条暂时没能接上，稍后再试'}
+        </ThemedText>
+      </Bubble>
+    );
+  }
+  if (message.status === 'queued') {
+    return (
+      <Bubble>
+        <ThemedText type="small" themeColor="textSecondary">
+          准备接话…
+        </ThemedText>
+      </Bubble>
+    );
+  }
+  if (message.status === 'running' && message.activity === 'searching') {
+    return (
+      <Bubble>
+        <View style={styles.searching}>
+          <ActivityIndicator size="small" color={theme.tint} />
+          <ThemedText type="small" themeColor="textSecondary">
+            正在联网核实…
+          </ThemedText>
+        </View>
+      </Bubble>
+    );
+  }
+  return (
+    <Bubble>
+      <AgentReplyText
+        text={visibleReplyText(message.text, message.status === 'running')}
+        pending={message.status === 'running'}
+      />
+    </Bubble>
+  );
+}
+
+/** 群聊的一条回复：正文、属于它的卡片与来源，以及这一条的「再试一次」「回复」 */
+function GroupMessage({
+  message,
+  name,
+  turn,
+  petId,
+  onOpen,
+  onAskWhy,
+  onRetry,
+  onReplyTo,
+}: {
+  message: AgentReplyMessage;
+  name: string;
+  turn: AgentTurn;
+  petId: number | null;
+  onOpen: () => void;
+  onAskWhy?: () => void;
+  onRetry: (turn: AgentTurn) => void;
+  onReplyTo?: (turn: AgentTurn, message: AgentReplyMessage) => void;
+}) {
+  const sources = message.sources ?? [];
+  // 只重跑失败的这一条（旧回合的投影不可重试，走回合级的「再说一次」）；同轮还有人在生成时
+  // 服务端不接受重试，等这一轮收尾再出现入口。有正文的才可被引用（旧回合的投影也可引用）
+  const retryable = message.status === 'failed' && !message.readOnly && turn.status !== 'pending';
+  const replyable = message.status === 'complete' && message.text.trim().length > 0 && !!onReplyTo;
+  const fallbacks = fallbackSources(sources);
+  return (
+    <View style={styles.message}>
+      <ReplyRow speaker={message.role} name={name} onOpen={onOpen}>
+        <MessageBubble message={message} />
+      </ReplyRow>
+      <ReplyCards
+        blocks={(message.blocks ?? []).filter((block) => block.type !== 'text')}
+        sources={sources}
+        petId={petId}
+        onAskWhy={onAskWhy}
+      />
+      {retryable || replyable || fallbacks.length ? (
+        <View style={styles.replyFootnote}>
+          <SourceFallbacks sources={sources} />
+          {retryable ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`重新发送${name}的这条回复`}
+              style={styles.replyAction}
+              onPress={() => onRetry(turn)}
+            >
+              <ThemedText type="smallBold">再试一次</ThemedText>
+            </Pressable>
+          ) : null}
+          {replyable ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`引用${name}的这条回复`}
+              style={styles.replyAction}
+              onPress={() => onReplyTo?.(turn, message)}
+            >
+              <ThemedText type="smallBold">回复</ThemedText>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+export const AgentMessage = memo(function AgentMessage({
+  turn,
+  petId,
+  petName,
+  onContinueTopic,
+  onRetry,
+  onAskWhy,
+  onReplyTo,
+  quote,
+}: Props) {
+  const theme = useTheme();
+  const router = useRouter();
+  const settings = useCompanionSettingsStore((state) => state.settings);
+  const assistantName = assistantDisplayName(settings);
+  const [viewerIndex, setViewerIndex] = useState(0);
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const images = turn.images ?? [];
+  const openViewer = useCallback((index: number) => {
+    setViewerIndex(index);
+    setViewerOpen(true);
+  }, []);
   const openMember = (speaker: 'pet' | 'assistant') =>
     router.push(speaker === 'pet' ? '/pet' : '/assistant-settings');
+  const nameOf = (speaker: 'pet' | 'assistant') =>
+    speaker === 'pet' ? (petName ?? '爱宠') : assistantName;
+  const pending = turn.status === 'pending';
+  const turnSources = turn.sources ?? [];
+  // 群聊协议的回合带逐条回复（旧回合由服务端投影成只读消息）；旧协议的回合按内容块分段渲染
+  const messages = hasMessages(turn) ? turn.messages : null;
+  const blocks = turn.blocks?.length
+    ? turn.blocks
+    : [
+        {
+          type: 'text' as const,
+          speaker: turn.speaker,
+          text: turn.reply,
+        },
+      ];
+  const textSegments = blocks.filter((block) => block.type === 'text');
+  const unownedSources = messages
+    ? turnSources.filter(
+        (source) =>
+          !messages.some((message) =>
+            (message.sources ?? []).some((owned) => sourceKey(owned) === sourceKey(source)),
+          ),
+      )
+    : turnSources;
+  // 还没路由出谁来说话：只点名了一位（且没有引用别的发言人）时，谁接话已确定；「两位都回」
+  // 与带引用时先发言的要等路由结果，不预设发言人，免得头像跳变
+  const waitingRole =
+    messages?.length === 0 && pending ? placeholderRole(turn.target, Boolean(turn.replyTo)) : null;
+
+  const turnAction = !pending ? (
+    <Pressable
+      accessibilityRole="button"
+      style={styles.replyAction}
+      onPress={() => (turn.status === 'failed' ? onRetry(turn) : onContinueTopic(turn))}
+    >
+      <ThemedText type="smallBold">
+        {turn.status === 'failed' ? '再说一次' : '继续聊这件事'}
+      </ThemedText>
+    </Pressable>
+  ) : null;
 
   return (
     <View style={styles.exchange}>
       {turn.text || images.length ? (
         <View style={[styles.ownerBubble, { backgroundColor: theme.tintBackground }]}>
           {images.length ? <OwnerImages images={images} onOpen={openViewer} /> : null}
+          {quote ? (
+            // 这条话引用的是哪一条回复（消息级引用）；一行带过，点开原消息所在话题看全文
+            <ThemedText type="small" numberOfLines={2}>
+              {`引用 ${quote.name}：${quote.text}`}
+            </ThemedText>
+          ) : null}
           {turn.text ? <ThemedText>{turn.text}</ThemedText> : null}
         </View>
       ) : null}
@@ -515,128 +830,77 @@ export const AgentMessage = memo(function AgentMessage({
         />
       ) : null}
       <View style={styles.replyColumn}>
-        {textSegments.map((segment, index) => (
-          <View key={index} style={styles.replyRow}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={
-                segment.speaker === 'pet'
-                  ? `查看${petName ?? '爱宠'}的档案`
-                  : `查看${assistantName}的设定`
-              }
-              onPress={() => openMember(segment.speaker)}
-              style={[
-                styles.avatar,
-                {
-                  backgroundColor:
-                    segment.speaker === 'pet' ? theme.tintBackground : theme.backgroundSelected,
-                },
-              ]}
-            >
-              {segment.speaker === 'pet' ? (
-                <SymbolView
-                  name={{ ios: 'pawprint.fill', android: 'pets', web: 'pets' }}
-                  tintColor={theme.tint}
-                  size={17}
-                />
-              ) : (
-                <SymbolView
-                  name={{ ios: 'sparkles', android: 'auto_awesome', web: 'auto_awesome' }}
-                  tintColor={theme.text}
-                  size={17}
-                />
-              )}
-            </Pressable>
-            <View style={styles.replyBody}>
-              <Pressable accessibilityRole="button" onPress={() => openMember(segment.speaker)}>
-                <ThemedText type="smallBold" themeColor="textSecondary">
-                  {segment.speaker === 'pet' ? (petName ?? '爱宠') : assistantName}
-                </ThemedText>
-              </Pressable>
-              <View
-                style={[
-                  styles.replyBubble,
-                  {
-                    backgroundColor: theme.backgroundElement,
-                    borderColor: theme.backgroundSelected,
-                  },
-                ]}
+        {messages ? (
+          <>
+            {waitingRole ? (
+              <ReplyRow
+                speaker={waitingRole}
+                name={nameOf(waitingRole)}
+                onOpen={() => openMember(waitingRole)}
               >
-                <AgentReplyText
-                  text={visibleReplyText(segment.text, turn.status === 'pending')}
-                  pending={turn.status === 'pending'}
-                />
+                <Bubble>
+                  <AgentReplyText text="" pending />
+                </Bubble>
+              </ReplyRow>
+            ) : messages.length === 0 && pending ? (
+              <View style={styles.waiting}>
+                <ActivityIndicator size="small" color={theme.tint} />
+                <ThemedText type="small" themeColor="textSecondary">
+                  伙伴正在接话…
+                </ThemedText>
               </View>
-            </View>
-          </View>
-        ))}
-        {hasUnknownBlocks ||
-        proposals.length ||
-        actions.length ||
-        taskResults.length ||
-        careBlocks.length ||
-        changeBlocks.length ||
-        cardSources.length ? (
-          // 结构化卡与正文同列：左缘统一缩进到头像右侧的文本列（34 头像 + 9 间距 = 43，
-          // 与 replyFootnote 同值），右缘沿用列宽；来源回退文本留在脚注区。
-          <View style={styles.replyCards}>
-            {hasUnknownBlocks ? (
-              <ThemedText type="small" themeColor="textSecondary">
-                这条消息里有暂不支持的内容。
-              </ThemedText>
             ) : null}
-            {proposals.map((block) =>
-              block.proposal.kind === 'task_change' ? (
-                <TaskProposalCard key={block.proposal.id} petId={petId} proposal={block.proposal} />
-              ) : (
-                <ProposalCard key={block.proposal.id} petId={petId} proposal={block.proposal} />
-              ),
-            )}
-            {taskResults.map((block, index) => (
-              <TaskResultCard key={`${block.task.deliveryId}-${index}`} block={block.task} />
-            ))}
-            {careBlocks.map((block, index) => (
-              <CareCard
-                key={`${block.care.topicId ?? 'x'}-${index}`}
-                care={block.care}
+            {messages.map((message) => (
+              <GroupMessage
+                key={message.id}
+                message={message}
+                name={nameOf(message.role)}
+                turn={turn}
+                petId={petId}
+                onOpen={() => openMember(message.role)}
                 onAskWhy={() => onAskWhy?.(turn)}
+                onRetry={onRetry}
+                onReplyTo={onReplyTo}
               />
             ))}
-            {changeBlocks.map((block, index) => (
-              <ChangeCard key={`${block.change.evidenceId}-${index}`} change={block.change} />
+            {/* 来源跟在各自的消息下面；回合级的来源只兜底显示没归属到任何一条的 */}
+            {unownedSources.length || !canRetryMessages(turn) ? (
+              <View style={styles.replyFootnote}>
+                <SourceFallbacks sources={unownedSources} />
+                {/* 失败的发言各自有「再试一次」，回合级不再提供整条重发 */}
+                {canRetryMessages(turn) ? null : turnAction}
+              </View>
+            ) : null}
+          </>
+        ) : (
+          <>
+            {textSegments.map((segment, index) => (
+              <ReplyRow
+                key={index}
+                speaker={segment.speaker}
+                name={nameOf(segment.speaker)}
+                onOpen={() => openMember(segment.speaker)}
+              >
+                <Bubble>
+                  <AgentReplyText
+                    text={visibleReplyText(segment.text, pending)}
+                    pending={pending}
+                  />
+                </Bubble>
+              </ReplyRow>
             ))}
-            {actions.map((block) => (
-              <ActionCard key={block.action.id} action={block.action} petId={petId} />
-            ))}
-            {cardSources.map(([key, source]) =>
-              source.type === 'web' ? (
-                <WebSourceCard key={key} source={source} />
-              ) : isDatedSource(source) ? (
-                <SourceCard key={key} source={source} petId={petId} />
-              ) : null,
-            )}
-          </View>
-        ) : null}
-        <View style={styles.replyFootnote}>
-          {unknownSources.map(([key, source]) => (
-            <ThemedText key={key} type="small" themeColor="textSecondary">
-              {source.type === 'baseline'
-                ? '它的个人参照范围还在建立中'
-                : '这条依据暂时没法在这里展开'}
-            </ThemedText>
-          ))}
-          {turn.status !== 'pending' ? (
-            <Pressable
-              accessibilityRole="button"
-              style={styles.replyAction}
-              onPress={() => (turn.status === 'failed' ? onRetry(turn) : onContinueTopic(turn))}
-            >
-              <ThemedText type="smallBold">
-                {turn.status === 'failed' ? '再说一次' : '继续聊这件事'}
-              </ThemedText>
-            </Pressable>
-          ) : null}
-        </View>
+            <ReplyCards
+              blocks={blocks}
+              sources={turnSources}
+              petId={petId}
+              onAskWhy={() => onAskWhy?.(turn)}
+            />
+            <View style={styles.replyFootnote}>
+              <SourceFallbacks sources={turnSources} />
+              {turnAction}
+            </View>
+          </>
+        )}
       </View>
     </View>
   );
@@ -657,6 +921,8 @@ const styles = StyleSheet.create({
   ownerImageUnavailable: { alignItems: 'center', justifyContent: 'center', gap: 6 },
   ownerGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 4 },
   replyColumn: { gap: 10 },
+  /** 群聊的一条回复：正文、卡片与这一条的操作成组 */
+  message: { gap: 10 },
   replyRow: { flexDirection: 'row', gap: 9, alignItems: 'flex-start' },
   replyBody: { flex: 1, gap: 6, paddingTop: 2 },
   replyBubble: {
@@ -678,6 +944,9 @@ const styles = StyleSheet.create({
   },
   /** 结构化卡与正文共用的对齐列：左缘缩进到文本列（与 replyFootnote 同 43），卡片间距沿用消息列的 10 */
   replyCards: { paddingLeft: 43, gap: 10 },
+  /** 未指定发言人时的等待行：与头像同宽的转圈，后接说明 */
+  waiting: { flexDirection: 'row', gap: 9, alignItems: 'center', minHeight: 34 },
+  searching: { flexDirection: 'row', gap: 8, alignItems: 'center' },
   source: {
     borderWidth: 1,
     borderRadius: 12,

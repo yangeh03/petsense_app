@@ -270,6 +270,8 @@ def _refresh_turn_blocks(session, row):
             changed = True
     if changed:
         turn.blocks = json.dumps(blocks, ensure_ascii=False)
+        from petsense.agent import group
+        group.sync_blocks(session, turn)  # 群聊回合：卡片状态同步到所属消息并递增版本
 
 
 def latest_weight_payload(session, pet_id):

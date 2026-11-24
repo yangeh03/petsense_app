@@ -1,0 +1,4621 @@
+{
+ "history": {
+  "legacyTurnId": 1,
+  "turns": [
+   {
+    "blocks": [
+     {
+      "speaker": "assistant",
+      "text": "我在。这是一条旧协议的回复。",
+      "type": "text"
+     }
+    ],
+    "createdAt": "2026-11-24T15:12:01.028Z",
+    "id": 1,
+    "images": [],
+    "messages": [
+     {
+      "blocks": [
+       {
+        "speaker": "assistant",
+        "text": "我在。这是一条旧协议的回复。",
+        "type": "text"
+       }
+      ],
+      "createdAt": "2026-11-24T15:12:01.028Z",
+      "error": null,
+      "errorNote": null,
+      "finishedAt": null,
+      "id": "t1-0",
+      "kind": "answer",
+      "position": 0,
+      "readOnly": true,
+      "role": "assistant",
+      "sources": [],
+      "status": "complete",
+      "text": "我在。这是一条旧协议的回复。",
+      "turnId": 1,
+      "version": 1
+     }
+    ],
+    "readAt": null,
+    "reply": "【照料助手】我在。这是一条旧协议的回复。",
+    "replyTo": null,
+    "replyToMessage": null,
+    "requestId": "capture-1795533121-legacy",
+    "sources": [],
+    "speaker": "assistant",
+    "status": "complete",
+    "target": "auto",
+    "text": "你好",
+    "topicId": null
+   }
+  ]
+ },
+ "cases": [
+  {
+   "scenario": "dual",
+   "turnId": 2,
+   "frames": [
+    {
+     "type": "<post>",
+     "requestId": "capture-1795533121-dual",
+     "body": {
+      "accepted": true,
+      "protocol": "group-v1",
+      "turn": {
+       "blocks": null,
+       "createdAt": "2026-11-24T15:12:01.045Z",
+       "id": 2,
+       "images": [],
+       "messages": [],
+       "readAt": null,
+       "reply": "",
+       "replyTo": null,
+       "replyToMessage": null,
+       "requestId": "capture-1795533121-dual",
+       "sources": [],
+       "speaker": "assistant",
+       "status": "pending",
+       "target": "auto",
+       "text": "陪我聊两句",
+       "topicId": null
+      }
+     }
+    },
+    {
+     "type": "turn",
+     "petId": 1,
+     "turn": {
+      "id": 2,
+      "requestId": "capture-1795533121-dual",
+      "text": "陪我聊两句",
+      "topicId": null,
+      "replyTo": null,
+      "sources": [],
+      "speaker": "assistant",
+      "readAt": null,
+      "target": "auto",
+      "reply": "",
+      "status": "pending",
+      "blocks": null,
+      "images": [],
+      "replyToMessage": null,
+      "createdAt": "2026-11-24T15:12:01.045Z",
+      "messages": [
+       {
+        "id": "m1",
+        "turnId": 2,
+        "role": "pet",
+        "position": 0,
+        "kind": "respond",
+        "status": "queued",
+        "text": "",
+        "version": 1,
+        "sources": [],
+        "blocks": null,
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:01.046Z",
+        "finishedAt": null
+       },
+       {
+        "id": "m2",
+        "turnId": 2,
+        "role": "assistant",
+        "position": 1,
+        "kind": "answer",
+        "status": "queued",
+        "text": "",
+        "version": 1,
+        "sources": [],
+        "blocks": null,
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:01.046Z",
+        "finishedAt": null
+       }
+      ]
+     }
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 2,
+     "message": {
+      "id": "m1",
+      "turnId": 2,
+      "role": "pet",
+      "position": 0,
+      "kind": "respond",
+      "status": "running",
+      "text": "",
+      "version": 2,
+      "sources": [],
+      "blocks": null,
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:01.046Z",
+      "finishedAt": null
+     }
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 2,
+     "messageId": "m1",
+     "role": "pet",
+     "text": "想你啦！",
+     "version": 2
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 2,
+     "messageId": "m1",
+     "role": "pet",
+     "text": "想你啦！今天有乖乖等你回家，",
+     "version": 3
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 2,
+     "messageId": "m1",
+     "role": "pet",
+     "text": "想你啦！今天有乖乖等你回家，走动的事让照料助手告诉你。",
+     "version": 3
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 2,
+     "message": {
+      "id": "m1",
+      "turnId": 2,
+      "role": "pet",
+      "position": 0,
+      "kind": "respond",
+      "status": "complete",
+      "text": "想你啦！今天有乖乖等你回家，走动的事让照料助手告诉你。",
+      "version": 5,
+      "sources": [],
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "pet",
+        "text": "想你啦！今天有乖乖等你回家，走动的事让照料助手告诉你。"
+       }
+      ],
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:01.046Z",
+      "finishedAt": "2026-11-24T15:12:02.214Z"
+     }
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 2,
+     "message": {
+      "id": "m2",
+      "turnId": 2,
+      "role": "assistant",
+      "position": 1,
+      "kind": "answer",
+      "status": "running",
+      "text": "",
+      "version": 2,
+      "sources": [],
+      "blocks": null,
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:01.046Z",
+      "finishedAt": null
+     }
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 2,
+     "messageId": "m2",
+     "role": "assistant",
+     "text": "我查了今天的记录：",
+     "version": 2
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 2,
+     "messageId": "m2",
+     "role": "assistant",
+     "text": "我查了今天的记录：这项圈还没有上传走动数据，",
+     "version": 3
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 2,
+     "messageId": "m2",
+     "role": "assistant",
+     "text": "我查了今天的记录：这项圈还没有上传走动数据，所以暂时给不出今天走了多久。",
+     "version": 3
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 2,
+     "message": {
+      "id": "m2",
+      "turnId": 2,
+      "role": "assistant",
+      "position": 1,
+      "kind": "answer",
+      "status": "complete",
+      "text": "我查了今天的记录：这项圈还没有上传走动数据，所以暂时给不出今天走了多久。",
+      "version": 5,
+      "sources": [],
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "assistant",
+        "text": "我查了今天的记录：这项圈还没有上传走动数据，所以暂时给不出今天走了多久。"
+       }
+      ],
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:01.046Z",
+      "finishedAt": "2026-11-24T15:12:03.049Z"
+     }
+    },
+    {
+     "type": "turn",
+     "petId": 1,
+     "turn": {
+      "id": 2,
+      "requestId": "capture-1795533121-dual",
+      "text": "陪我聊两句",
+      "topicId": null,
+      "replyTo": null,
+      "sources": [],
+      "speaker": "pet",
+      "readAt": null,
+      "target": "auto",
+      "reply": "【爱宠】想你啦！今天有乖乖等你回家，走动的事让照料助手告诉你。\n【照料助手】我查了今天的记录：这项圈还没有上传走动数据，所以暂时给不出今天走了多久。",
+      "status": "complete",
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "pet",
+        "text": "想你啦！今天有乖乖等你回家，走动的事让照料助手告诉你。"
+       },
+       {
+        "type": "text",
+        "speaker": "assistant",
+        "text": "我查了今天的记录：这项圈还没有上传走动数据，所以暂时给不出今天走了多久。"
+       }
+      ],
+      "images": [],
+      "replyToMessage": null,
+      "createdAt": "2026-11-24T15:12:01.045Z",
+      "messages": [
+       {
+        "id": "m1",
+        "turnId": 2,
+        "role": "pet",
+        "position": 0,
+        "kind": "respond",
+        "status": "complete",
+        "text": "想你啦！今天有乖乖等你回家，走动的事让照料助手告诉你。",
+        "version": 5,
+        "sources": [],
+        "blocks": [
+         {
+          "type": "text",
+          "speaker": "pet",
+          "text": "想你啦！今天有乖乖等你回家，走动的事让照料助手告诉你。"
+         }
+        ],
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:01.046Z",
+        "finishedAt": "2026-11-24T15:12:02.214Z"
+       },
+       {
+        "id": "m2",
+        "turnId": 2,
+        "role": "assistant",
+        "position": 1,
+        "kind": "answer",
+        "status": "complete",
+        "text": "我查了今天的记录：这项圈还没有上传走动数据，所以暂时给不出今天走了多久。",
+        "version": 5,
+        "sources": [],
+        "blocks": [
+         {
+          "type": "text",
+          "speaker": "assistant",
+          "text": "我查了今天的记录：这项圈还没有上传走动数据，所以暂时给不出今天走了多久。"
+         }
+        ],
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:01.046Z",
+        "finishedAt": "2026-11-24T15:12:03.049Z"
+       }
+      ]
+     }
+    }
+   ],
+   "final": {
+    "blocks": [
+     {
+      "speaker": "pet",
+      "text": "想你啦！今天有乖乖等你回家，走动的事让照料助手告诉你。",
+      "type": "text"
+     },
+     {
+      "speaker": "assistant",
+      "text": "我查了今天的记录：这项圈还没有上传走动数据，所以暂时给不出今天走了多久。",
+      "type": "text"
+     }
+    ],
+    "createdAt": "2026-11-24T15:12:01.045Z",
+    "id": 2,
+    "images": [],
+    "messages": [
+     {
+      "blocks": [
+       {
+        "speaker": "pet",
+        "text": "想你啦！今天有乖乖等你回家，走动的事让照料助手告诉你。",
+        "type": "text"
+       }
+      ],
+      "createdAt": "2026-11-24T15:12:01.046Z",
+      "error": null,
+      "errorNote": null,
+      "finishedAt": "2026-11-24T15:12:02.214Z",
+      "id": "m1",
+      "kind": "respond",
+      "position": 0,
+      "readOnly": false,
+      "role": "pet",
+      "sources": [],
+      "status": "complete",
+      "text": "想你啦！今天有乖乖等你回家，走动的事让照料助手告诉你。",
+      "turnId": 2,
+      "version": 5
+     },
+     {
+      "blocks": [
+       {
+        "speaker": "assistant",
+        "text": "我查了今天的记录：这项圈还没有上传走动数据，所以暂时给不出今天走了多久。",
+        "type": "text"
+       }
+      ],
+      "createdAt": "2026-11-24T15:12:01.046Z",
+      "error": null,
+      "errorNote": null,
+      "finishedAt": "2026-11-24T15:12:03.049Z",
+      "id": "m2",
+      "kind": "answer",
+      "position": 1,
+      "readOnly": false,
+      "role": "assistant",
+      "sources": [],
+      "status": "complete",
+      "text": "我查了今天的记录：这项圈还没有上传走动数据，所以暂时给不出今天走了多久。",
+      "turnId": 2,
+      "version": 5
+     }
+    ],
+    "readAt": null,
+    "reply": "【爱宠】想你啦！今天有乖乖等你回家，走动的事让照料助手告诉你。\n【照料助手】我查了今天的记录：这项圈还没有上传走动数据，所以暂时给不出今天走了多久。",
+    "replyTo": null,
+    "replyToMessage": null,
+    "requestId": "capture-1795533121-dual",
+    "sources": [],
+    "speaker": "pet",
+    "status": "complete",
+    "target": "auto",
+    "text": "陪我聊两句",
+    "topicId": null
+   }
+  },
+  {
+   "scenario": "slow",
+   "turnId": 3,
+   "frames": [
+    {
+     "type": "<post>",
+     "requestId": "capture-1795533121-slow",
+     "body": {
+      "accepted": true,
+      "protocol": "group-v1",
+      "turn": {
+       "blocks": null,
+       "createdAt": "2026-11-24T15:12:03.902Z",
+       "id": 3,
+       "images": [],
+       "messages": [],
+       "readAt": null,
+       "reply": "",
+       "replyTo": null,
+       "replyToMessage": null,
+       "requestId": "capture-1795533121-slow",
+       "sources": [],
+       "speaker": "assistant",
+       "status": "pending",
+       "target": "auto",
+       "text": "慢慢说",
+       "topicId": null
+      }
+     }
+    },
+    {
+     "type": "turn",
+     "petId": 1,
+     "turn": {
+      "id": 3,
+      "requestId": "capture-1795533121-slow",
+      "text": "慢慢说",
+      "topicId": null,
+      "replyTo": null,
+      "sources": [],
+      "speaker": "assistant",
+      "readAt": null,
+      "target": "auto",
+      "reply": "",
+      "status": "pending",
+      "blocks": null,
+      "images": [],
+      "replyToMessage": null,
+      "createdAt": "2026-11-24T15:12:03.902Z",
+      "messages": [
+       {
+        "id": "m3",
+        "turnId": 3,
+        "role": "pet",
+        "position": 0,
+        "kind": "respond",
+        "status": "queued",
+        "text": "",
+        "version": 1,
+        "sources": [],
+        "blocks": null,
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:03.910Z",
+        "finishedAt": null
+       },
+       {
+        "id": "m4",
+        "turnId": 3,
+        "role": "assistant",
+        "position": 1,
+        "kind": "answer",
+        "status": "queued",
+        "text": "",
+        "version": 1,
+        "sources": [],
+        "blocks": null,
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:03.910Z",
+        "finishedAt": null
+       }
+      ]
+     }
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 3,
+     "message": {
+      "id": "m3",
+      "turnId": 3,
+      "role": "pet",
+      "position": 0,
+      "kind": "respond",
+      "status": "running",
+      "text": "",
+      "version": 2,
+      "sources": [],
+      "blocks": null,
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:03.910Z",
+      "finishedAt": null
+     }
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 3,
+     "messageId": "m3",
+     "role": "pet",
+     "text": "我在呢～",
+     "version": 2
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 3,
+     "messageId": "m3",
+     "role": "pet",
+     "text": "我在呢～你慢慢说。",
+     "version": 3
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 3,
+     "message": {
+      "id": "m3",
+      "turnId": 3,
+      "role": "pet",
+      "position": 0,
+      "kind": "respond",
+      "status": "complete",
+      "text": "我在呢～你慢慢说。",
+      "version": 5,
+      "sources": [],
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "pet",
+        "text": "我在呢～你慢慢说。"
+       }
+      ],
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:03.910Z",
+      "finishedAt": "2026-11-24T15:12:05.850Z"
+     }
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 3,
+     "message": {
+      "id": "m4",
+      "turnId": 3,
+      "role": "assistant",
+      "position": 1,
+      "kind": "answer",
+      "status": "running",
+      "text": "",
+      "version": 2,
+      "sources": [],
+      "blocks": null,
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:03.910Z",
+      "finishedAt": null
+     }
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 3,
+     "messageId": "m4",
+     "role": "assistant",
+     "text": "狗狗一天睡够 12 到 14 小时都算正常。",
+     "version": 2
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 3,
+     "messageId": "m4",
+     "role": "assistant",
+     "text": "狗狗一天睡够 12 到 14 小时都算正常。刚睡醒时精神好、",
+     "version": 3
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 3,
+     "messageId": "m4",
+     "role": "assistant",
+     "text": "狗狗一天睡够 12 到 14 小时都算正常。刚睡醒时精神好、吃喝照常，",
+     "version": 4
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 3,
+     "messageId": "m4",
+     "role": "assistant",
+     "text": "狗狗一天睡够 12 到 14 小时都算正常。刚睡醒时精神好、吃喝照常，就不用太担心；",
+     "version": 5
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 3,
+     "messageId": "m4",
+     "role": "assistant",
+     "text": "狗狗一天睡够 12 到 14 小时都算正常。刚睡醒时精神好、吃喝照常，就不用太担心；如果整天蔫着不吃，再联系兽医。",
+     "version": 6
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 3,
+     "message": {
+      "id": "m4",
+      "turnId": 3,
+      "role": "assistant",
+      "position": 1,
+      "kind": "answer",
+      "status": "complete",
+      "text": "狗狗一天睡够 12 到 14 小时都算正常。刚睡醒时精神好、吃喝照常，就不用太担心；如果整天蔫着不吃，再联系兽医。",
+      "version": 8,
+      "sources": [],
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "assistant",
+        "text": "狗狗一天睡够 12 到 14 小时都算正常。刚睡醒时精神好、吃喝照常，就不用太担心；如果整天蔫着不吃，再联系兽医。"
+       }
+      ],
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:03.910Z",
+      "finishedAt": "2026-11-24T15:12:12.317Z"
+     }
+    },
+    {
+     "type": "turn",
+     "petId": 1,
+     "turn": {
+      "id": 3,
+      "requestId": "capture-1795533121-slow",
+      "text": "慢慢说",
+      "topicId": null,
+      "replyTo": null,
+      "sources": [],
+      "speaker": "pet",
+      "readAt": null,
+      "target": "auto",
+      "reply": "【爱宠】我在呢～你慢慢说。\n【照料助手】狗狗一天睡够 12 到 14 小时都算正常。刚睡醒时精神好、吃喝照常，就不用太担心；如果整天蔫着不吃，再联系兽医。",
+      "status": "complete",
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "pet",
+        "text": "我在呢～你慢慢说。"
+       },
+       {
+        "type": "text",
+        "speaker": "assistant",
+        "text": "狗狗一天睡够 12 到 14 小时都算正常。刚睡醒时精神好、吃喝照常，就不用太担心；如果整天蔫着不吃，再联系兽医。"
+       }
+      ],
+      "images": [],
+      "replyToMessage": null,
+      "createdAt": "2026-11-24T15:12:03.902Z",
+      "messages": [
+       {
+        "id": "m3",
+        "turnId": 3,
+        "role": "pet",
+        "position": 0,
+        "kind": "respond",
+        "status": "complete",
+        "text": "我在呢～你慢慢说。",
+        "version": 5,
+        "sources": [],
+        "blocks": [
+         {
+          "type": "text",
+          "speaker": "pet",
+          "text": "我在呢～你慢慢说。"
+         }
+        ],
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:03.910Z",
+        "finishedAt": "2026-11-24T15:12:05.850Z"
+       },
+       {
+        "id": "m4",
+        "turnId": 3,
+        "role": "assistant",
+        "position": 1,
+        "kind": "answer",
+        "status": "complete",
+        "text": "狗狗一天睡够 12 到 14 小时都算正常。刚睡醒时精神好、吃喝照常，就不用太担心；如果整天蔫着不吃，再联系兽医。",
+        "version": 8,
+        "sources": [],
+        "blocks": [
+         {
+          "type": "text",
+          "speaker": "assistant",
+          "text": "狗狗一天睡够 12 到 14 小时都算正常。刚睡醒时精神好、吃喝照常，就不用太担心；如果整天蔫着不吃，再联系兽医。"
+         }
+        ],
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:03.910Z",
+        "finishedAt": "2026-11-24T15:12:12.317Z"
+       }
+      ]
+     }
+    }
+   ],
+   "final": {
+    "blocks": [
+     {
+      "speaker": "pet",
+      "text": "我在呢～你慢慢说。",
+      "type": "text"
+     },
+     {
+      "speaker": "assistant",
+      "text": "狗狗一天睡够 12 到 14 小时都算正常。刚睡醒时精神好、吃喝照常，就不用太担心；如果整天蔫着不吃，再联系兽医。",
+      "type": "text"
+     }
+    ],
+    "createdAt": "2026-11-24T15:12:03.902Z",
+    "id": 3,
+    "images": [],
+    "messages": [
+     {
+      "blocks": [
+       {
+        "speaker": "pet",
+        "text": "我在呢～你慢慢说。",
+        "type": "text"
+       }
+      ],
+      "createdAt": "2026-11-24T15:12:03.910Z",
+      "error": null,
+      "errorNote": null,
+      "finishedAt": "2026-11-24T15:12:05.850Z",
+      "id": "m3",
+      "kind": "respond",
+      "position": 0,
+      "readOnly": false,
+      "role": "pet",
+      "sources": [],
+      "status": "complete",
+      "text": "我在呢～你慢慢说。",
+      "turnId": 3,
+      "version": 5
+     },
+     {
+      "blocks": [
+       {
+        "speaker": "assistant",
+        "text": "狗狗一天睡够 12 到 14 小时都算正常。刚睡醒时精神好、吃喝照常，就不用太担心；如果整天蔫着不吃，再联系兽医。",
+        "type": "text"
+       }
+      ],
+      "createdAt": "2026-11-24T15:12:03.910Z",
+      "error": null,
+      "errorNote": null,
+      "finishedAt": "2026-11-24T15:12:12.317Z",
+      "id": "m4",
+      "kind": "answer",
+      "position": 1,
+      "readOnly": false,
+      "role": "assistant",
+      "sources": [],
+      "status": "complete",
+      "text": "狗狗一天睡够 12 到 14 小时都算正常。刚睡醒时精神好、吃喝照常，就不用太担心；如果整天蔫着不吃，再联系兽医。",
+      "turnId": 3,
+      "version": 8
+     }
+    ],
+    "readAt": null,
+    "reply": "【爱宠】我在呢～你慢慢说。\n【照料助手】狗狗一天睡够 12 到 14 小时都算正常。刚睡醒时精神好、吃喝照常，就不用太担心；如果整天蔫着不吃，再联系兽医。",
+    "replyTo": null,
+    "replyToMessage": null,
+    "requestId": "capture-1795533121-slow",
+    "sources": [],
+    "speaker": "pet",
+    "status": "complete",
+    "target": "auto",
+    "text": "慢慢说",
+    "topicId": null
+   }
+  },
+  {
+   "scenario": "fail",
+   "turnId": 4,
+   "frames": [
+    {
+     "type": "<post>",
+     "requestId": "capture-1795533121-fail",
+     "body": {
+      "accepted": true,
+      "protocol": "group-v1",
+      "turn": {
+       "blocks": null,
+       "createdAt": "2026-11-24T15:12:13.160Z",
+       "id": 4,
+       "images": [],
+       "messages": [],
+       "readAt": null,
+       "reply": "",
+       "replyTo": null,
+       "replyToMessage": null,
+       "requestId": "capture-1795533121-fail",
+       "sources": [],
+       "speaker": "assistant",
+       "status": "pending",
+       "target": "both",
+       "text": "第二位失败",
+       "topicId": null
+      }
+     }
+    },
+    {
+     "type": "turn",
+     "petId": 1,
+     "turn": {
+      "id": 4,
+      "requestId": "capture-1795533121-fail",
+      "text": "第二位失败",
+      "topicId": null,
+      "replyTo": null,
+      "sources": [],
+      "speaker": "assistant",
+      "readAt": null,
+      "target": "both",
+      "reply": "",
+      "status": "pending",
+      "blocks": null,
+      "images": [],
+      "replyToMessage": null,
+      "createdAt": "2026-11-24T15:12:13.160Z",
+      "messages": [
+       {
+        "id": "m5",
+        "turnId": 4,
+        "role": "pet",
+        "position": 0,
+        "kind": "respond",
+        "status": "queued",
+        "text": "",
+        "version": 1,
+        "sources": [],
+        "blocks": null,
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:13.182Z",
+        "finishedAt": null
+       },
+       {
+        "id": "m6",
+        "turnId": 4,
+        "role": "assistant",
+        "position": 1,
+        "kind": "answer",
+        "status": "queued",
+        "text": "",
+        "version": 1,
+        "sources": [],
+        "blocks": null,
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:13.182Z",
+        "finishedAt": null
+       }
+      ]
+     }
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 4,
+     "message": {
+      "id": "m5",
+      "turnId": 4,
+      "role": "pet",
+      "position": 0,
+      "kind": "respond",
+      "status": "running",
+      "text": "",
+      "version": 2,
+      "sources": [],
+      "blocks": null,
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:13.182Z",
+      "finishedAt": null
+     }
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 4,
+     "messageId": "m5",
+     "role": "pet",
+     "text": "我在呢，",
+     "version": 2
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 4,
+     "messageId": "m5",
+     "role": "pet",
+     "text": "我在呢，让照料助手帮你查。",
+     "version": 3
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 4,
+     "message": {
+      "id": "m5",
+      "turnId": 4,
+      "role": "pet",
+      "position": 0,
+      "kind": "respond",
+      "status": "complete",
+      "text": "我在呢，让照料助手帮你查。",
+      "version": 4,
+      "sources": [],
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "pet",
+        "text": "我在呢，让照料助手帮你查。"
+       }
+      ],
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:13.182Z",
+      "finishedAt": "2026-11-24T15:12:13.921Z"
+     }
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 4,
+     "message": {
+      "id": "m6",
+      "turnId": 4,
+      "role": "assistant",
+      "position": 1,
+      "kind": "answer",
+      "status": "running",
+      "text": "",
+      "version": 2,
+      "sources": [],
+      "blocks": null,
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:13.182Z",
+      "finishedAt": null
+     }
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 4,
+     "messageId": "m6",
+     "role": "assistant",
+     "text": "这次查到了：",
+     "version": 2
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 4,
+     "message": {
+      "id": "m6",
+      "turnId": 4,
+      "role": "assistant",
+      "position": 1,
+      "kind": "answer",
+      "status": "failed",
+      "text": "",
+      "version": 4,
+      "sources": [],
+      "blocks": null,
+      "error": "model_error",
+      "errorNote": "这条消息没有生成成功，请稍后重试。",
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:13.182Z",
+      "finishedAt": "2026-11-24T15:12:14.250Z"
+     }
+    },
+    {
+     "type": "turn",
+     "petId": 1,
+     "turn": {
+      "id": 4,
+      "requestId": "capture-1795533121-fail",
+      "text": "第二位失败",
+      "topicId": null,
+      "replyTo": null,
+      "sources": [],
+      "speaker": "pet",
+      "readAt": null,
+      "target": "both",
+      "reply": "【爱宠】我在呢，让照料助手帮你查。\n【照料助手】（这条消息没有生成成功，请稍后重试。）",
+      "status": "complete",
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "pet",
+        "text": "我在呢，让照料助手帮你查。"
+       },
+       {
+        "type": "text",
+        "speaker": "assistant",
+        "text": "（这条消息没有生成成功，请稍后重试。）"
+       }
+      ],
+      "images": [],
+      "replyToMessage": null,
+      "createdAt": "2026-11-24T15:12:13.160Z",
+      "messages": [
+       {
+        "id": "m5",
+        "turnId": 4,
+        "role": "pet",
+        "position": 0,
+        "kind": "respond",
+        "status": "complete",
+        "text": "我在呢，让照料助手帮你查。",
+        "version": 4,
+        "sources": [],
+        "blocks": [
+         {
+          "type": "text",
+          "speaker": "pet",
+          "text": "我在呢，让照料助手帮你查。"
+         }
+        ],
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:13.182Z",
+        "finishedAt": "2026-11-24T15:12:13.921Z"
+       },
+       {
+        "id": "m6",
+        "turnId": 4,
+        "role": "assistant",
+        "position": 1,
+        "kind": "answer",
+        "status": "failed",
+        "text": "",
+        "version": 4,
+        "sources": [],
+        "blocks": null,
+        "error": "model_error",
+        "errorNote": "这条消息没有生成成功，请稍后重试。",
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:13.182Z",
+        "finishedAt": "2026-11-24T15:12:14.250Z"
+       }
+      ]
+     }
+    }
+   ],
+   "final": {
+    "blocks": [
+     {
+      "speaker": "pet",
+      "text": "我在呢，让照料助手帮你查。",
+      "type": "text"
+     },
+     {
+      "speaker": "assistant",
+      "text": "（这条消息没有生成成功，请稍后重试。）",
+      "type": "text"
+     }
+    ],
+    "createdAt": "2026-11-24T15:12:13.160Z",
+    "id": 4,
+    "images": [],
+    "messages": [
+     {
+      "blocks": [
+       {
+        "speaker": "pet",
+        "text": "我在呢，让照料助手帮你查。",
+        "type": "text"
+       }
+      ],
+      "createdAt": "2026-11-24T15:12:13.182Z",
+      "error": null,
+      "errorNote": null,
+      "finishedAt": "2026-11-24T15:12:13.921Z",
+      "id": "m5",
+      "kind": "respond",
+      "position": 0,
+      "readOnly": false,
+      "role": "pet",
+      "sources": [],
+      "status": "complete",
+      "text": "我在呢，让照料助手帮你查。",
+      "turnId": 4,
+      "version": 4
+     },
+     {
+      "blocks": null,
+      "createdAt": "2026-11-24T15:12:13.182Z",
+      "error": "model_error",
+      "errorNote": "这条消息没有生成成功，请稍后重试。",
+      "finishedAt": "2026-11-24T15:12:14.250Z",
+      "id": "m6",
+      "kind": "answer",
+      "position": 1,
+      "readOnly": false,
+      "role": "assistant",
+      "sources": [],
+      "status": "failed",
+      "text": "",
+      "turnId": 4,
+      "version": 4
+     }
+    ],
+    "readAt": null,
+    "reply": "【爱宠】我在呢，让照料助手帮你查。\n【照料助手】（这条消息没有生成成功，请稍后重试。）",
+    "replyTo": null,
+    "replyToMessage": null,
+    "requestId": "capture-1795533121-fail",
+    "sources": [],
+    "speaker": "pet",
+    "status": "complete",
+    "target": "both",
+    "text": "第二位失败",
+    "topicId": null
+   },
+   "retry": {
+    "post": {
+     "blocks": [
+      {
+       "speaker": "pet",
+       "text": "我在呢，让照料助手帮你查。",
+       "type": "text"
+      },
+      {
+       "speaker": "assistant",
+       "text": "（这条消息没有生成成功，请稍后重试。）",
+       "type": "text"
+      }
+     ],
+     "createdAt": "2026-11-24T15:12:13.160Z",
+     "id": 4,
+     "images": [],
+     "messages": [
+      {
+       "blocks": [
+        {
+         "speaker": "pet",
+         "text": "我在呢，让照料助手帮你查。",
+         "type": "text"
+        }
+       ],
+       "createdAt": "2026-11-24T15:12:13.182Z",
+       "error": null,
+       "errorNote": null,
+       "finishedAt": "2026-11-24T15:12:13.921Z",
+       "id": "m5",
+       "kind": "respond",
+       "position": 0,
+       "readOnly": false,
+       "role": "pet",
+       "sources": [],
+       "status": "complete",
+       "text": "我在呢，让照料助手帮你查。",
+       "turnId": 4,
+       "version": 4
+      },
+      {
+       "blocks": null,
+       "createdAt": "2026-11-24T15:12:13.182Z",
+       "error": null,
+       "errorNote": null,
+       "finishedAt": null,
+       "id": "m6",
+       "kind": "answer",
+       "position": 1,
+       "readOnly": false,
+       "role": "assistant",
+       "sources": [],
+       "status": "queued",
+       "text": "",
+       "turnId": 4,
+       "version": 5
+      }
+     ],
+     "readAt": null,
+     "reply": "【爱宠】我在呢，让照料助手帮你查。\n【照料助手】（这条消息没有生成成功，请稍后重试。）",
+     "replyTo": null,
+     "replyToMessage": null,
+     "requestId": "capture-1795533121-fail",
+     "sources": [],
+     "speaker": "pet",
+     "status": "pending",
+     "target": "both",
+     "text": "第二位失败",
+     "topicId": null
+    },
+    "frames": [
+     {
+      "type": "turn",
+      "petId": 1,
+      "turn": {
+       "id": 4,
+       "requestId": "capture-1795533121-fail",
+       "text": "第二位失败",
+       "topicId": null,
+       "replyTo": null,
+       "sources": [],
+       "speaker": "pet",
+       "readAt": null,
+       "target": "both",
+       "reply": "【爱宠】我在呢，让照料助手帮你查。\n【照料助手】（这条消息没有生成成功，请稍后重试。）",
+       "status": "pending",
+       "blocks": [
+        {
+         "type": "text",
+         "speaker": "pet",
+         "text": "我在呢，让照料助手帮你查。"
+        },
+        {
+         "type": "text",
+         "speaker": "assistant",
+         "text": "（这条消息没有生成成功，请稍后重试。）"
+        }
+       ],
+       "images": [],
+       "replyToMessage": null,
+       "createdAt": "2026-11-24T15:12:13.160Z",
+       "messages": [
+        {
+         "id": "m5",
+         "turnId": 4,
+         "role": "pet",
+         "position": 0,
+         "kind": "respond",
+         "status": "complete",
+         "text": "我在呢，让照料助手帮你查。",
+         "version": 4,
+         "sources": [],
+         "blocks": [
+          {
+           "type": "text",
+           "speaker": "pet",
+           "text": "我在呢，让照料助手帮你查。"
+          }
+         ],
+         "error": null,
+         "errorNote": null,
+         "readOnly": false,
+         "createdAt": "2026-11-24T15:12:13.182Z",
+         "finishedAt": "2026-11-24T15:12:13.921Z"
+        },
+        {
+         "id": "m6",
+         "turnId": 4,
+         "role": "assistant",
+         "position": 1,
+         "kind": "answer",
+         "status": "queued",
+         "text": "",
+         "version": 5,
+         "sources": [],
+         "blocks": null,
+         "error": null,
+         "errorNote": null,
+         "readOnly": false,
+         "createdAt": "2026-11-24T15:12:13.182Z",
+         "finishedAt": null
+        }
+       ]
+      }
+     },
+     {
+      "type": "message",
+      "petId": 1,
+      "turnId": 4,
+      "message": {
+       "id": "m6",
+       "turnId": 4,
+       "role": "assistant",
+       "position": 1,
+       "kind": "answer",
+       "status": "running",
+       "text": "",
+       "version": 6,
+       "sources": [],
+       "blocks": null,
+       "error": null,
+       "errorNote": null,
+       "readOnly": false,
+       "createdAt": "2026-11-24T15:12:13.182Z",
+       "finishedAt": null
+      }
+     },
+     {
+      "type": "message_delta",
+      "petId": 1,
+      "turnId": 4,
+      "messageId": "m6",
+      "role": "assistant",
+      "text": "这次查到了：",
+      "version": 6
+     },
+     {
+      "type": "message_delta",
+      "petId": 1,
+      "turnId": 4,
+      "messageId": "m6",
+      "role": "assistant",
+      "text": "这次查到了：今天没有走动记录。",
+      "version": 7
+     },
+     {
+      "type": "message",
+      "petId": 1,
+      "turnId": 4,
+      "message": {
+       "id": "m6",
+       "turnId": 4,
+       "role": "assistant",
+       "position": 1,
+       "kind": "answer",
+       "status": "complete",
+       "text": "这次查到了：今天没有走动记录。",
+       "version": 8,
+       "sources": [],
+       "blocks": [
+        {
+         "type": "text",
+         "speaker": "assistant",
+         "text": "这次查到了：今天没有走动记录。"
+        }
+       ],
+       "error": null,
+       "errorNote": null,
+       "readOnly": false,
+       "createdAt": "2026-11-24T15:12:13.182Z",
+       "finishedAt": "2026-11-24T15:12:15.532Z"
+      }
+     },
+     {
+      "type": "turn",
+      "petId": 1,
+      "turn": {
+       "id": 4,
+       "requestId": "capture-1795533121-fail",
+       "text": "第二位失败",
+       "topicId": null,
+       "replyTo": null,
+       "sources": [],
+       "speaker": "pet",
+       "readAt": null,
+       "target": "both",
+       "reply": "【爱宠】我在呢，让照料助手帮你查。\n【照料助手】这次查到了：今天没有走动记录。",
+       "status": "complete",
+       "blocks": [
+        {
+         "type": "text",
+         "speaker": "pet",
+         "text": "我在呢，让照料助手帮你查。"
+        },
+        {
+         "type": "text",
+         "speaker": "assistant",
+         "text": "这次查到了：今天没有走动记录。"
+        }
+       ],
+       "images": [],
+       "replyToMessage": null,
+       "createdAt": "2026-11-24T15:12:13.160Z",
+       "messages": [
+        {
+         "id": "m5",
+         "turnId": 4,
+         "role": "pet",
+         "position": 0,
+         "kind": "respond",
+         "status": "complete",
+         "text": "我在呢，让照料助手帮你查。",
+         "version": 4,
+         "sources": [],
+         "blocks": [
+          {
+           "type": "text",
+           "speaker": "pet",
+           "text": "我在呢，让照料助手帮你查。"
+          }
+         ],
+         "error": null,
+         "errorNote": null,
+         "readOnly": false,
+         "createdAt": "2026-11-24T15:12:13.182Z",
+         "finishedAt": "2026-11-24T15:12:13.921Z"
+        },
+        {
+         "id": "m6",
+         "turnId": 4,
+         "role": "assistant",
+         "position": 1,
+         "kind": "answer",
+         "status": "complete",
+         "text": "这次查到了：今天没有走动记录。",
+         "version": 8,
+         "sources": [],
+         "blocks": [
+          {
+           "type": "text",
+           "speaker": "assistant",
+           "text": "这次查到了：今天没有走动记录。"
+          }
+         ],
+         "error": null,
+         "errorNote": null,
+         "readOnly": false,
+         "createdAt": "2026-11-24T15:12:13.182Z",
+         "finishedAt": "2026-11-24T15:12:15.532Z"
+        }
+       ]
+      }
+     }
+    ],
+    "final": {
+     "blocks": [
+      {
+       "speaker": "pet",
+       "text": "我在呢，让照料助手帮你查。",
+       "type": "text"
+      },
+      {
+       "speaker": "assistant",
+       "text": "这次查到了：今天没有走动记录。",
+       "type": "text"
+      }
+     ],
+     "createdAt": "2026-11-24T15:12:13.160Z",
+     "id": 4,
+     "images": [],
+     "messages": [
+      {
+       "blocks": [
+        {
+         "speaker": "pet",
+         "text": "我在呢，让照料助手帮你查。",
+         "type": "text"
+        }
+       ],
+       "createdAt": "2026-11-24T15:12:13.182Z",
+       "error": null,
+       "errorNote": null,
+       "finishedAt": "2026-11-24T15:12:13.921Z",
+       "id": "m5",
+       "kind": "respond",
+       "position": 0,
+       "readOnly": false,
+       "role": "pet",
+       "sources": [],
+       "status": "complete",
+       "text": "我在呢，让照料助手帮你查。",
+       "turnId": 4,
+       "version": 4
+      },
+      {
+       "blocks": [
+        {
+         "speaker": "assistant",
+         "text": "这次查到了：今天没有走动记录。",
+         "type": "text"
+        }
+       ],
+       "createdAt": "2026-11-24T15:12:13.182Z",
+       "error": null,
+       "errorNote": null,
+       "finishedAt": "2026-11-24T15:12:15.532Z",
+       "id": "m6",
+       "kind": "answer",
+       "position": 1,
+       "readOnly": false,
+       "role": "assistant",
+       "sources": [],
+       "status": "complete",
+       "text": "这次查到了：今天没有走动记录。",
+       "turnId": 4,
+       "version": 8
+      }
+     ],
+     "readAt": null,
+     "reply": "【爱宠】我在呢，让照料助手帮你查。\n【照料助手】这次查到了：今天没有走动记录。",
+     "replyTo": null,
+     "replyToMessage": null,
+     "requestId": "capture-1795533121-fail",
+     "sources": [],
+     "speaker": "pet",
+     "status": "complete",
+     "target": "both",
+     "text": "第二位失败",
+     "topicId": null
+    }
+   }
+  },
+  {
+   "scenario": "drop",
+   "turnId": 5,
+   "frames": [
+    {
+     "type": "<post>",
+     "requestId": "capture-1795533121-drop",
+     "body": {
+      "accepted": true,
+      "protocol": "group-v1",
+      "turn": {
+       "blocks": null,
+       "createdAt": "2026-11-24T15:12:16.381Z",
+       "id": 5,
+       "images": [],
+       "messages": [],
+       "readAt": null,
+       "reply": "",
+       "replyTo": null,
+       "replyToMessage": null,
+       "requestId": "capture-1795533121-drop",
+       "sources": [],
+       "speaker": "assistant",
+       "status": "pending",
+       "target": "auto",
+       "text": "断线一下",
+       "topicId": null
+      }
+     }
+    },
+    {
+     "type": "turn",
+     "petId": 1,
+     "turn": {
+      "id": 5,
+      "requestId": "capture-1795533121-drop",
+      "text": "断线一下",
+      "topicId": null,
+      "replyTo": null,
+      "sources": [],
+      "speaker": "assistant",
+      "readAt": null,
+      "target": "auto",
+      "reply": "",
+      "status": "pending",
+      "blocks": null,
+      "images": [],
+      "replyToMessage": null,
+      "createdAt": "2026-11-24T15:12:16.381Z",
+      "messages": [
+       {
+        "id": "m7",
+        "turnId": 5,
+        "role": "pet",
+        "position": 0,
+        "kind": "respond",
+        "status": "queued",
+        "text": "",
+        "version": 1,
+        "sources": [],
+        "blocks": null,
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:16.389Z",
+        "finishedAt": null
+       },
+       {
+        "id": "m8",
+        "turnId": 5,
+        "role": "assistant",
+        "position": 1,
+        "kind": "answer",
+        "status": "queued",
+        "text": "",
+        "version": 1,
+        "sources": [],
+        "blocks": null,
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:16.389Z",
+        "finishedAt": null
+       }
+      ]
+     }
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 5,
+     "message": {
+      "id": "m7",
+      "turnId": 5,
+      "role": "pet",
+      "position": 0,
+      "kind": "respond",
+      "status": "running",
+      "text": "",
+      "version": 2,
+      "sources": [],
+      "blocks": null,
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:16.389Z",
+      "finishedAt": null
+     }
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 5,
+     "messageId": "m7",
+     "role": "pet",
+     "text": "别担心，",
+     "version": 2
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 5,
+     "messageId": "m7",
+     "role": "pet",
+     "text": "别担心，问问照料助手吧。",
+     "version": 3
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 5,
+     "message": {
+      "id": "m7",
+      "turnId": 5,
+      "role": "pet",
+      "position": 0,
+      "kind": "respond",
+      "status": "complete",
+      "text": "别担心，问问照料助手吧。",
+      "version": 5,
+      "sources": [],
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "pet",
+        "text": "别担心，问问照料助手吧。"
+       }
+      ],
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:16.389Z",
+      "finishedAt": "2026-11-24T15:12:17.932Z"
+     }
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 5,
+     "message": {
+      "id": "m8",
+      "turnId": 5,
+      "role": "assistant",
+      "position": 1,
+      "kind": "answer",
+      "status": "running",
+      "text": "",
+      "version": 2,
+      "sources": [],
+      "blocks": null,
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:16.389Z",
+      "finishedAt": null
+     }
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 5,
+     "messageId": "m8",
+     "role": "assistant",
+     "text": "先说结论：",
+     "version": 2
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 5,
+     "messageId": "m8",
+     "role": "assistant",
+     "text": "先说结论：多数情况下不用紧张，",
+     "version": 3
+    },
+    {
+     "type": "<closed>"
+    },
+    {
+     "type": "<open>"
+    },
+    {
+     "type": "<refetch>",
+     "turns": [
+      {
+       "blocks": [
+        {
+         "speaker": "assistant",
+         "text": "我在。这是一条旧协议的回复。",
+         "type": "text"
+        }
+       ],
+       "createdAt": "2026-11-24T15:12:01.028Z",
+       "id": 1,
+       "images": [],
+       "messages": [
+        {
+         "blocks": [
+          {
+           "speaker": "assistant",
+           "text": "我在。这是一条旧协议的回复。",
+           "type": "text"
+          }
+         ],
+         "createdAt": "2026-11-24T15:12:01.028Z",
+         "error": null,
+         "errorNote": null,
+         "finishedAt": null,
+         "id": "t1-0",
+         "kind": "answer",
+         "position": 0,
+         "readOnly": true,
+         "role": "assistant",
+         "sources": [],
+         "status": "complete",
+         "text": "我在。这是一条旧协议的回复。",
+         "turnId": 1,
+         "version": 1
+        }
+       ],
+       "readAt": null,
+       "reply": "【照料助手】我在。这是一条旧协议的回复。",
+       "replyTo": null,
+       "replyToMessage": null,
+       "requestId": "capture-1795533121-legacy",
+       "sources": [],
+       "speaker": "assistant",
+       "status": "complete",
+       "target": "auto",
+       "text": "你好",
+       "topicId": null
+      },
+      {
+       "blocks": [
+        {
+         "speaker": "pet",
+         "text": "想你啦！今天有乖乖等你回家，走动的事让照料助手告诉你。",
+         "type": "text"
+        },
+        {
+         "speaker": "assistant",
+         "text": "我查了今天的记录：这项圈还没有上传走动数据，所以暂时给不出今天走了多久。",
+         "type": "text"
+        }
+       ],
+       "createdAt": "2026-11-24T15:12:01.045Z",
+       "id": 2,
+       "images": [],
+       "messages": [
+        {
+         "blocks": [
+          {
+           "speaker": "pet",
+           "text": "想你啦！今天有乖乖等你回家，走动的事让照料助手告诉你。",
+           "type": "text"
+          }
+         ],
+         "createdAt": "2026-11-24T15:12:01.046Z",
+         "error": null,
+         "errorNote": null,
+         "finishedAt": "2026-11-24T15:12:02.214Z",
+         "id": "m1",
+         "kind": "respond",
+         "position": 0,
+         "readOnly": false,
+         "role": "pet",
+         "sources": [],
+         "status": "complete",
+         "text": "想你啦！今天有乖乖等你回家，走动的事让照料助手告诉你。",
+         "turnId": 2,
+         "version": 5
+        },
+        {
+         "blocks": [
+          {
+           "speaker": "assistant",
+           "text": "我查了今天的记录：这项圈还没有上传走动数据，所以暂时给不出今天走了多久。",
+           "type": "text"
+          }
+         ],
+         "createdAt": "2026-11-24T15:12:01.046Z",
+         "error": null,
+         "errorNote": null,
+         "finishedAt": "2026-11-24T15:12:03.049Z",
+         "id": "m2",
+         "kind": "answer",
+         "position": 1,
+         "readOnly": false,
+         "role": "assistant",
+         "sources": [],
+         "status": "complete",
+         "text": "我查了今天的记录：这项圈还没有上传走动数据，所以暂时给不出今天走了多久。",
+         "turnId": 2,
+         "version": 5
+        }
+       ],
+       "readAt": null,
+       "reply": "【爱宠】想你啦！今天有乖乖等你回家，走动的事让照料助手告诉你。\n【照料助手】我查了今天的记录：这项圈还没有上传走动数据，所以暂时给不出今天走了多久。",
+       "replyTo": null,
+       "replyToMessage": null,
+       "requestId": "capture-1795533121-dual",
+       "sources": [],
+       "speaker": "pet",
+       "status": "complete",
+       "target": "auto",
+       "text": "陪我聊两句",
+       "topicId": null
+      },
+      {
+       "blocks": [
+        {
+         "speaker": "pet",
+         "text": "我在呢～你慢慢说。",
+         "type": "text"
+        },
+        {
+         "speaker": "assistant",
+         "text": "狗狗一天睡够 12 到 14 小时都算正常。刚睡醒时精神好、吃喝照常，就不用太担心；如果整天蔫着不吃，再联系兽医。",
+         "type": "text"
+        }
+       ],
+       "createdAt": "2026-11-24T15:12:03.902Z",
+       "id": 3,
+       "images": [],
+       "messages": [
+        {
+         "blocks": [
+          {
+           "speaker": "pet",
+           "text": "我在呢～你慢慢说。",
+           "type": "text"
+          }
+         ],
+         "createdAt": "2026-11-24T15:12:03.910Z",
+         "error": null,
+         "errorNote": null,
+         "finishedAt": "2026-11-24T15:12:05.850Z",
+         "id": "m3",
+         "kind": "respond",
+         "position": 0,
+         "readOnly": false,
+         "role": "pet",
+         "sources": [],
+         "status": "complete",
+         "text": "我在呢～你慢慢说。",
+         "turnId": 3,
+         "version": 5
+        },
+        {
+         "blocks": [
+          {
+           "speaker": "assistant",
+           "text": "狗狗一天睡够 12 到 14 小时都算正常。刚睡醒时精神好、吃喝照常，就不用太担心；如果整天蔫着不吃，再联系兽医。",
+           "type": "text"
+          }
+         ],
+         "createdAt": "2026-11-24T15:12:03.910Z",
+         "error": null,
+         "errorNote": null,
+         "finishedAt": "2026-11-24T15:12:12.317Z",
+         "id": "m4",
+         "kind": "answer",
+         "position": 1,
+         "readOnly": false,
+         "role": "assistant",
+         "sources": [],
+         "status": "complete",
+         "text": "狗狗一天睡够 12 到 14 小时都算正常。刚睡醒时精神好、吃喝照常，就不用太担心；如果整天蔫着不吃，再联系兽医。",
+         "turnId": 3,
+         "version": 8
+        }
+       ],
+       "readAt": null,
+       "reply": "【爱宠】我在呢～你慢慢说。\n【照料助手】狗狗一天睡够 12 到 14 小时都算正常。刚睡醒时精神好、吃喝照常，就不用太担心；如果整天蔫着不吃，再联系兽医。",
+       "replyTo": null,
+       "replyToMessage": null,
+       "requestId": "capture-1795533121-slow",
+       "sources": [],
+       "speaker": "pet",
+       "status": "complete",
+       "target": "auto",
+       "text": "慢慢说",
+       "topicId": null
+      },
+      {
+       "blocks": [
+        {
+         "speaker": "pet",
+         "text": "我在呢，让照料助手帮你查。",
+         "type": "text"
+        },
+        {
+         "speaker": "assistant",
+         "text": "这次查到了：今天没有走动记录。",
+         "type": "text"
+        }
+       ],
+       "createdAt": "2026-11-24T15:12:13.160Z",
+       "id": 4,
+       "images": [],
+       "messages": [
+        {
+         "blocks": [
+          {
+           "speaker": "pet",
+           "text": "我在呢，让照料助手帮你查。",
+           "type": "text"
+          }
+         ],
+         "createdAt": "2026-11-24T15:12:13.182Z",
+         "error": null,
+         "errorNote": null,
+         "finishedAt": "2026-11-24T15:12:13.921Z",
+         "id": "m5",
+         "kind": "respond",
+         "position": 0,
+         "readOnly": false,
+         "role": "pet",
+         "sources": [],
+         "status": "complete",
+         "text": "我在呢，让照料助手帮你查。",
+         "turnId": 4,
+         "version": 4
+        },
+        {
+         "blocks": [
+          {
+           "speaker": "assistant",
+           "text": "这次查到了：今天没有走动记录。",
+           "type": "text"
+          }
+         ],
+         "createdAt": "2026-11-24T15:12:13.182Z",
+         "error": null,
+         "errorNote": null,
+         "finishedAt": "2026-11-24T15:12:15.532Z",
+         "id": "m6",
+         "kind": "answer",
+         "position": 1,
+         "readOnly": false,
+         "role": "assistant",
+         "sources": [],
+         "status": "complete",
+         "text": "这次查到了：今天没有走动记录。",
+         "turnId": 4,
+         "version": 8
+        }
+       ],
+       "readAt": null,
+       "reply": "【爱宠】我在呢，让照料助手帮你查。\n【照料助手】这次查到了：今天没有走动记录。",
+       "replyTo": null,
+       "replyToMessage": null,
+       "requestId": "capture-1795533121-fail",
+       "sources": [],
+       "speaker": "pet",
+       "status": "complete",
+       "target": "both",
+       "text": "第二位失败",
+       "topicId": null
+      },
+      {
+       "blocks": null,
+       "createdAt": "2026-11-24T15:12:16.381Z",
+       "id": 5,
+       "images": [],
+       "messages": [
+        {
+         "blocks": [
+          {
+           "speaker": "pet",
+           "text": "别担心，问问照料助手吧。",
+           "type": "text"
+          }
+         ],
+         "createdAt": "2026-11-24T15:12:16.389Z",
+         "error": null,
+         "errorNote": null,
+         "finishedAt": "2026-11-24T15:12:17.932Z",
+         "id": "m7",
+         "kind": "respond",
+         "position": 0,
+         "readOnly": false,
+         "role": "pet",
+         "sources": [],
+         "status": "complete",
+         "text": "别担心，问问照料助手吧。",
+         "turnId": 5,
+         "version": 5
+        },
+        {
+         "blocks": null,
+         "createdAt": "2026-11-24T15:12:16.389Z",
+         "error": null,
+         "errorNote": null,
+         "finishedAt": null,
+         "id": "m8",
+         "kind": "answer",
+         "position": 1,
+         "readOnly": false,
+         "role": "assistant",
+         "sources": [],
+         "status": "running",
+         "text": "先说结论：多数情况下不用紧张，",
+         "turnId": 5,
+         "version": 4
+        }
+       ],
+       "readAt": null,
+       "reply": "【爱宠】别担心，问问照料助手吧。\n【照料助手】先说结论：多数情况下不用紧张，",
+       "replyTo": null,
+       "replyToMessage": null,
+       "requestId": "capture-1795533121-drop",
+       "sources": [],
+       "speaker": "assistant",
+       "status": "pending",
+       "target": "auto",
+       "text": "断线一下",
+       "topicId": null
+      }
+     ]
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 5,
+     "messageId": "m8",
+     "role": "assistant",
+     "text": "先说结论：多数情况下不用紧张，观察一天，",
+     "version": 4
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 5,
+     "messageId": "m8",
+     "role": "assistant",
+     "text": "先说结论：多数情况下不用紧张，观察一天，没有好转再去医院。",
+     "version": 5
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 5,
+     "message": {
+      "id": "m8",
+      "turnId": 5,
+      "role": "assistant",
+      "position": 1,
+      "kind": "answer",
+      "status": "complete",
+      "text": "先说结论：多数情况下不用紧张，观察一天，没有好转再去医院。",
+      "version": 7,
+      "sources": [],
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "assistant",
+        "text": "先说结论：多数情况下不用紧张，观察一天，没有好转再去医院。"
+       }
+      ],
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:16.389Z",
+      "finishedAt": "2026-11-24T15:12:21.591Z"
+     }
+    },
+    {
+     "type": "turn",
+     "petId": 1,
+     "turn": {
+      "id": 5,
+      "requestId": "capture-1795533121-drop",
+      "text": "断线一下",
+      "topicId": null,
+      "replyTo": null,
+      "sources": [],
+      "speaker": "pet",
+      "readAt": null,
+      "target": "auto",
+      "reply": "【爱宠】别担心，问问照料助手吧。\n【照料助手】先说结论：多数情况下不用紧张，观察一天，没有好转再去医院。",
+      "status": "complete",
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "pet",
+        "text": "别担心，问问照料助手吧。"
+       },
+       {
+        "type": "text",
+        "speaker": "assistant",
+        "text": "先说结论：多数情况下不用紧张，观察一天，没有好转再去医院。"
+       }
+      ],
+      "images": [],
+      "replyToMessage": null,
+      "createdAt": "2026-11-24T15:12:16.381Z",
+      "messages": [
+       {
+        "id": "m7",
+        "turnId": 5,
+        "role": "pet",
+        "position": 0,
+        "kind": "respond",
+        "status": "complete",
+        "text": "别担心，问问照料助手吧。",
+        "version": 5,
+        "sources": [],
+        "blocks": [
+         {
+          "type": "text",
+          "speaker": "pet",
+          "text": "别担心，问问照料助手吧。"
+         }
+        ],
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:16.389Z",
+        "finishedAt": "2026-11-24T15:12:17.932Z"
+       },
+       {
+        "id": "m8",
+        "turnId": 5,
+        "role": "assistant",
+        "position": 1,
+        "kind": "answer",
+        "status": "complete",
+        "text": "先说结论：多数情况下不用紧张，观察一天，没有好转再去医院。",
+        "version": 7,
+        "sources": [],
+        "blocks": [
+         {
+          "type": "text",
+          "speaker": "assistant",
+          "text": "先说结论：多数情况下不用紧张，观察一天，没有好转再去医院。"
+         }
+        ],
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:16.389Z",
+        "finishedAt": "2026-11-24T15:12:21.591Z"
+       }
+      ]
+     }
+    }
+   ],
+   "final": {
+    "blocks": [
+     {
+      "speaker": "pet",
+      "text": "别担心，问问照料助手吧。",
+      "type": "text"
+     },
+     {
+      "speaker": "assistant",
+      "text": "先说结论：多数情况下不用紧张，观察一天，没有好转再去医院。",
+      "type": "text"
+     }
+    ],
+    "createdAt": "2026-11-24T15:12:16.381Z",
+    "id": 5,
+    "images": [],
+    "messages": [
+     {
+      "blocks": [
+       {
+        "speaker": "pet",
+        "text": "别担心，问问照料助手吧。",
+        "type": "text"
+       }
+      ],
+      "createdAt": "2026-11-24T15:12:16.389Z",
+      "error": null,
+      "errorNote": null,
+      "finishedAt": "2026-11-24T15:12:17.932Z",
+      "id": "m7",
+      "kind": "respond",
+      "position": 0,
+      "readOnly": false,
+      "role": "pet",
+      "sources": [],
+      "status": "complete",
+      "text": "别担心，问问照料助手吧。",
+      "turnId": 5,
+      "version": 5
+     },
+     {
+      "blocks": [
+       {
+        "speaker": "assistant",
+        "text": "先说结论：多数情况下不用紧张，观察一天，没有好转再去医院。",
+        "type": "text"
+       }
+      ],
+      "createdAt": "2026-11-24T15:12:16.389Z",
+      "error": null,
+      "errorNote": null,
+      "finishedAt": "2026-11-24T15:12:21.591Z",
+      "id": "m8",
+      "kind": "answer",
+      "position": 1,
+      "readOnly": false,
+      "role": "assistant",
+      "sources": [],
+      "status": "complete",
+      "text": "先说结论：多数情况下不用紧张，观察一天，没有好转再去医院。",
+      "turnId": 5,
+      "version": 7
+     }
+    ],
+    "readAt": null,
+    "reply": "【爱宠】别担心，问问照料助手吧。\n【照料助手】先说结论：多数情况下不用紧张，观察一天，没有好转再去医院。",
+    "replyTo": null,
+    "replyToMessage": null,
+    "requestId": "capture-1795533121-drop",
+    "sources": [],
+    "speaker": "pet",
+    "status": "complete",
+    "target": "auto",
+    "text": "断线一下",
+    "topicId": null
+   }
+  },
+  {
+   "scenario": "order",
+   "turnId": 6,
+   "frames": [
+    {
+     "type": "<post>",
+     "requestId": "capture-1795533121-order",
+     "body": {
+      "accepted": true,
+      "protocol": "group-v1",
+      "turn": {
+       "blocks": null,
+       "createdAt": "2026-11-24T15:12:22.446Z",
+       "id": 6,
+       "images": [],
+       "messages": [],
+       "readAt": null,
+       "reply": "",
+       "replyTo": null,
+       "replyToMessage": null,
+       "requestId": "capture-1795533121-order",
+       "sources": [],
+       "speaker": "assistant",
+       "status": "pending",
+       "target": "auto",
+       "text": "乱序一下",
+       "topicId": null
+      }
+     }
+    },
+    {
+     "type": "turn",
+     "petId": 1,
+     "turn": {
+      "id": 6,
+      "requestId": "capture-1795533121-order",
+      "text": "乱序一下",
+      "topicId": null,
+      "replyTo": null,
+      "sources": [],
+      "speaker": "assistant",
+      "readAt": null,
+      "target": "auto",
+      "reply": "",
+      "status": "pending",
+      "blocks": null,
+      "images": [],
+      "replyToMessage": null,
+      "createdAt": "2026-11-24T15:12:22.446Z",
+      "messages": [
+       {
+        "id": "m9",
+        "turnId": 6,
+        "role": "pet",
+        "position": 0,
+        "kind": "respond",
+        "status": "queued",
+        "text": "",
+        "version": 1,
+        "sources": [],
+        "blocks": null,
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:22.456Z",
+        "finishedAt": null
+       },
+       {
+        "id": "m10",
+        "turnId": 6,
+        "role": "assistant",
+        "position": 1,
+        "kind": "answer",
+        "status": "queued",
+        "text": "",
+        "version": 1,
+        "sources": [],
+        "blocks": null,
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:22.456Z",
+        "finishedAt": null
+       }
+      ]
+     }
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 6,
+     "message": {
+      "id": "m9",
+      "turnId": 6,
+      "role": "pet",
+      "position": 0,
+      "kind": "respond",
+      "status": "running",
+      "text": "",
+      "version": 2,
+      "sources": [],
+      "blocks": null,
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:22.456Z",
+      "finishedAt": null
+     }
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 6,
+     "messageId": "m9",
+     "role": "pet",
+     "text": "我来陪你。",
+     "version": 2
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 6,
+     "messageId": "m9",
+     "role": "pet",
+     "text": "我来陪你。",
+     "version": 2
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 6,
+     "messageId": "m9",
+     "role": "pet",
+     "text": "我来陪你。数据让照料助手说。",
+     "version": 3
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 6,
+     "messageId": "m9",
+     "role": "pet",
+     "text": "我来陪你。",
+     "version": 2
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 6,
+     "message": {
+      "id": "m9",
+      "turnId": 6,
+      "role": "pet",
+      "position": 0,
+      "kind": "respond",
+      "status": "complete",
+      "text": "我来陪你。数据让照料助手说。",
+      "version": 5,
+      "sources": [],
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "pet",
+        "text": "我来陪你。数据让照料助手说。"
+       }
+      ],
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:22.456Z",
+      "finishedAt": "2026-11-24T15:12:23.384Z"
+     }
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 6,
+     "message": {
+      "id": "m10",
+      "turnId": 6,
+      "role": "assistant",
+      "position": 1,
+      "kind": "answer",
+      "status": "running",
+      "text": "",
+      "version": 2,
+      "sources": [],
+      "blocks": null,
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:22.456Z",
+      "finishedAt": null
+     }
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 6,
+     "messageId": "m10",
+     "role": "assistant",
+     "text": "查到了：",
+     "version": 2
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 6,
+     "messageId": "m10",
+     "role": "assistant",
+     "text": "查到了：",
+     "version": 2
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 6,
+     "messageId": "m10",
+     "role": "assistant",
+     "text": "查到了：今天暂时没有走动数据，",
+     "version": 3
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 6,
+     "messageId": "m10",
+     "role": "assistant",
+     "text": "查到了：",
+     "version": 2
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 6,
+     "messageId": "m10",
+     "role": "assistant",
+     "text": "查到了：今天暂时没有走动数据，",
+     "version": 3
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 6,
+     "messageId": "m10",
+     "role": "assistant",
+     "text": "查到了：今天暂时没有走动数据，有数据时我会在这一条里告诉你。",
+     "version": 4
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 6,
+     "messageId": "m10",
+     "role": "assistant",
+     "text": "查到了：今天暂时没有走动数据，",
+     "version": 3
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 6,
+     "message": {
+      "id": "m10",
+      "turnId": 6,
+      "role": "assistant",
+      "position": 1,
+      "kind": "answer",
+      "status": "complete",
+      "text": "查到了：今天暂时没有走动数据，有数据时我会在这一条里告诉你。",
+      "version": 6,
+      "sources": [],
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "assistant",
+        "text": "查到了：今天暂时没有走动数据，有数据时我会在这一条里告诉你。"
+       }
+      ],
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:22.456Z",
+      "finishedAt": "2026-11-24T15:12:24.620Z"
+     }
+    },
+    {
+     "type": "turn",
+     "petId": 1,
+     "turn": {
+      "id": 6,
+      "requestId": "capture-1795533121-order",
+      "text": "乱序一下",
+      "topicId": null,
+      "replyTo": null,
+      "sources": [],
+      "speaker": "pet",
+      "readAt": null,
+      "target": "auto",
+      "reply": "【爱宠】我来陪你。数据让照料助手说。\n【照料助手】查到了：今天暂时没有走动数据，有数据时我会在这一条里告诉你。",
+      "status": "complete",
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "pet",
+        "text": "我来陪你。数据让照料助手说。"
+       },
+       {
+        "type": "text",
+        "speaker": "assistant",
+        "text": "查到了：今天暂时没有走动数据，有数据时我会在这一条里告诉你。"
+       }
+      ],
+      "images": [],
+      "replyToMessage": null,
+      "createdAt": "2026-11-24T15:12:22.446Z",
+      "messages": [
+       {
+        "id": "m9",
+        "turnId": 6,
+        "role": "pet",
+        "position": 0,
+        "kind": "respond",
+        "status": "complete",
+        "text": "我来陪你。数据让照料助手说。",
+        "version": 5,
+        "sources": [],
+        "blocks": [
+         {
+          "type": "text",
+          "speaker": "pet",
+          "text": "我来陪你。数据让照料助手说。"
+         }
+        ],
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:22.456Z",
+        "finishedAt": "2026-11-24T15:12:23.384Z"
+       },
+       {
+        "id": "m10",
+        "turnId": 6,
+        "role": "assistant",
+        "position": 1,
+        "kind": "answer",
+        "status": "complete",
+        "text": "查到了：今天暂时没有走动数据，有数据时我会在这一条里告诉你。",
+        "version": 6,
+        "sources": [],
+        "blocks": [
+         {
+          "type": "text",
+          "speaker": "assistant",
+          "text": "查到了：今天暂时没有走动数据，有数据时我会在这一条里告诉你。"
+         }
+        ],
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:22.456Z",
+        "finishedAt": "2026-11-24T15:12:24.620Z"
+       }
+      ]
+     }
+    }
+   ],
+   "final": {
+    "blocks": [
+     {
+      "speaker": "pet",
+      "text": "我来陪你。数据让照料助手说。",
+      "type": "text"
+     },
+     {
+      "speaker": "assistant",
+      "text": "查到了：今天暂时没有走动数据，有数据时我会在这一条里告诉你。",
+      "type": "text"
+     }
+    ],
+    "createdAt": "2026-11-24T15:12:22.446Z",
+    "id": 6,
+    "images": [],
+    "messages": [
+     {
+      "blocks": [
+       {
+        "speaker": "pet",
+        "text": "我来陪你。数据让照料助手说。",
+        "type": "text"
+       }
+      ],
+      "createdAt": "2026-11-24T15:12:22.456Z",
+      "error": null,
+      "errorNote": null,
+      "finishedAt": "2026-11-24T15:12:23.384Z",
+      "id": "m9",
+      "kind": "respond",
+      "position": 0,
+      "readOnly": false,
+      "role": "pet",
+      "sources": [],
+      "status": "complete",
+      "text": "我来陪你。数据让照料助手说。",
+      "turnId": 6,
+      "version": 5
+     },
+     {
+      "blocks": [
+       {
+        "speaker": "assistant",
+        "text": "查到了：今天暂时没有走动数据，有数据时我会在这一条里告诉你。",
+        "type": "text"
+       }
+      ],
+      "createdAt": "2026-11-24T15:12:22.456Z",
+      "error": null,
+      "errorNote": null,
+      "finishedAt": "2026-11-24T15:12:24.620Z",
+      "id": "m10",
+      "kind": "answer",
+      "position": 1,
+      "readOnly": false,
+      "role": "assistant",
+      "sources": [],
+      "status": "complete",
+      "text": "查到了：今天暂时没有走动数据，有数据时我会在这一条里告诉你。",
+      "turnId": 6,
+      "version": 6
+     }
+    ],
+    "readAt": null,
+    "reply": "【爱宠】我来陪你。数据让照料助手说。\n【照料助手】查到了：今天暂时没有走动数据，有数据时我会在这一条里告诉你。",
+    "replyTo": null,
+    "replyToMessage": null,
+    "requestId": "capture-1795533121-order",
+    "sources": [],
+    "speaker": "pet",
+    "status": "complete",
+    "target": "auto",
+    "text": "乱序一下",
+    "topicId": null
+   }
+  },
+  {
+   "scenario": "source",
+   "turnId": 7,
+   "frames": [
+    {
+     "type": "<post>",
+     "requestId": "capture-1795533121-source",
+     "body": {
+      "accepted": true,
+      "protocol": "group-v1",
+      "turn": {
+       "blocks": null,
+       "createdAt": "2026-11-24T15:12:25.475Z",
+       "id": 7,
+       "images": [],
+       "messages": [],
+       "readAt": null,
+       "reply": "",
+       "replyTo": null,
+       "replyToMessage": null,
+       "requestId": "capture-1795533121-source",
+       "sources": [],
+       "speaker": "assistant",
+       "status": "pending",
+       "target": "auto",
+       "text": "查一下来源",
+       "topicId": null
+      }
+     }
+    },
+    {
+     "type": "turn",
+     "petId": 1,
+     "turn": {
+      "id": 7,
+      "requestId": "capture-1795533121-source",
+      "text": "查一下来源",
+      "topicId": null,
+      "replyTo": null,
+      "sources": [],
+      "speaker": "assistant",
+      "readAt": null,
+      "target": "auto",
+      "reply": "",
+      "status": "pending",
+      "blocks": null,
+      "images": [],
+      "replyToMessage": null,
+      "createdAt": "2026-11-24T15:12:25.475Z",
+      "messages": [
+       {
+        "id": "m11",
+        "turnId": 7,
+        "role": "pet",
+        "position": 0,
+        "kind": "respond",
+        "status": "queued",
+        "text": "",
+        "version": 1,
+        "sources": [],
+        "blocks": null,
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:25.481Z",
+        "finishedAt": null
+       },
+       {
+        "id": "m12",
+        "turnId": 7,
+        "role": "assistant",
+        "position": 1,
+        "kind": "answer",
+        "status": "queued",
+        "text": "",
+        "version": 1,
+        "sources": [],
+        "blocks": null,
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:25.481Z",
+        "finishedAt": null
+       }
+      ]
+     }
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 7,
+     "message": {
+      "id": "m11",
+      "turnId": 7,
+      "role": "pet",
+      "position": 0,
+      "kind": "respond",
+      "status": "running",
+      "text": "",
+      "version": 2,
+      "sources": [],
+      "blocks": null,
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:25.481Z",
+      "finishedAt": null
+     }
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 7,
+     "messageId": "m11",
+     "role": "pet",
+     "text": "我玩得挺开心的！",
+     "version": 2
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 7,
+     "messageId": "m11",
+     "role": "pet",
+     "text": "我玩得挺开心的！走了多久要问照料助手。",
+     "version": 3
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 7,
+     "message": {
+      "id": "m11",
+      "turnId": 7,
+      "role": "pet",
+      "position": 0,
+      "kind": "respond",
+      "status": "complete",
+      "text": "我玩得挺开心的！走了多久要问照料助手。",
+      "version": 5,
+      "sources": [],
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "pet",
+        "text": "我玩得挺开心的！走了多久要问照料助手。"
+       }
+      ],
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:25.481Z",
+      "finishedAt": "2026-11-24T15:12:26.318Z"
+     }
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 7,
+     "message": {
+      "id": "m12",
+      "turnId": 7,
+      "role": "assistant",
+      "position": 1,
+      "kind": "answer",
+      "status": "running",
+      "text": "",
+      "version": 2,
+      "sources": [],
+      "blocks": null,
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:25.481Z",
+      "finishedAt": null
+     }
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 7,
+     "messageId": "m12",
+     "role": "assistant",
+     "text": "我查了今天零点到现在的记录：",
+     "version": 2
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 7,
+     "messageId": "m12",
+     "role": "assistant",
+     "text": "我查了今天零点到现在的记录：没有有效观测，所以不能说它走了多久。",
+     "version": 3
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 7,
+     "message": {
+      "id": "m12",
+      "turnId": 7,
+      "role": "assistant",
+      "position": 1,
+      "kind": "answer",
+      "status": "complete",
+      "text": "我查了今天零点到现在的记录：没有有效观测，所以不能说它走了多久。",
+      "version": 5,
+      "sources": [
+       {
+        "versions": [],
+        "type": "observations",
+        "deviceId": "",
+        "startAt": "2026-11-23T16:00:00.000Z",
+        "endAt": "2026-11-24T15:12:26.326Z",
+        "observedSeconds": 0,
+        "soundEventCount": 0
+       }
+      ],
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "assistant",
+        "text": "我查了今天零点到现在的记录：没有有效观测，所以不能说它走了多久。"
+       }
+      ],
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:25.481Z",
+      "finishedAt": "2026-11-24T15:12:26.853Z"
+     }
+    },
+    {
+     "type": "turn",
+     "petId": 1,
+     "turn": {
+      "id": 7,
+      "requestId": "capture-1795533121-source",
+      "text": "查一下来源",
+      "topicId": null,
+      "replyTo": null,
+      "sources": [
+       {
+        "versions": [],
+        "type": "observations",
+        "deviceId": "",
+        "startAt": "2026-11-23T16:00:00.000Z",
+        "endAt": "2026-11-24T15:12:26.326Z",
+        "observedSeconds": 0,
+        "soundEventCount": 0
+       }
+      ],
+      "speaker": "pet",
+      "readAt": null,
+      "target": "auto",
+      "reply": "【爱宠】我玩得挺开心的！走了多久要问照料助手。\n【照料助手】我查了今天零点到现在的记录：没有有效观测，所以不能说它走了多久。",
+      "status": "complete",
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "pet",
+        "text": "我玩得挺开心的！走了多久要问照料助手。"
+       },
+       {
+        "type": "text",
+        "speaker": "assistant",
+        "text": "我查了今天零点到现在的记录：没有有效观测，所以不能说它走了多久。"
+       }
+      ],
+      "images": [],
+      "replyToMessage": null,
+      "createdAt": "2026-11-24T15:12:25.475Z",
+      "messages": [
+       {
+        "id": "m11",
+        "turnId": 7,
+        "role": "pet",
+        "position": 0,
+        "kind": "respond",
+        "status": "complete",
+        "text": "我玩得挺开心的！走了多久要问照料助手。",
+        "version": 5,
+        "sources": [],
+        "blocks": [
+         {
+          "type": "text",
+          "speaker": "pet",
+          "text": "我玩得挺开心的！走了多久要问照料助手。"
+         }
+        ],
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:25.481Z",
+        "finishedAt": "2026-11-24T15:12:26.318Z"
+       },
+       {
+        "id": "m12",
+        "turnId": 7,
+        "role": "assistant",
+        "position": 1,
+        "kind": "answer",
+        "status": "complete",
+        "text": "我查了今天零点到现在的记录：没有有效观测，所以不能说它走了多久。",
+        "version": 5,
+        "sources": [
+         {
+          "versions": [],
+          "type": "observations",
+          "deviceId": "",
+          "startAt": "2026-11-23T16:00:00.000Z",
+          "endAt": "2026-11-24T15:12:26.326Z",
+          "observedSeconds": 0,
+          "soundEventCount": 0
+         }
+        ],
+        "blocks": [
+         {
+          "type": "text",
+          "speaker": "assistant",
+          "text": "我查了今天零点到现在的记录：没有有效观测，所以不能说它走了多久。"
+         }
+        ],
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:25.481Z",
+        "finishedAt": "2026-11-24T15:12:26.853Z"
+       }
+      ]
+     }
+    }
+   ],
+   "final": {
+    "blocks": [
+     {
+      "speaker": "pet",
+      "text": "我玩得挺开心的！走了多久要问照料助手。",
+      "type": "text"
+     },
+     {
+      "speaker": "assistant",
+      "text": "我查了今天零点到现在的记录：没有有效观测，所以不能说它走了多久。",
+      "type": "text"
+     }
+    ],
+    "createdAt": "2026-11-24T15:12:25.475Z",
+    "id": 7,
+    "images": [],
+    "messages": [
+     {
+      "blocks": [
+       {
+        "speaker": "pet",
+        "text": "我玩得挺开心的！走了多久要问照料助手。",
+        "type": "text"
+       }
+      ],
+      "createdAt": "2026-11-24T15:12:25.481Z",
+      "error": null,
+      "errorNote": null,
+      "finishedAt": "2026-11-24T15:12:26.318Z",
+      "id": "m11",
+      "kind": "respond",
+      "position": 0,
+      "readOnly": false,
+      "role": "pet",
+      "sources": [],
+      "status": "complete",
+      "text": "我玩得挺开心的！走了多久要问照料助手。",
+      "turnId": 7,
+      "version": 5
+     },
+     {
+      "blocks": [
+       {
+        "speaker": "assistant",
+        "text": "我查了今天零点到现在的记录：没有有效观测，所以不能说它走了多久。",
+        "type": "text"
+       }
+      ],
+      "createdAt": "2026-11-24T15:12:25.481Z",
+      "error": null,
+      "errorNote": null,
+      "finishedAt": "2026-11-24T15:12:26.853Z",
+      "id": "m12",
+      "kind": "answer",
+      "position": 1,
+      "readOnly": false,
+      "role": "assistant",
+      "sources": [
+       {
+        "deviceId": "",
+        "endAt": "2026-11-24T15:12:26.326Z",
+        "observedSeconds": 0,
+        "soundEventCount": 0,
+        "startAt": "2026-11-23T16:00:00.000Z",
+        "type": "observations",
+        "versions": []
+       }
+      ],
+      "status": "complete",
+      "text": "我查了今天零点到现在的记录：没有有效观测，所以不能说它走了多久。",
+      "turnId": 7,
+      "version": 5
+     }
+    ],
+    "readAt": null,
+    "reply": "【爱宠】我玩得挺开心的！走了多久要问照料助手。\n【照料助手】我查了今天零点到现在的记录：没有有效观测，所以不能说它走了多久。",
+    "replyTo": null,
+    "replyToMessage": null,
+    "requestId": "capture-1795533121-source",
+    "sources": [
+     {
+      "deviceId": "",
+      "endAt": "2026-11-24T15:12:26.326Z",
+      "observedSeconds": 0,
+      "soundEventCount": 0,
+      "startAt": "2026-11-23T16:00:00.000Z",
+      "type": "observations",
+      "versions": []
+     }
+    ],
+    "speaker": "pet",
+    "status": "complete",
+    "target": "auto",
+    "text": "查一下来源",
+    "topicId": null
+   }
+  },
+  {
+   "scenario": "search",
+   "turnId": 8,
+   "frames": [
+    {
+     "type": "<post>",
+     "requestId": "capture-1795533121-search",
+     "body": {
+      "accepted": true,
+      "protocol": "group-v1",
+      "turn": {
+       "blocks": null,
+       "createdAt": "2026-11-24T15:12:27.713Z",
+       "id": 8,
+       "images": [],
+       "messages": [],
+       "readAt": null,
+       "reply": "",
+       "replyTo": null,
+       "replyToMessage": null,
+       "requestId": "capture-1795533121-search",
+       "sources": [],
+       "speaker": "assistant",
+       "status": "pending",
+       "target": "auto",
+       "text": "联网核实一下",
+       "topicId": null
+      }
+     }
+    },
+    {
+     "type": "turn",
+     "petId": 1,
+     "turn": {
+      "id": 8,
+      "requestId": "capture-1795533121-search",
+      "text": "联网核实一下",
+      "topicId": null,
+      "replyTo": null,
+      "sources": [],
+      "speaker": "assistant",
+      "readAt": null,
+      "target": "auto",
+      "reply": "",
+      "status": "pending",
+      "blocks": null,
+      "images": [],
+      "replyToMessage": null,
+      "createdAt": "2026-11-24T15:12:27.713Z",
+      "messages": [
+       {
+        "id": "m13",
+        "turnId": 8,
+        "role": "assistant",
+        "position": 0,
+        "kind": "answer",
+        "status": "queued",
+        "text": "",
+        "version": 1,
+        "sources": [],
+        "blocks": null,
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:27.719Z",
+        "finishedAt": null
+       }
+      ]
+     }
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 8,
+     "message": {
+      "id": "m13",
+      "turnId": 8,
+      "role": "assistant",
+      "position": 0,
+      "kind": "answer",
+      "status": "running",
+      "text": "",
+      "version": 2,
+      "sources": [],
+      "blocks": null,
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:27.719Z",
+      "finishedAt": null
+     }
+    },
+    {
+     "type": "message_status",
+     "petId": 1,
+     "turnId": 8,
+     "messageId": "m13",
+     "role": "assistant",
+     "status": "searching"
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 8,
+     "messageId": "m13",
+     "role": "assistant",
+     "text": "刚核实过：",
+     "version": 2
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 8,
+     "messageId": "m13",
+     "role": "assistant",
+     "text": "刚核实过：这条结论来自下面的来源页，",
+     "version": 3
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 8,
+     "messageId": "m13",
+     "role": "assistant",
+     "text": "刚核实过：这条结论来自下面的来源页，具体细节以来源为准。",
+     "version": 4
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 8,
+     "message": {
+      "id": "m13",
+      "turnId": 8,
+      "role": "assistant",
+      "position": 0,
+      "kind": "answer",
+      "status": "complete",
+      "text": "刚核实过：这条结论来自下面的来源页，具体细节以来源为准。",
+      "version": 6,
+      "sources": [
+       {
+        "type": "web",
+        "url": "https://example.com/petsense-fixture/care-note",
+        "title": "夹具来源页（非真实网页）",
+        "checkedAt": "2026-11-24T15:12:27.719Z"
+       }
+      ],
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "assistant",
+        "text": "刚核实过：这条结论来自下面的来源页，具体细节以来源为准。"
+       }
+      ],
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:27.719Z",
+      "finishedAt": "2026-11-24T15:12:30.275Z"
+     }
+    },
+    {
+     "type": "turn",
+     "petId": 1,
+     "turn": {
+      "id": 8,
+      "requestId": "capture-1795533121-search",
+      "text": "联网核实一下",
+      "topicId": null,
+      "replyTo": null,
+      "sources": [
+       {
+        "type": "web",
+        "url": "https://example.com/petsense-fixture/care-note",
+        "title": "夹具来源页（非真实网页）",
+        "checkedAt": "2026-11-24T15:12:27.719Z"
+       }
+      ],
+      "speaker": "assistant",
+      "readAt": null,
+      "target": "auto",
+      "reply": "【照料助手】刚核实过：这条结论来自下面的来源页，具体细节以来源为准。",
+      "status": "complete",
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "assistant",
+        "text": "刚核实过：这条结论来自下面的来源页，具体细节以来源为准。"
+       }
+      ],
+      "images": [],
+      "replyToMessage": null,
+      "createdAt": "2026-11-24T15:12:27.713Z",
+      "messages": [
+       {
+        "id": "m13",
+        "turnId": 8,
+        "role": "assistant",
+        "position": 0,
+        "kind": "answer",
+        "status": "complete",
+        "text": "刚核实过：这条结论来自下面的来源页，具体细节以来源为准。",
+        "version": 6,
+        "sources": [
+         {
+          "type": "web",
+          "url": "https://example.com/petsense-fixture/care-note",
+          "title": "夹具来源页（非真实网页）",
+          "checkedAt": "2026-11-24T15:12:27.719Z"
+         }
+        ],
+        "blocks": [
+         {
+          "type": "text",
+          "speaker": "assistant",
+          "text": "刚核实过：这条结论来自下面的来源页，具体细节以来源为准。"
+         }
+        ],
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:27.719Z",
+        "finishedAt": "2026-11-24T15:12:30.275Z"
+       }
+      ]
+     }
+    }
+   ],
+   "final": {
+    "blocks": [
+     {
+      "speaker": "assistant",
+      "text": "刚核实过：这条结论来自下面的来源页，具体细节以来源为准。",
+      "type": "text"
+     }
+    ],
+    "createdAt": "2026-11-24T15:12:27.713Z",
+    "id": 8,
+    "images": [],
+    "messages": [
+     {
+      "blocks": [
+       {
+        "speaker": "assistant",
+        "text": "刚核实过：这条结论来自下面的来源页，具体细节以来源为准。",
+        "type": "text"
+       }
+      ],
+      "createdAt": "2026-11-24T15:12:27.719Z",
+      "error": null,
+      "errorNote": null,
+      "finishedAt": "2026-11-24T15:12:30.275Z",
+      "id": "m13",
+      "kind": "answer",
+      "position": 0,
+      "readOnly": false,
+      "role": "assistant",
+      "sources": [
+       {
+        "checkedAt": "2026-11-24T15:12:27.719Z",
+        "title": "夹具来源页（非真实网页）",
+        "type": "web",
+        "url": "https://example.com/petsense-fixture/care-note"
+       }
+      ],
+      "status": "complete",
+      "text": "刚核实过：这条结论来自下面的来源页，具体细节以来源为准。",
+      "turnId": 8,
+      "version": 6
+     }
+    ],
+    "readAt": null,
+    "reply": "【照料助手】刚核实过：这条结论来自下面的来源页，具体细节以来源为准。",
+    "replyTo": null,
+    "replyToMessage": null,
+    "requestId": "capture-1795533121-search",
+    "sources": [
+     {
+      "checkedAt": "2026-11-24T15:12:27.719Z",
+      "title": "夹具来源页（非真实网页）",
+      "type": "web",
+      "url": "https://example.com/petsense-fixture/care-note"
+     }
+    ],
+    "speaker": "assistant",
+    "status": "complete",
+    "target": "auto",
+    "text": "联网核实一下",
+    "topicId": null
+   }
+  },
+  {
+   "scenario": "pet",
+   "turnId": 9,
+   "frames": [
+    {
+     "type": "<post>",
+     "requestId": "capture-1795533121-pet",
+     "body": {
+      "accepted": true,
+      "protocol": "group-v1",
+      "turn": {
+       "blocks": null,
+       "createdAt": "2026-11-24T15:12:31.119Z",
+       "id": 9,
+       "images": [],
+       "messages": [],
+       "readAt": null,
+       "reply": "",
+       "replyTo": null,
+       "replyToMessage": null,
+       "requestId": "capture-1795533121-pet",
+       "sources": [],
+       "speaker": "assistant",
+       "status": "pending",
+       "target": "auto",
+       "text": "想我了吗",
+       "topicId": null
+      }
+     }
+    },
+    {
+     "type": "turn",
+     "petId": 1,
+     "turn": {
+      "id": 9,
+      "requestId": "capture-1795533121-pet",
+      "text": "想我了吗",
+      "topicId": null,
+      "replyTo": null,
+      "sources": [],
+      "speaker": "assistant",
+      "readAt": null,
+      "target": "auto",
+      "reply": "",
+      "status": "pending",
+      "blocks": null,
+      "images": [],
+      "replyToMessage": null,
+      "createdAt": "2026-11-24T15:12:31.119Z",
+      "messages": [
+       {
+        "id": "m14",
+        "turnId": 9,
+        "role": "pet",
+        "position": 0,
+        "kind": "respond",
+        "status": "queued",
+        "text": "",
+        "version": 1,
+        "sources": [],
+        "blocks": null,
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:31.126Z",
+        "finishedAt": null
+       }
+      ]
+     }
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 9,
+     "message": {
+      "id": "m14",
+      "turnId": 9,
+      "role": "pet",
+      "position": 0,
+      "kind": "respond",
+      "status": "running",
+      "text": "",
+      "version": 2,
+      "sources": [],
+      "blocks": null,
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:31.126Z",
+      "finishedAt": null
+     }
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 9,
+     "messageId": "m14",
+     "role": "pet",
+     "text": "想啦！",
+     "version": 2
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 9,
+     "messageId": "m14",
+     "role": "pet",
+     "text": "想啦！一直趴在门口等你。",
+     "version": 3
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 9,
+     "message": {
+      "id": "m14",
+      "turnId": 9,
+      "role": "pet",
+      "position": 0,
+      "kind": "respond",
+      "status": "complete",
+      "text": "想啦！一直趴在门口等你。",
+      "version": 5,
+      "sources": [],
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "pet",
+        "text": "想啦！一直趴在门口等你。"
+       }
+      ],
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:31.126Z",
+      "finishedAt": "2026-11-24T15:12:31.998Z"
+     }
+    },
+    {
+     "type": "turn",
+     "petId": 1,
+     "turn": {
+      "id": 9,
+      "requestId": "capture-1795533121-pet",
+      "text": "想我了吗",
+      "topicId": null,
+      "replyTo": null,
+      "sources": [],
+      "speaker": "pet",
+      "readAt": null,
+      "target": "auto",
+      "reply": "【爱宠】想啦！一直趴在门口等你。",
+      "status": "complete",
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "pet",
+        "text": "想啦！一直趴在门口等你。"
+       }
+      ],
+      "images": [],
+      "replyToMessage": null,
+      "createdAt": "2026-11-24T15:12:31.119Z",
+      "messages": [
+       {
+        "id": "m14",
+        "turnId": 9,
+        "role": "pet",
+        "position": 0,
+        "kind": "respond",
+        "status": "complete",
+        "text": "想啦！一直趴在门口等你。",
+        "version": 5,
+        "sources": [],
+        "blocks": [
+         {
+          "type": "text",
+          "speaker": "pet",
+          "text": "想啦！一直趴在门口等你。"
+         }
+        ],
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:31.126Z",
+        "finishedAt": "2026-11-24T15:12:31.998Z"
+       }
+      ]
+     }
+    }
+   ],
+   "final": {
+    "blocks": [
+     {
+      "speaker": "pet",
+      "text": "想啦！一直趴在门口等你。",
+      "type": "text"
+     }
+    ],
+    "createdAt": "2026-11-24T15:12:31.119Z",
+    "id": 9,
+    "images": [],
+    "messages": [
+     {
+      "blocks": [
+       {
+        "speaker": "pet",
+        "text": "想啦！一直趴在门口等你。",
+        "type": "text"
+       }
+      ],
+      "createdAt": "2026-11-24T15:12:31.126Z",
+      "error": null,
+      "errorNote": null,
+      "finishedAt": "2026-11-24T15:12:31.998Z",
+      "id": "m14",
+      "kind": "respond",
+      "position": 0,
+      "readOnly": false,
+      "role": "pet",
+      "sources": [],
+      "status": "complete",
+      "text": "想啦！一直趴在门口等你。",
+      "turnId": 9,
+      "version": 5
+     }
+    ],
+    "readAt": null,
+    "reply": "【爱宠】想啦！一直趴在门口等你。",
+    "replyTo": null,
+    "replyToMessage": null,
+    "requestId": "capture-1795533121-pet",
+    "sources": [],
+    "speaker": "pet",
+    "status": "complete",
+    "target": "auto",
+    "text": "想我了吗",
+    "topicId": null
+   }
+  },
+  {
+   "scenario": "named_pet",
+   "turnId": 10,
+   "frames": [
+    {
+     "type": "<post>",
+     "requestId": "capture-1795533121-named_pet",
+     "body": {
+      "accepted": true,
+      "protocol": "group-v1",
+      "turn": {
+       "blocks": null,
+       "createdAt": "2026-11-24T15:12:32.852Z",
+       "id": 10,
+       "images": [],
+       "messages": [],
+       "readAt": null,
+       "reply": "",
+       "replyTo": null,
+       "replyToMessage": null,
+       "requestId": "capture-1795533121-named_pet",
+       "sources": [],
+       "speaker": "assistant",
+       "status": "pending",
+       "target": "pet",
+       "text": "我今天有点累",
+       "topicId": null
+      }
+     }
+    },
+    {
+     "type": "turn",
+     "petId": 1,
+     "turn": {
+      "id": 10,
+      "requestId": "capture-1795533121-named_pet",
+      "text": "我今天有点累",
+      "topicId": null,
+      "replyTo": null,
+      "sources": [],
+      "speaker": "assistant",
+      "readAt": null,
+      "target": "pet",
+      "reply": "",
+      "status": "pending",
+      "blocks": null,
+      "images": [],
+      "replyToMessage": null,
+      "createdAt": "2026-11-24T15:12:32.852Z",
+      "messages": [
+       {
+        "id": "m15",
+        "turnId": 10,
+        "role": "pet",
+        "position": 0,
+        "kind": "respond",
+        "status": "queued",
+        "text": "",
+        "version": 1,
+        "sources": [],
+        "blocks": null,
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:32.860Z",
+        "finishedAt": null
+       },
+       {
+        "id": "m16",
+        "turnId": 10,
+        "role": "assistant",
+        "position": 1,
+        "kind": "answer",
+        "status": "queued",
+        "text": "",
+        "version": 1,
+        "sources": [],
+        "blocks": null,
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:32.860Z",
+        "finishedAt": null
+       }
+      ]
+     }
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 10,
+     "message": {
+      "id": "m15",
+      "turnId": 10,
+      "role": "pet",
+      "position": 0,
+      "kind": "respond",
+      "status": "running",
+      "text": "",
+      "version": 2,
+      "sources": [],
+      "blocks": null,
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:32.860Z",
+      "finishedAt": null
+     }
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 10,
+     "messageId": "m15",
+     "role": "pet",
+     "text": "辛苦啦，抱抱你。",
+     "version": 2
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 10,
+     "messageId": "m15",
+     "role": "pet",
+     "text": "辛苦啦，抱抱你。走动的事让照料助手告诉你。",
+     "version": 3
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 10,
+     "message": {
+      "id": "m15",
+      "turnId": 10,
+      "role": "pet",
+      "position": 0,
+      "kind": "respond",
+      "status": "complete",
+      "text": "辛苦啦，抱抱你。走动的事让照料助手告诉你。",
+      "version": 5,
+      "sources": [],
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "pet",
+        "text": "辛苦啦，抱抱你。走动的事让照料助手告诉你。"
+       }
+      ],
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:32.860Z",
+      "finishedAt": "2026-11-24T15:12:33.801Z"
+     }
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 10,
+     "message": {
+      "id": "m16",
+      "turnId": 10,
+      "role": "assistant",
+      "position": 1,
+      "kind": "answer",
+      "status": "running",
+      "text": "",
+      "version": 2,
+      "sources": [],
+      "blocks": null,
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:32.860Z",
+      "finishedAt": null
+     }
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 10,
+     "messageId": "m16",
+     "role": "assistant",
+     "text": "我查了今天的记录：",
+     "version": 2
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 10,
+     "messageId": "m16",
+     "role": "assistant",
+     "text": "我查了今天的记录：还没有走动数据，",
+     "version": 3
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 10,
+     "messageId": "m16",
+     "role": "assistant",
+     "text": "我查了今天的记录：还没有走动数据，等项圈上传后我再告诉你。",
+     "version": 4
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 10,
+     "message": {
+      "id": "m16",
+      "turnId": 10,
+      "role": "assistant",
+      "position": 1,
+      "kind": "answer",
+      "status": "complete",
+      "text": "我查了今天的记录：还没有走动数据，等项圈上传后我再告诉你。",
+      "version": 6,
+      "sources": [],
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "assistant",
+        "text": "我查了今天的记录：还没有走动数据，等项圈上传后我再告诉你。"
+       }
+      ],
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:32.860Z",
+      "finishedAt": "2026-11-24T15:12:35.033Z"
+     }
+    },
+    {
+     "type": "turn",
+     "petId": 1,
+     "turn": {
+      "id": 10,
+      "requestId": "capture-1795533121-named_pet",
+      "text": "我今天有点累",
+      "topicId": null,
+      "replyTo": null,
+      "sources": [],
+      "speaker": "pet",
+      "readAt": null,
+      "target": "pet",
+      "reply": "【爱宠】辛苦啦，抱抱你。走动的事让照料助手告诉你。\n【照料助手】我查了今天的记录：还没有走动数据，等项圈上传后我再告诉你。",
+      "status": "complete",
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "pet",
+        "text": "辛苦啦，抱抱你。走动的事让照料助手告诉你。"
+       },
+       {
+        "type": "text",
+        "speaker": "assistant",
+        "text": "我查了今天的记录：还没有走动数据，等项圈上传后我再告诉你。"
+       }
+      ],
+      "images": [],
+      "replyToMessage": null,
+      "createdAt": "2026-11-24T15:12:32.852Z",
+      "messages": [
+       {
+        "id": "m15",
+        "turnId": 10,
+        "role": "pet",
+        "position": 0,
+        "kind": "respond",
+        "status": "complete",
+        "text": "辛苦啦，抱抱你。走动的事让照料助手告诉你。",
+        "version": 5,
+        "sources": [],
+        "blocks": [
+         {
+          "type": "text",
+          "speaker": "pet",
+          "text": "辛苦啦，抱抱你。走动的事让照料助手告诉你。"
+         }
+        ],
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:32.860Z",
+        "finishedAt": "2026-11-24T15:12:33.801Z"
+       },
+       {
+        "id": "m16",
+        "turnId": 10,
+        "role": "assistant",
+        "position": 1,
+        "kind": "answer",
+        "status": "complete",
+        "text": "我查了今天的记录：还没有走动数据，等项圈上传后我再告诉你。",
+        "version": 6,
+        "sources": [],
+        "blocks": [
+         {
+          "type": "text",
+          "speaker": "assistant",
+          "text": "我查了今天的记录：还没有走动数据，等项圈上传后我再告诉你。"
+         }
+        ],
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:32.860Z",
+        "finishedAt": "2026-11-24T15:12:35.033Z"
+       }
+      ]
+     }
+    }
+   ],
+   "final": {
+    "blocks": [
+     {
+      "speaker": "pet",
+      "text": "辛苦啦，抱抱你。走动的事让照料助手告诉你。",
+      "type": "text"
+     },
+     {
+      "speaker": "assistant",
+      "text": "我查了今天的记录：还没有走动数据，等项圈上传后我再告诉你。",
+      "type": "text"
+     }
+    ],
+    "createdAt": "2026-11-24T15:12:32.852Z",
+    "id": 10,
+    "images": [],
+    "messages": [
+     {
+      "blocks": [
+       {
+        "speaker": "pet",
+        "text": "辛苦啦，抱抱你。走动的事让照料助手告诉你。",
+        "type": "text"
+       }
+      ],
+      "createdAt": "2026-11-24T15:12:32.860Z",
+      "error": null,
+      "errorNote": null,
+      "finishedAt": "2026-11-24T15:12:33.801Z",
+      "id": "m15",
+      "kind": "respond",
+      "position": 0,
+      "readOnly": false,
+      "role": "pet",
+      "sources": [],
+      "status": "complete",
+      "text": "辛苦啦，抱抱你。走动的事让照料助手告诉你。",
+      "turnId": 10,
+      "version": 5
+     },
+     {
+      "blocks": [
+       {
+        "speaker": "assistant",
+        "text": "我查了今天的记录：还没有走动数据，等项圈上传后我再告诉你。",
+        "type": "text"
+       }
+      ],
+      "createdAt": "2026-11-24T15:12:32.860Z",
+      "error": null,
+      "errorNote": null,
+      "finishedAt": "2026-11-24T15:12:35.033Z",
+      "id": "m16",
+      "kind": "answer",
+      "position": 1,
+      "readOnly": false,
+      "role": "assistant",
+      "sources": [],
+      "status": "complete",
+      "text": "我查了今天的记录：还没有走动数据，等项圈上传后我再告诉你。",
+      "turnId": 10,
+      "version": 6
+     }
+    ],
+    "readAt": null,
+    "reply": "【爱宠】辛苦啦，抱抱你。走动的事让照料助手告诉你。\n【照料助手】我查了今天的记录：还没有走动数据，等项圈上传后我再告诉你。",
+    "replyTo": null,
+    "replyToMessage": null,
+    "requestId": "capture-1795533121-named_pet",
+    "sources": [],
+    "speaker": "pet",
+    "status": "complete",
+    "target": "pet",
+    "text": "我今天有点累",
+    "topicId": null
+   }
+  },
+  {
+   "scenario": "assistant",
+   "turnId": 11,
+   "frames": [
+    {
+     "type": "<post>",
+     "requestId": "capture-1795533121-assistant",
+     "body": {
+      "accepted": true,
+      "protocol": "group-v1",
+      "turn": {
+       "blocks": null,
+       "createdAt": "2026-11-24T15:12:35.872Z",
+       "id": 11,
+       "images": [],
+       "messages": [],
+       "readAt": null,
+       "reply": "",
+       "replyTo": null,
+       "replyToMessage": null,
+       "requestId": "capture-1795533121-assistant",
+       "sources": [],
+       "speaker": "assistant",
+       "status": "pending",
+       "target": "assistant",
+       "text": "今天走了多久",
+       "topicId": null
+      }
+     }
+    },
+    {
+     "type": "turn",
+     "petId": 1,
+     "turn": {
+      "id": 11,
+      "requestId": "capture-1795533121-assistant",
+      "text": "今天走了多久",
+      "topicId": null,
+      "replyTo": null,
+      "sources": [],
+      "speaker": "assistant",
+      "readAt": null,
+      "target": "assistant",
+      "reply": "",
+      "status": "pending",
+      "blocks": null,
+      "images": [],
+      "replyToMessage": null,
+      "createdAt": "2026-11-24T15:12:35.872Z",
+      "messages": [
+       {
+        "id": "m17",
+        "turnId": 11,
+        "role": "assistant",
+        "position": 0,
+        "kind": "answer",
+        "status": "queued",
+        "text": "",
+        "version": 1,
+        "sources": [],
+        "blocks": null,
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:35.878Z",
+        "finishedAt": null
+       }
+      ]
+     }
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 11,
+     "message": {
+      "id": "m17",
+      "turnId": 11,
+      "role": "assistant",
+      "position": 0,
+      "kind": "answer",
+      "status": "running",
+      "text": "",
+      "version": 2,
+      "sources": [],
+      "blocks": null,
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:35.878Z",
+      "finishedAt": null
+     }
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 11,
+     "messageId": "m17",
+     "role": "assistant",
+     "text": "我查了今天的记录：",
+     "version": 2
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 11,
+     "messageId": "m17",
+     "role": "assistant",
+     "text": "我查了今天的记录：还没有走动数据，",
+     "version": 3
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 11,
+     "messageId": "m17",
+     "role": "assistant",
+     "text": "我查了今天的记录：还没有走动数据，暂时没法告诉你走了多久。",
+     "version": 3
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 11,
+     "message": {
+      "id": "m17",
+      "turnId": 11,
+      "role": "assistant",
+      "position": 0,
+      "kind": "answer",
+      "status": "complete",
+      "text": "我查了今天的记录：还没有走动数据，暂时没法告诉你走了多久。",
+      "version": 5,
+      "sources": [],
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "assistant",
+        "text": "我查了今天的记录：还没有走动数据，暂时没法告诉你走了多久。"
+       }
+      ],
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:35.878Z",
+      "finishedAt": "2026-11-24T15:12:37.024Z"
+     }
+    },
+    {
+     "type": "turn",
+     "petId": 1,
+     "turn": {
+      "id": 11,
+      "requestId": "capture-1795533121-assistant",
+      "text": "今天走了多久",
+      "topicId": null,
+      "replyTo": null,
+      "sources": [],
+      "speaker": "assistant",
+      "readAt": null,
+      "target": "assistant",
+      "reply": "【照料助手】我查了今天的记录：还没有走动数据，暂时没法告诉你走了多久。",
+      "status": "complete",
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "assistant",
+        "text": "我查了今天的记录：还没有走动数据，暂时没法告诉你走了多久。"
+       }
+      ],
+      "images": [],
+      "replyToMessage": null,
+      "createdAt": "2026-11-24T15:12:35.872Z",
+      "messages": [
+       {
+        "id": "m17",
+        "turnId": 11,
+        "role": "assistant",
+        "position": 0,
+        "kind": "answer",
+        "status": "complete",
+        "text": "我查了今天的记录：还没有走动数据，暂时没法告诉你走了多久。",
+        "version": 5,
+        "sources": [],
+        "blocks": [
+         {
+          "type": "text",
+          "speaker": "assistant",
+          "text": "我查了今天的记录：还没有走动数据，暂时没法告诉你走了多久。"
+         }
+        ],
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:35.878Z",
+        "finishedAt": "2026-11-24T15:12:37.024Z"
+       }
+      ]
+     }
+    }
+   ],
+   "final": {
+    "blocks": [
+     {
+      "speaker": "assistant",
+      "text": "我查了今天的记录：还没有走动数据，暂时没法告诉你走了多久。",
+      "type": "text"
+     }
+    ],
+    "createdAt": "2026-11-24T15:12:35.872Z",
+    "id": 11,
+    "images": [],
+    "messages": [
+     {
+      "blocks": [
+       {
+        "speaker": "assistant",
+        "text": "我查了今天的记录：还没有走动数据，暂时没法告诉你走了多久。",
+        "type": "text"
+       }
+      ],
+      "createdAt": "2026-11-24T15:12:35.878Z",
+      "error": null,
+      "errorNote": null,
+      "finishedAt": "2026-11-24T15:12:37.024Z",
+      "id": "m17",
+      "kind": "answer",
+      "position": 0,
+      "readOnly": false,
+      "role": "assistant",
+      "sources": [],
+      "status": "complete",
+      "text": "我查了今天的记录：还没有走动数据，暂时没法告诉你走了多久。",
+      "turnId": 11,
+      "version": 5
+     }
+    ],
+    "readAt": null,
+    "reply": "【照料助手】我查了今天的记录：还没有走动数据，暂时没法告诉你走了多久。",
+    "replyTo": null,
+    "replyToMessage": null,
+    "requestId": "capture-1795533121-assistant",
+    "sources": [],
+    "speaker": "assistant",
+    "status": "complete",
+    "target": "assistant",
+    "text": "今天走了多久",
+    "topicId": null
+   }
+  },
+  {
+   "scenario": "clarify",
+   "turnId": 12,
+   "frames": [
+    {
+     "type": "<post>",
+     "requestId": "capture-1795533121-clarify",
+     "body": {
+      "accepted": true,
+      "protocol": "group-v1",
+      "turn": {
+       "blocks": null,
+       "createdAt": "2026-11-24T15:12:37.874Z",
+       "id": 12,
+       "images": [],
+       "messages": [],
+       "readAt": null,
+       "reply": "",
+       "replyTo": null,
+       "replyToMessage": null,
+       "requestId": "capture-1795533121-clarify",
+       "sources": [],
+       "speaker": "assistant",
+       "status": "pending",
+       "target": "auto",
+       "text": "路由异常",
+       "topicId": null
+      }
+     }
+    },
+    {
+     "type": "turn",
+     "petId": 1,
+     "turn": {
+      "id": 12,
+      "requestId": "capture-1795533121-clarify",
+      "text": "路由异常",
+      "topicId": null,
+      "replyTo": null,
+      "sources": [],
+      "speaker": "assistant",
+      "readAt": null,
+      "target": "auto",
+      "reply": "",
+      "status": "pending",
+      "blocks": null,
+      "images": [],
+      "replyToMessage": null,
+      "createdAt": "2026-11-24T15:12:37.874Z",
+      "messages": [
+       {
+        "id": "m18",
+        "turnId": 12,
+        "role": "assistant",
+        "position": 0,
+        "kind": "clarify",
+        "status": "queued",
+        "text": "",
+        "version": 1,
+        "sources": [],
+        "blocks": null,
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:37.884Z",
+        "finishedAt": null
+       }
+      ]
+     }
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 12,
+     "message": {
+      "id": "m18",
+      "turnId": 12,
+      "role": "assistant",
+      "position": 0,
+      "kind": "clarify",
+      "status": "running",
+      "text": "",
+      "version": 2,
+      "sources": [],
+      "blocks": null,
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:37.884Z",
+      "finishedAt": null
+     }
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 12,
+     "messageId": "m18",
+     "role": "assistant",
+     "text": "我没太确定你想问哪方面：",
+     "version": 2
+    },
+    {
+     "type": "message_delta",
+     "petId": 1,
+     "turnId": 12,
+     "messageId": "m18",
+     "role": "assistant",
+     "text": "我没太确定你想问哪方面：是想聊聊天，还是要我查它的记录？",
+     "version": 3
+    },
+    {
+     "type": "message",
+     "petId": 1,
+     "turnId": 12,
+     "message": {
+      "id": "m18",
+      "turnId": 12,
+      "role": "assistant",
+      "position": 0,
+      "kind": "clarify",
+      "status": "complete",
+      "text": "我没太确定你想问哪方面：是想聊聊天，还是要我查它的记录？",
+      "version": 5,
+      "sources": [],
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "assistant",
+        "text": "我没太确定你想问哪方面：是想聊聊天，还是要我查它的记录？"
+       }
+      ],
+      "error": null,
+      "errorNote": null,
+      "readOnly": false,
+      "createdAt": "2026-11-24T15:12:37.884Z",
+      "finishedAt": "2026-11-24T15:12:38.725Z"
+     }
+    },
+    {
+     "type": "turn",
+     "petId": 1,
+     "turn": {
+      "id": 12,
+      "requestId": "capture-1795533121-clarify",
+      "text": "路由异常",
+      "topicId": null,
+      "replyTo": null,
+      "sources": [],
+      "speaker": "assistant",
+      "readAt": null,
+      "target": "auto",
+      "reply": "【照料助手】我没太确定你想问哪方面：是想聊聊天，还是要我查它的记录？",
+      "status": "complete",
+      "blocks": [
+       {
+        "type": "text",
+        "speaker": "assistant",
+        "text": "我没太确定你想问哪方面：是想聊聊天，还是要我查它的记录？"
+       }
+      ],
+      "images": [],
+      "replyToMessage": null,
+      "createdAt": "2026-11-24T15:12:37.874Z",
+      "messages": [
+       {
+        "id": "m18",
+        "turnId": 12,
+        "role": "assistant",
+        "position": 0,
+        "kind": "clarify",
+        "status": "complete",
+        "text": "我没太确定你想问哪方面：是想聊聊天，还是要我查它的记录？",
+        "version": 5,
+        "sources": [],
+        "blocks": [
+         {
+          "type": "text",
+          "speaker": "assistant",
+          "text": "我没太确定你想问哪方面：是想聊聊天，还是要我查它的记录？"
+         }
+        ],
+        "error": null,
+        "errorNote": null,
+        "readOnly": false,
+        "createdAt": "2026-11-24T15:12:37.884Z",
+        "finishedAt": "2026-11-24T15:12:38.725Z"
+       }
+      ]
+     }
+    }
+   ],
+   "final": {
+    "blocks": [
+     {
+      "speaker": "assistant",
+      "text": "我没太确定你想问哪方面：是想聊聊天，还是要我查它的记录？",
+      "type": "text"
+     }
+    ],
+    "createdAt": "2026-11-24T15:12:37.874Z",
+    "id": 12,
+    "images": [],
+    "messages": [
+     {
+      "blocks": [
+       {
+        "speaker": "assistant",
+        "text": "我没太确定你想问哪方面：是想聊聊天，还是要我查它的记录？",
+        "type": "text"
+       }
+      ],
+      "createdAt": "2026-11-24T15:12:37.884Z",
+      "error": null,
+      "errorNote": null,
+      "finishedAt": "2026-11-24T15:12:38.725Z",
+      "id": "m18",
+      "kind": "clarify",
+      "position": 0,
+      "readOnly": false,
+      "role": "assistant",
+      "sources": [],
+      "status": "complete",
+      "text": "我没太确定你想问哪方面：是想聊聊天，还是要我查它的记录？",
+      "turnId": 12,
+      "version": 5
+     }
+    ],
+    "readAt": null,
+    "reply": "【照料助手】我没太确定你想问哪方面：是想聊聊天，还是要我查它的记录？",
+    "replyTo": null,
+    "replyToMessage": null,
+    "requestId": "capture-1795533121-clarify",
+    "sources": [],
+    "speaker": "assistant",
+    "status": "complete",
+    "target": "auto",
+    "text": "路由异常",
+    "topicId": null
+   }
+  }
+ ]
+}

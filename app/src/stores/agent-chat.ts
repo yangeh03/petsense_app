@@ -5,10 +5,14 @@
  */
 
 import { create } from 'zustand';
-import type { AgentTurn } from '@/services/agent';
+import type { AgentReplyMessage, AgentTurn } from '@/services/agent';
 import {
   applyDeltaToTurns,
+  applyMessageDeltaToTurns,
+  applyMessageStatusToTurns,
+  applyMessageToTurns,
   isLocalTurn,
+  mergeServerTurns,
   orderTurns,
   reconcileTurn,
   removeLocalTurn,
@@ -27,6 +31,8 @@ export type PendingRequest = {
   key: string;
   topic?: number;
   replyTo?: number;
+  /** 消息级引用（群聊协议）：精确到被引用回合里的某一条回复 */
+  replyToMessage?: string;
   images?: string[];
 };
 
@@ -50,6 +56,8 @@ export type AgentChatState = {
   turns: AgentTurn[];
   topic: number | undefined;
   replyTo: number | undefined;
+  /** 消息级引用的预览与发送上下文（未引用时为 undefined） */
+  replyToMessage: string | undefined;
   draft: string;
   target: AgentTarget;
   attachments: AgentAttachment[];
@@ -58,9 +66,13 @@ export type AgentChatState = {
   connection: AgentConnection;
   scrollY: number;
   pending: PendingRequest | null;
+  /** 服务端已确认当前账号进入双 Agent（列表或回执声明了群聊协议）：输入区才提供「两位都回」 */
+  dualAgent: boolean;
   setPet: (pet: { id: number; name: string } | null) => void;
   setLoadedFor: (userId: number | null) => void;
   setTurns: (turns: AgentTurn[]) => void;
+  /** 拉齐服务端列表：已加载的回合按消息逐条合并，迟到的旧快照不盖掉 WS 已推来的新状态 */
+  syncTurns: (turns: AgentTurn[]) => void;
   prependOlder: (turns: AgentTurn[]) => void;
   applyTurn: (turn: AgentTurn) => void;
   /** 乐观 UI：本地立即落一条 pending 回合（主人刚发出的那条） */
@@ -68,10 +80,28 @@ export type AgentChatState = {
   /** 撤下本地乐观回合（发送失败且服务端未确认） */
   removeLocalTurn: (requestId: string) => void;
   applyDelta: (petId: number, turnId: number, text: string, speaker: AgentTurn['speaker']) => void;
+  /** 双 Agent 群聊：按消息 ID 推送的三种帧 */
+  applyMessage: (petId: number, message: AgentReplyMessage) => void;
+  applyMessageDelta: (
+    petId: number,
+    turnId: number,
+    messageId: string,
+    role: AgentReplyMessage['role'],
+    text: string,
+    version: number,
+  ) => void;
+  applyMessageStatus: (
+    petId: number,
+    turnId: number,
+    messageId: string,
+    activity: NonNullable<AgentReplyMessage['activity']>,
+  ) => void;
   setDraft: (draft: string) => void;
   setTarget: (target: AgentTarget) => void;
   setTopic: (topic: number | undefined) => void;
   setReplyTo: (replyTo: number | undefined) => void;
+  setReplyToMessage: (messageId: string | undefined) => void;
+  setDualAgent: (enabled: boolean) => void;
   addAttachments: (items: AgentAttachment[]) => void;
   updateAttachment: (key: string, patch: Partial<AgentAttachment>) => void;
   removeAttachment: (key: string) => void;
@@ -92,6 +122,7 @@ export const useAgentChatStore = create<AgentChatState>((set) => ({
   turns: [],
   topic: undefined,
   replyTo: undefined,
+  replyToMessage: undefined,
   draft: '',
   target: 'auto',
   attachments: [],
@@ -100,9 +131,11 @@ export const useAgentChatStore = create<AgentChatState>((set) => ({
   connection: 'closed',
   scrollY: 0,
   pending: null,
+  dualAgent: false,
   setPet: (pet) => set({ petId: pet ? pet.id : null, petName: pet ? pet.name : null }),
   setLoadedFor: (userId) => set({ loadedFor: userId }),
   setTurns: (turns) => set({ turns: orderTurns(turns) }),
+  syncTurns: (turns) => set((state) => ({ turns: mergeServerTurns(state.turns, turns) })),
   prependOlder: (older) =>
     set((state) => ({
       turns: orderTurns(
@@ -124,10 +157,28 @@ export const useAgentChatStore = create<AgentChatState>((set) => ({
       if (state.petId !== petId) return state;
       return { turns: applyDeltaToTurns(state.turns, turnId, text, speaker, state.topic ?? null) };
     }),
+  applyMessage: (petId, message) =>
+    set((state) =>
+      state.petId === petId ? { turns: applyMessageToTurns(state.turns, message) } : state,
+    ),
+  applyMessageDelta: (petId, turnId, messageId, role, text, version) =>
+    set((state) =>
+      state.petId === petId
+        ? { turns: applyMessageDeltaToTurns(state.turns, turnId, messageId, role, text, version) }
+        : state,
+    ),
+  applyMessageStatus: (petId, turnId, messageId, activity) =>
+    set((state) =>
+      state.petId === petId
+        ? { turns: applyMessageStatusToTurns(state.turns, turnId, messageId, activity) }
+        : state,
+    ),
   setDraft: (draft) => set({ draft }),
   setTarget: (target) => set({ target }),
-  setTopic: (topic) => set({ topic, replyTo: undefined }),
+  setTopic: (topic) => set({ topic, replyTo: undefined, replyToMessage: undefined }),
   setReplyTo: (replyTo) => set({ replyTo }),
+  setReplyToMessage: (messageId) => set({ replyToMessage: messageId }),
+  setDualAgent: (enabled) => set({ dualAgent: enabled }),
   addAttachments: (items) =>
     set((state) => ({ attachments: [...state.attachments, ...items].slice(0, 3) })),
   updateAttachment: (key, patch) =>
@@ -153,6 +204,7 @@ export const useAgentChatStore = create<AgentChatState>((set) => ({
       turns: [],
       topic: undefined,
       replyTo: undefined,
+      replyToMessage: undefined,
       draft: '',
       target: 'auto',
       attachments: [],
@@ -160,5 +212,6 @@ export const useAgentChatStore = create<AgentChatState>((set) => ({
       error: '',
       scrollY: 0,
       pending: null,
+      dualAgent: false,
     }),
 }));

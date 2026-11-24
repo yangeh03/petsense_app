@@ -19,7 +19,7 @@ EXPECTED_TABLES = {'agent_turns', 'agent_runs', 'agent_learning_days', 'agent_pr
                    'agent_task_plans', 'agent_task_deliveries',
                    'agent_care_topics', 'care_device_states', 'care_pet_states',
                    'push_preferences', 'push_installations', 'push_deliveries',
-                   'agent_inbox_items', 'agent_inbox_states'}
+                   'agent_inbox_items', 'agent_inbox_states', 'agent_routes', 'agent_messages'}
 
 
 class ModelSchemaTests(unittest.TestCase):

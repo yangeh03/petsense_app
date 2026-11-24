@@ -96,6 +96,8 @@ def create_app(start_background=True):
         from petsense.agent import jobs as agent_jobs
         from petsense.agent import tasks as agent_tasks
         agent_jobs.register_handler(agent_tasks.CHECKPOINT_KIND, agent_tasks.handle_checkpoint_job)
+        from petsense.agent import group as agent_group
+        agent_group.start()  # 双 Agent 群聊回合执行器和全局回退开关见 agent/group.py
         agent_jobs.start_scheduler()  # W08：持久作业调度（PETSENSE_SCHEDULER_DISABLED 可关；kind 执行器随各域注册）
         from petsense.agent import care_jobs
         care_jobs.start_care()  # W09：scan/review/event 执行器注册 + 周期扫描入队（幂等）

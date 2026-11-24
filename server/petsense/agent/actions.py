@@ -162,6 +162,8 @@ def _upsert_action_block(session, action_id, action_payload, proposal_id=None, t
     if not replaced:
         merged.append(block)
     turn.blocks = json.dumps(merged, ensure_ascii=False)
+    from petsense.agent import group
+    group.sync_blocks(session, turn)  # 群聊回合：回执卡同步到发出它的那条照料助手消息
     return turn_id
 
 
@@ -174,8 +176,8 @@ def _publish_turn(user_id, pet_id, turn_id):
         turn = s.get(AgentTurn, turn_id)
         if turn is None or turn.pet_id != pet_id:
             return
-        from petsense.agent.routes import public
-        ws.push_turn(user_id, pet_id, public(turn))
+        from petsense.agent import group
+        ws.push_turn(user_id, pet_id, group.turn_public(s, turn))
 
 
 def _transition(action_id, *, from_statuses, status=None, error=None, result_updates=None):

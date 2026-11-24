@@ -147,7 +147,14 @@ def inbox_turn(turn_id):
         turn = inbox.find_turn(s, user['id'], turn_id)
         if turn is None:
             return {'message': '消息不存在'}, 404
-        return {'turn': inbox.turn_public(turn)}
+        from petsense.agent import group
+        if group.client_group(user):
+            # 群聊协议客户端：与 WS/轮询同形状（带按消息拆分的 messages）
+            return {'turn': group.turn_public(s, turn), 'protocol': group.PROTOCOL}
+        payload = inbox.turn_public(turn)
+        if payload.get('target') == 'both':
+            payload['target'] = 'auto'  # 旧客户端不认识「两位都回复」，等同未指定
+        return {'turn': payload}
 
 
 @bp.get('/resolve/<int:item_id>')
