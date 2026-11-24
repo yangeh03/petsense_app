@@ -50,7 +50,11 @@ test('background task deliveries render as cards with old-client degradation', (
   assert.match(message, /blocks\.filter\(\(block\) => block\.type === 'task_result'\)/);
   assert.match(message, /TaskResultCard/);
   assert.match(result, /委托提醒/);
-  assert.match(result, /不代表它的状态正常或异常/);
+  // 降级回信的标题与说明按「是否带核对结果」取文案；两种都不暗示状态正常或异常
+  assert.match(result, /degradedLetterNotice\(hasEvidence\)/);
+  assert.match(result, /degradedLetterLabel\(hasEvidence\)/);
+  assert.match(read('services/agent-change.ts'), /不代表它的状态正常或异常/);
+  assert.match(read('services/agent-change.ts'), /不代表它的整体状态正常或异常/);
   // 后台回合（无主人正文无图片）不渲染空气泡
   assert.match(message, /turn\.text \|\| images\.length \?/);
   // 委托簿服务接线

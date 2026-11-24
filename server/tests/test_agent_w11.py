@@ -738,6 +738,46 @@ class DeliveryEvidenceTests(ChangeTestBase):
         self.assertIsNotNone(item['revision'])
         self.assertEqual(item['value'], 7000)
 
+    def test_degraded_letter_with_evidence_states_the_checked_result(self):
+        """降级回信带核对结果：正文写出核对句，不再说「不包含结论」。
+
+        此前正文写「不包含结论」「只包含覆盖与缺口说明」，卡片却列出「对比：高于平时
+        范围」，前后矛盾；核对句是确定性事实，不依赖模型，应如实给出。
+        """
+        self.seed_baseline(walks=[10] * 7)
+        self.seed_minutes(_day(-1), 1, walk=100)   # 超出 p90
+        task_id = self._comparison_task()
+        with db.session_scope() as s:
+            pet = s.get(Pet, self.pet_id)
+            task = s.get(AgentTask, task_id)
+            plan = task_service.plan_of(s, task)
+            task.effective_from = _at(-1, 0)
+            evidence = task_service.materialize(s, pet, task, plan, _at(0, 12))
+            delivery = task_service._deliver(
+                s, pet, task, plan, kind='degraded_letter', text=None,
+                evidence=evidence, run_id=None, now=_at(0, 12), reason='model_unavailable')
+            payload = json.loads(delivery.payload)
+        self.assertTrue(payload['degraded'])
+        self.assertEqual(len(payload['changeEvidence']), 1)
+        text = payload['text']
+        self.assertIn(payload['changeEvidence'][0]['note'], text)   # 服务端核对句进正文
+        self.assertIn('完整的说明', text)
+        self.assertIn('只针对已观测时段', text)
+        self.assertIn('不代表它的整体状态正常或异常', text)
+        self.assertIn('模型评估暂不可用', text)
+        self.assertNotIn('不包含结论', text)
+        self.assertNotIn('未能完成', text)
+
+    def test_degraded_letter_without_evidence_keeps_no_conclusion(self):
+        """没有核对结果的降级回信维持原样：只报覆盖与缺口，明确不包含结论。"""
+        self.assertEqual(
+            task_service._degraded_letter_text(
+                {'question': '它这两天走动情况怎么样'},
+                {'observedSeconds': 3660, 'pausedSeconds': 0}, 'model_unavailable', _at(0, 12)),
+            '关于「它这两天走动情况怎么样」：观察已到截止时间，但本次评估未能完成'
+            '（模型评估暂不可用）。观察期间有效覆盖约 61 分钟，其余时间为未观测缺口。'
+            '这封回信不包含结论，不代表它的状态正常或异常；如仍需要结论，可以重新发起同样的委托。')
+
     def test_frozen_evidence_survives_baseline_revision_change(self):
         """交付后基线重算（修订号变化）不改写历史证据。"""
         self.seed_baseline(walks=[10] * 7)

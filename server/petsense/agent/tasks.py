@@ -762,9 +762,9 @@ def _deliver(session, pet, task, plan, *, kind, text, evidence, run_id, now, rea
         AgentTaskDelivery.instance_key == instance)).scalar_one_or_none()
     if existing is not None:
         return existing
-    content = text or _degraded_letter_text(plan, evidence, reason, now)
     change_evidence = [change_service.freeze(s) for s in (evidence.get('changeSlots') or [])
                        if s.get('eligible')]
+    content = text or _degraded_letter_text(plan, evidence, reason, now, change_evidence)
     payload = {'text': content, 'changeEvidence': change_evidence,
                'windowStart': evidence.get('windowStart'),
                'windowEnd': evidence.get('windowEnd'),
@@ -807,16 +807,29 @@ def _deliver(session, pet, task, plan, *, kind, text, evidence, run_id, now, rea
     return delivery
 
 
-def _degraded_letter_text(plan, evidence, reason, now):
-    """D6 降级回信：有覆盖与缺口、明确注明评估未完成，不伪造结论。"""
+def _degraded_letter_text(plan, evidence, reason, now, change_evidence=()):
+    """D6 降级回信：明确注明评估未完成，不伪造结论。
+
+    有按个人基线核对出的时段结果（W11 冻结证据）时，把这些服务端生成的核对句写进
+    正文：它们是确定性事实，不依赖模型。此时不再说「不包含结论」，改为说明完整说明
+    没写成、结果只针对已观测时段。没有核对结果时维持只报覆盖与缺口、不下结论。
+    """
     minutes = int((evidence.get('observedSeconds') or 0) // 60)
     paused = int((evidence.get('pausedSeconds') or 0) // 60)
     why = {'model_unavailable': '模型评估暂不可用',
            'model_invalid_output': '评估结果不合法'}.get(reason or '', '评估未能完成')
     paused_note = f'，其中暂停约 {paused} 分钟' if paused else ''
-    return (f"关于「{plan.get('question') or plan.get('title')}」：观察已到截止时间，"
-            f'但本次评估未能完成（{why}）。观察期间有效覆盖约 {minutes} 分钟{paused_note}，'
-            '其余时间为未观测缺口。这封回信不包含结论，不代表它的状态正常或异常；'
+    question = plan.get('question') or plan.get('title')
+    coverage = f'观察期间有效覆盖约 {minutes} 分钟{paused_note}，其余时间为未观测缺口'
+    anchored = '\n'.join(item['note'] for item in change_evidence if item.get('note'))
+    if anchored:
+        return (f"关于「{question}」：观察已到截止时间，但这次没能在截止前写成完整的说明"
+                f'（{why}）。以下是按它的个人基线逐时段核对出的结果，只针对已观测时段，'
+                f'不代表它的整体状态正常或异常：\n{anchored}\n'
+                f'{coverage}，未观测时段不作判断。如需完整说明，可以重新发起同样的委托。')
+    return (f"关于「{question}」：观察已到截止时间，"
+            f'但本次评估未能完成（{why}）。{coverage}。'
+            '这封回信不包含结论，不代表它的状态正常或异常；'
             '如仍需要结论，可以重新发起同样的委托。')
 
 

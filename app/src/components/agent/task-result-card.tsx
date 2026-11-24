@@ -10,7 +10,7 @@ import { useRouter } from 'expo-router';
 import { ThemedText } from '@/components/themed-text';
 import { useTheme } from '@/hooks/use-theme';
 import type { AgentTaskResultBlock } from '@/services/agent';
-import { evidenceRows } from '@/services/agent-change';
+import { degradedLetterLabel, degradedLetterNotice, evidenceRows } from '@/services/agent-change';
 
 const KIND_LABELS: Record<AgentTaskResultBlock['kind'], string> = {
   reminder: '委托提醒',
@@ -37,6 +37,10 @@ function formatDeadline(iso: string): string {
 export function TaskResultCard({ block }: { block: AgentTaskResultBlock }) {
   const theme = useTheme();
   const router = useRouter();
+  const evidence = block.changeEvidence ?? [];
+  const hasEvidence = evidence.length > 0;
+  const title =
+    block.kind === 'degraded_letter' ? degradedLetterLabel(hasEvidence) : KIND_LABELS[block.kind];
   return (
     <View
       style={[
@@ -52,7 +56,7 @@ export function TaskResultCard({ block }: { block: AgentTaskResultBlock }) {
         />
         <View style={styles.headBody}>
           <ThemedText type="smallBold">
-            {KIND_LABELS[block.kind]}
+            {title}
             {block.title ? `：${block.title}` : ''}
           </ThemedText>
           <ThemedText type="small" themeColor="textSecondary">
@@ -63,10 +67,10 @@ export function TaskResultCard({ block }: { block: AgentTaskResultBlock }) {
       </View>
       {block.degraded ? (
         <ThemedText type="small" themeColor="textSecondary">
-          这封回信未完成评估，只包含覆盖与缺口说明，不代表它的状态正常或异常。
+          {degradedLetterNotice(hasEvidence)}
         </ThemedText>
       ) : null}
-      {(block.changeEvidence ?? []).map((evidence) => (
+      {evidence.map((evidence) => (
         <View key={evidence.evidenceId} style={styles.evidence}>
           <ThemedText type="smallBold">
             {evidence.dimension ?? '个人变化'}

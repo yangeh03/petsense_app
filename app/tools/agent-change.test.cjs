@@ -103,3 +103,16 @@ test('缺字段的证据安全降级（不显示 NaN）', () => {
   assert.equal(rows[1].value, '无数据');
   assert.equal(rows[3].value, '在平时范围内（覆盖 0 分钟）');
 });
+
+test('降级回信卡的标题与说明跟是否带核对结果一致', () => {
+  const { degradedLetterLabel, degradedLetterNotice } = load('services/agent-change.ts');
+  // 带核对结果：不能再写「只包含覆盖与缺口说明」，否则与下面的「对比」行自相矛盾
+  const withEvidence = degradedLetterNotice(true);
+  assert.ok(withEvidence.includes('核对出的事实'));
+  assert.ok(!withEvidence.includes('只包含覆盖与缺口说明'));
+  assert.ok(withEvidence.includes('不代表它的整体状态正常或异常'));
+  assert.equal(degradedLetterLabel(true), '委托回信（说明未完成）');
+  // 没有核对结果：维持「未完成评估 / 只包含覆盖与缺口说明」
+  assert.ok(degradedLetterNotice(false).includes('只包含覆盖与缺口说明'));
+  assert.equal(degradedLetterLabel(false), '委托回信（未完成评估）');
+});
