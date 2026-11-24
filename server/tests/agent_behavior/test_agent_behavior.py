@@ -21,13 +21,15 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from flask import Flask
-from helpers import fresh_db
+from group_testkit import user_texts
+from helpers import TurnClient, fresh_db
 
 from petsense import config, db
 from petsense.agent import care
 from petsense.agent import jobs as jobs_module
 from petsense.agent import proposals as proposals_module
 from petsense.agent import tasks as task_service
+from petsense.agent.conversation_routes import bp as conversation_bp
 from petsense.agent.routes import bp
 from petsense.db import utc_now
 from petsense.db.models import (AuthSession, Device, Pet, TelemetryEvent, TelemetryLatest,
@@ -141,6 +143,7 @@ class BehaviorScenarioTests(unittest.TestCase):
         fresh_db(self)
         self.app = Flask(__name__)
         self.app.register_blueprint(bp)
+        self.app.register_blueprint(conversation_bp)  # W16：另开会话用
         self.client = self.app.test_client()
         with db.session_scope() as s:
             user = User(username='eval', display_name='eval', password_hash='x', salt='s',
@@ -158,6 +161,7 @@ class BehaviorScenarioTests(unittest.TestCase):
                               user_id=user.id, expires_at=db.utc_now() + timedelta(days=1)))
             self.auth = {'X-Petsense-Session': token}
         self.path = f'/api/app/agent/pets/{self.pet}/turns'
+        self.client = TurnClient(self.client, self.pet)  # 回合请求自动带上会话（W16）
         media = tempfile.TemporaryDirectory()  # W07：图片附件落临时目录，不写运行目录
         self.addCleanup(media.cleanup)
         patched = patch.object(config, 'AGENT_MEDIA_DIR', media.name)
@@ -194,6 +198,43 @@ class BehaviorScenarioTests(unittest.TestCase):
         response = self.client.post(self.path, headers=self.auth, json=body)
         self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
         return response.json['turn'], _latest_run(self.pet)
+
+    def _new_conversation(self):
+        """另开一个会话（W16）：上一个会话里已经有消息，所以这里一定是新建的。"""
+        response = self.client.post(f'/api/app/agent/pets/{self.pet}/conversations', headers=self.auth, json={})
+        self.assertEqual(response.status_code, 201, response.get_data(as_text=True))
+        return response.json['conversation']['id']
+
+    def _send_in(self, conversation_id, text, target='assistant'):
+        """在指定会话里发一条消息（W16）。"""
+        response = self.client.post(self.path, headers=self.auth, json={
+            'text': text, 'requestId': secrets.token_hex(6), 'target': target,
+            'conversationId': conversation_id})
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        self.assertEqual(response.json['turn']['conversationId'], conversation_id)
+        return response.json['turn'], _latest_run(self.pet)
+
+    def test_E80_new_conversation_does_not_inherit_other_conversation_context(self):
+        """W16 会话隔离：A 会话里给一个信息，新开的 B 会话里模型拿到的输入不含 A 的任何一句话。"""
+        marker = '蓝鲸七号'
+        turn_a, _run = self._send('先跟你约一个只在这段对话里用的暗号：%s' % marker)
+        self.assertEqual(turn_a['status'], 'complete', turn_a['reply'])
+        second = self._new_conversation()
+        from petsense.agent import model as agent_model
+        with patch.object(agent_model, 'respond', wraps=agent_model.respond) as spy:
+            turn_b, _run = self._send_in(second, '我们这个会话里，我之前跟你说过什么？')
+        self.assertEqual(turn_b['status'], 'complete', turn_b['reply'])
+        sent = [call.args[0] for call in spy.call_args_list if call.args]
+        self.assertTrue(sent, '应当真的调用了模型')
+        leaked = [text for items in sent for text in user_texts(items) if marker in text]
+        self.assertEqual(leaked, [], '另一个会话里说过的话不得进入本会话的模型输入')
+
+    def test_E81_follow_up_in_the_same_conversation_keeps_context(self):
+        """W16：同一会话里省略主语的追问能接上（历史按会话保留）。"""
+        self._send('我给它起了个小名，叫「豆豆包」', target='assistant')
+        turn, _run = self._send('它的小名是什么？只回答小名本身。', target='assistant')
+        self.assertEqual(turn['status'], 'complete', turn['reply'])
+        self.assertIn('豆豆包', turn['reply'])
 
     def _make_image(self, kind):
         """PIL 生成可断言内容的测试图（W07：评测素材现场生成，不落仓库二进制资产）。"""
@@ -1448,11 +1489,15 @@ class CareBehaviorTests(unittest.TestCase):
         self.assertEqual(len(turns), 1, '首发消息一条')
         self.assertIn('电', turns[0].reply)
         self.assertNotIn('比平时', turns[0].reply)
-        # 对话追问：read_care_topics 引用依据回答
+        # 对话追问（W16：落在告警自带的会话里）：read_care_topics 引用依据回答
+        with db.session_scope() as s:
+            conversation_id = s.get(AgentTurn, turns[0].id).conversation_id
+        self.assertIsNotNone(conversation_id)
         response = self.client.post(f'/api/app/agent/pets/{self.pet}/turns', headers=self.auth,
                                     json={'text': '为什么提醒我？', 'requestId': 'why-1',
-                                          'target': 'assistant'})
+                                          'target': 'assistant', 'conversationId': conversation_id})
         self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        self.assertEqual(response.json['turn']['conversationId'], conversation_id)
         run = _latest_run(self.pet)
         calls = json.loads(run.tool_summary)
         self.assertTrue(any(c['name'] == 'read_care_topics' and c['allowed'] for c in calls),

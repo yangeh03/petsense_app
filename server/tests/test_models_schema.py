@@ -8,6 +8,7 @@ from petsense.db.base import Base
 import petsense.db.models  # noqa: F401  触发注册
 
 EXPECTED_TABLES = {'agent_turns', 'agent_runs', 'agent_learning_days', 'agent_proposals', 'companion_settings',
+                   'agent_conversations',
                    'pet_weight_records', 'pet_baselines', 'pet_memories', 'users', 'auth_sessions', 'pets', 'daily_stats', 'home_layout', 'posts',
                    'post_likes', 'comments', 'follows', 'readings', 'action_predictions',
                    'collection_sessions', 'collection_frames', 'collection_videos', 'journal_crc', 'devices',

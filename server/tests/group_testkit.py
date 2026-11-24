@@ -11,12 +11,13 @@ from datetime import timedelta
 from unittest.mock import patch
 
 from flask import Flask
-from helpers import fresh_db
+from helpers import TurnClient, fresh_db
 from sqlalchemy import select
 from test_pets import seed_user_with_pet
 
 from petsense.agent import group, jobs, loop, model, router, runs, ws
 from petsense.agent import routes as agent_routes
+from petsense.agent.conversation_routes import bp as conversation_bp
 from petsense.agent.inbox_routes import bp as inbox_bp
 from petsense.db import session_scope, utc_now
 from petsense.db.models import Pet, User
@@ -150,10 +151,15 @@ class FakeSocket:
         self.close_message = message
 
 
-def legacy_turn(pet_id, text, reply='', blocks=None, speaker='assistant', status='complete', sources=None):
-    """旧路径留下的回合（没有消息行），用来验证历史投影与兼容。"""
+def legacy_turn(pet_id, text, reply='', blocks=None, speaker='assistant', status='complete', sources=None,
+                conversation_id=None):
+    """旧路径留下的回合（没有消息行），用来验证历史投影与兼容。
+
+    回合必须属于一个会话（W16）：要让它出现在某个会话的历史或分页里，就传那个会话的 id。
+    """
     with session_scope() as s:
-        turn = AgentTurn(pet_id=pet_id, request_id=next_key(), text=text, target='auto', reply=reply,
+        turn = AgentTurn(pet_id=pet_id, conversation_id=conversation_id, request_id=next_key(), text=text,
+                         target='auto', reply=reply,
                          sources=json.dumps(sources or [], ensure_ascii=False), speaker=speaker, status=status,
                          blocks=json.dumps(blocks, ensure_ascii=False) if blocks else None, created_at=utc_now())
         s.add(turn)
@@ -188,13 +194,15 @@ class GroupBase(unittest.TestCase):
         app = Flask(__name__)
         app.register_blueprint(agent_routes.bp)
         app.register_blueprint(inbox_bp)
-        self.client = app.test_client()
-        for target in ('petsense.agent.routes.require_app_user', 'petsense.agent.inbox_routes.require_app_user'):
+        app.register_blueprint(conversation_bp)
+        for target in ('petsense.agent.routes.require_app_user', 'petsense.agent.inbox_routes.require_app_user',
+                       'petsense.agent.conversation_routes.require_app_user'):
             auth = patch(target, return_value=({'id': self.uid, 'username': 'u1'}, None))
             auth.start()
             self.addCleanup(auth.stop)
         with session_scope() as s:
             self.pet = s.execute(select(Pet)).scalar_one().id
+        self.client = TurnClient(app.test_client(), self.pet)
         self.path = f'/api/app/agent/pets/{self.pet}/turns'
 
     def tearDown(self):
@@ -208,6 +216,10 @@ class GroupBase(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         return script
+
+    def legacy(self, text, **fields):
+        """本宠物的一条旧回合，落在用例的那个会话里（历史按会话隔离，W16）。"""
+        return legacy_turn(self.pet, text, conversation_id=self.client.conversation_id, **fields)
 
     def connect(self, group_protocol=True):
         sock = FakeSocket()

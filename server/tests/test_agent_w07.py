@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from flask import Flask
-from helpers import fresh_db
+from helpers import TurnClient, fresh_db, new_conversation
 from PIL import Image
 from test_pets import seed_user_with_pet
 
@@ -47,12 +47,12 @@ class W07Base(unittest.TestCase):
         self.uid = seed_user_with_pet()
         self.app = Flask(__name__)
         self.app.register_blueprint(bp)
-        self.client = self.app.test_client()
         auth = patch('petsense.agent.routes.require_app_user', return_value=({'id': self.uid}, None))
         auth.start()
         self.addCleanup(auth.stop)
         with session_scope() as s:
             self.pet = s.execute(select(Pet)).scalar_one().id
+        self.client = TurnClient(self.app.test_client(), self.pet)
         self.path = f'/api/app/agent/pets/{self.pet}/turns'
         self.images_path = f'/api/app/agent/pets/{self.pet}/images'
 

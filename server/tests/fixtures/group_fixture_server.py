@@ -364,12 +364,17 @@ def _drop_connections(user_id, turn_id, role):
 
 
 def install_hooks():
-    """进程内替换模型入口，并给推帧函数套一层取证日志。返回还原函数（测试用）。"""
+    """进程内替换模型入口，并给推帧函数套一层取证日志。返回还原函数（测试用）。
+
+    包装函数原样透传 W16 新增的可选参数（会话 id、随 turn 帧返回的会话摘要）。
+    """
     originals = (model.respond, router.model.respond, loop.model.respond, group.process_turn, group.accept,
-                 ws.push_message_delta, ws.push_message, ws.push_message_status, ws.push_delta, ws.push_turn)
+                 ws.push_message_delta, ws.push_message, ws.push_message_status, ws.push_delta, ws.push_turn,
+                 ws.push_conversation)
     process_turn, accept = group.process_turn, group.accept
     delta, snapshot, status = ws.push_message_delta, ws.push_message, ws.push_message_status
     legacy_delta, turn_frame = ws.push_delta, ws.push_turn
+    conversation_frame = ws.push_conversation
 
     def tagged_process(turn_id, now=None):
         CURRENT.turn_id = turn_id
@@ -384,18 +389,18 @@ def install_hooks():
             STATE['turns'][turn.id] = name
         return accept(session, turn)
 
-    def pushed_delta(user_id, pet_id, turn_id, message_id, role, text, version):
+    def pushed_delta(user_id, pet_id, turn_id, message_id, role, text, version, conversation_id=None):
         scenario = _scenario_of(turn_id)
         previous = STATE['last'].get(message_id)
         if scenario.get('inject') and previous:
-            delta(user_id, pet_id, turn_id, message_id, role, previous[0], previous[1])
+            delta(user_id, pet_id, turn_id, message_id, role, previous[0], previous[1], conversation_id)
             _log({'type': 'message_delta', 'turnId': turn_id, 'messageId': message_id, 'role': role,
                   'text': previous[0], 'version': previous[1]}, injected='stale')
-        delta(user_id, pet_id, turn_id, message_id, role, text, version)
+        delta(user_id, pet_id, turn_id, message_id, role, text, version, conversation_id)
         _log({'type': 'message_delta', 'turnId': turn_id, 'messageId': message_id, 'role': role,
               'text': text, 'version': version})
         if scenario.get('inject') and previous:
-            delta(user_id, pet_id, turn_id, message_id, role, previous[0], previous[1])
+            delta(user_id, pet_id, turn_id, message_id, role, previous[0], previous[1], conversation_id)
             _log({'type': 'message_delta', 'turnId': turn_id, 'messageId': message_id, 'role': role,
                   'text': previous[0], 'version': previous[1]}, injected='duplicate')
         with LOCK:
@@ -406,32 +411,37 @@ def install_hooks():
         if drop and role == drop['role'] and count == drop['deltas']:
             _drop_connections(user_id, turn_id, role)
 
-    def pushed_snapshot(user_id, pet_id, message):
-        snapshot(user_id, pet_id, message)
+    def pushed_snapshot(user_id, pet_id, message, conversation_id=None):
+        snapshot(user_id, pet_id, message, conversation_id)
         _log({'type': 'message', 'turnId': message.get('turnId'), 'message': message})
 
-    def pushed_status(user_id, pet_id, turn_id, message_id, role, state):
-        status(user_id, pet_id, turn_id, message_id, role, state)
+    def pushed_status(user_id, pet_id, turn_id, message_id, role, state, conversation_id=None):
+        status(user_id, pet_id, turn_id, message_id, role, state, conversation_id)
         _log({'type': 'message_status', 'turnId': turn_id, 'messageId': message_id, 'role': role,
               'status': state})
 
-    def pushed_legacy(user_id, pet_id, turn_id, text, speaker):
-        legacy_delta(user_id, pet_id, turn_id, text, speaker)
+    def pushed_legacy(user_id, pet_id, turn_id, text, speaker, conversation_id=None):
+        legacy_delta(user_id, pet_id, turn_id, text, speaker, conversation_id)
         _log({'type': 'delta', 'turnId': turn_id, 'role': speaker, 'text': text})
 
-    def pushed_turn(user_id, pet_id, turn_public):
-        turn_frame(user_id, pet_id, turn_public)
+    def pushed_turn(user_id, pet_id, turn_public, conversation=None):
+        turn_frame(user_id, pet_id, turn_public, conversation)
         _log({'type': 'turn', 'turnId': (turn_public or {}).get('id'), 'turn': turn_public})
+
+    def pushed_conversation(user_id, conversation):
+        conversation_frame(user_id, conversation)
+        _log({'type': 'conversation', 'conversation': conversation})
 
     for module in (model, router.model, loop.model):
         module.respond = fake_respond
     group.process_turn, group.accept = tagged_process, tagged_accept
     ws.push_message_delta, ws.push_message, ws.push_message_status = pushed_delta, pushed_snapshot, pushed_status
-    ws.push_delta, ws.push_turn = pushed_legacy, pushed_turn
+    ws.push_delta, ws.push_turn, ws.push_conversation = pushed_legacy, pushed_turn, pushed_conversation
 
     def restore():
         (model.respond, router.model.respond, loop.model.respond, group.process_turn, group.accept,
-         ws.push_message_delta, ws.push_message, ws.push_message_status, ws.push_delta, ws.push_turn) = originals
+         ws.push_message_delta, ws.push_message, ws.push_message_status, ws.push_delta, ws.push_turn,
+         ws.push_conversation) = originals
         with LOCK:
             STATE.update(override=None, sticky=False, turns={}, frames=[], counts={}, last={})
     return restore

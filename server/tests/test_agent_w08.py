@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from flask import Flask
-from helpers import fresh_db
+from helpers import fresh_db, new_conversation
 from test_agent import model_turn
 from test_pets import seed_user_with_pet
 
@@ -55,8 +55,10 @@ class W08TestCase(unittest.TestCase):
         self.now = utc_now()
         jobs.register_handler(task_service.CHECKPOINT_KIND, task_service.handle_checkpoint_job)
         self.addCleanup(lambda: jobs._HANDLERS.pop(task_service.CHECKPOINT_KIND, None))
+        self.conversation = new_conversation(self.pet)  # 提案所在回合的会话：回信落在这里（W16）
         with db.session_scope() as s:
-            turn = AgentTurn(pet_id=self.pet, request_id='seed-turn', text='帮我留意一下',
+            turn = AgentTurn(pet_id=self.pet, conversation_id=self.conversation, request_id='seed-turn',
+                             text='帮我留意一下',
                              target='auto', reply='', sources='[]', speaker='assistant',
                              status='complete', created_at=self.now)
             s.add(turn)
@@ -423,7 +425,7 @@ class CheckpointTests(W08TestCase):
             self.assertEqual(deliveries[0].kind, 'reminder')
             turn = s.get(AgentTurn, deliveries[0].turn_id)
             self.assertEqual(turn.status, 'complete')
-            self.assertEqual(turn.topic_id, self.turn1)  # 深链原会话（提案所在回合）
+            self.assertEqual(turn.conversation_id, self.conversation)  # 深链原会话（提案所在回合）
             blocks = json.loads(turn.blocks)
             self.assertEqual(blocks[0]['type'], 'text')
             self.assertEqual(blocks[1]['type'], 'task_result')
@@ -889,10 +891,10 @@ class CheckpointSchedulingRegressionTests(W08TestCase):
         blocks = [{'type': 'text', 'speaker': 'assistant', 'text': '提醒正文。'}]
         with db.session_scope() as s:
             turn_one, created_one = deliver_service.deliver_background_message(
-                s, self.pet, 'task-999', blocks, now=self.now)
+                s, self.pet, 'task-999', blocks, conversation_id=self.conversation, now=self.now)
         with db.session_scope() as s:
             turn_two, created_two = deliver_service.deliver_background_message(
-                s, self.pet, 'task-999', blocks, now=self.now)
+                s, self.pet, 'task-999', blocks, conversation_id=self.conversation, now=self.now)
         self.assertTrue(created_one)
         self.assertFalse(created_two)
         self.assertEqual(turn_one.id, turn_two.id)

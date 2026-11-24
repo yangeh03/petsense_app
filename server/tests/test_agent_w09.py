@@ -25,8 +25,8 @@ from petsense.agent import care, care_jobs, jobs
 from petsense.agent.routes import bp
 from petsense.db import utc_now
 from petsense.db.models import AuthSession, Device, Pet, TelemetryMinute, User
-from petsense.db.models.agent import (AgentCareTopic, AgentJob, AgentLearningDay, CareDeviceState,
-                                       CarePetState, AgentTurn)
+from petsense.db.models.agent import (AgentCareTopic, AgentConversation, AgentJob, AgentLearningDay,
+                                       CareDeviceState, CarePetState, AgentTurn)
 from petsense.db.models.memory import PetMemory
 from petsense.telemetry.observations import ingest_observation
 from sqlalchemy import select
@@ -365,6 +365,13 @@ class W09CareTests(unittest.TestCase):
         self.assertEqual(blocks[0]['type'], 'text')
         self.assertEqual(blocks[1]['type'], 'care')
         self.assertEqual(blocks[1]['care']['topicId'], topics[0].id)
+        # W16：两个阶段的消息落在主题自带的同一个系统会话里，会话标题取主题标题
+        self.assertIsNotNone(topics[0].conversation_id)
+        self.assertEqual({turn.conversation_id for turn in turns}, {topics[0].conversation_id})
+        with db.session_scope() as s:
+            conversation = s.get(AgentConversation, topics[0].conversation_id)
+            self.assertEqual((conversation.kind, conversation.care_kind, conversation.title),
+                             ('care', 'device', topics[0].title))
 
     def test_invalid_readings_require_sustained_frames(self):
         """长期无效：90 帧无效开启（缺字段不计）、新有效帧恢复。"""
@@ -826,8 +833,8 @@ class W09ReviewIntegrationTests(W09CareTests):
         self.assertIn('reviewFacts', summary['snapshot'])
         self.assertEqual(summary['snapshot']['settings']['proactivity'], 1)
 
-    def test_background_delivery_pushes_single_wellformed_frame(self):
-        """后台交付：WS 只推一帧，且 turn.blocks 已解析为数组（只序列化一次）。"""
+    def test_background_delivery_pushes_turn_and_conversation_frames(self):
+        """后台交付：WS 推一帧回合、一帧会话摘要（W16），且 turn.blocks 已解析为数组（只序列化一次）。"""
         from petsense.agent import ws as agent_ws
 
         class FakeSocket:
@@ -846,13 +853,19 @@ class W09ReviewIntegrationTests(W09CareTests):
                            'findings': [{'category': 'walk_volume', 'anchor': 'walk-ws',
                                          'title': '走动', 'text': '走动偏多。'}]})])):
             jobs.tick(now=self.t0 + timedelta(minutes=1), limit=5)
-        self.assertEqual(len(socket.frames), 1, '只推一帧')
+        self.assertEqual([json.loads(f)['type'] for f in socket.frames], ['turn', 'conversation'],
+                         '回合帧之后跟一帧会话摘要')
         frame = json.loads(socket.frames[0])
         self.assertEqual(frame['type'], 'turn')
         blocks = frame['turn']['blocks']
         self.assertIsInstance(blocks, list, 'blocks 应为已解析的数组（不得二次序列化）')
         self.assertTrue(any(block.get('type') == 'care' for block in blocks))
         self.assertTrue(any(block.get('type') == 'text' for block in blocks))
+        # 周期回顾每条汇总各成一个系统会话，摘要指向这条回合所在的会话
+        summary = json.loads(socket.frames[1])['conversation']
+        self.assertEqual((summary['kind'], summary['careKind']), ('care', 'review'))
+        self.assertEqual(summary['id'], frame['turn']['conversationId'])
+        self.assertEqual((summary['turnCount'], summary['unread']), (1, 1))
 
 
 if __name__ == '__main__':

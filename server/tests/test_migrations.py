@@ -94,6 +94,60 @@ class MigrationTests(unittest.TestCase):
         self.assertFalse({'reply_to_message', 'pending_at'}
                         & {column['name'] for column in inspector.get_columns('agent_turns')})
 
+    def test_conversation_migration_backfills_legacy_turns(self):
+        """0022 → 0023（W16）：每只有回合的宠物建一个「历史聊天」，旧回合与现有委托都指向它；可降级回去。"""
+        from alembic import command
+        command.upgrade(db._alembic_config(), '0022')
+        with db.engine().begin() as connection:
+            connection.execute(text("INSERT INTO users(id, username, display_name, password_hash, salt, "
+                                    "avatar_emoji, bio, created_at) VALUES "
+                                    "(1, 'old', 'old', 'x', 's', '🙂', '', '2026-01-01 00:00:00.000000')"))
+            connection.execute(text("INSERT INTO pets(id, user_id, name, species, breed, avatar_emoji, "
+                                    "device_id, created_at) VALUES "
+                                    "(1, 1, '阿黄', 'dog', '', '🐾', '', '2026-01-01 00:00:00.000000'), "
+                                    "(2, 1, '小白', 'cat', '', '🐾', '', '2026-01-01 00:00:00.000000')"))
+            # 一条普通对话、一条迁移前的话题消息（topic_id 是话题根回合 id）与一条关怀消息（topic_id 是主题 id）
+            connection.execute(text("INSERT INTO agent_turns(id, pet_id, request_id, text, target, topic_id, "
+                                    "sources, speaker, reply, status, created_at) VALUES "
+                                    "(1, 1, 'k1', '今天走了多久', 'assistant', NULL, '[]', 'assistant', "
+                                    "'40 分钟', 'complete', '2026-01-01 00:00:00.000000'), "
+                                    "(2, 1, 'k2', '那昨天呢', 'assistant', 1, '[]', 'assistant', "
+                                    "'30 分钟', 'complete', '2026-01-02 00:00:00.000000'), "
+                                    "(3, 1, 'care:event:9:open', '', 'assistant', 9, '[]', 'assistant', "
+                                    "'电量偏低', 'complete', '2026-01-03 00:00:00.000000')"))
+            connection.execute(text("INSERT INTO agent_tasks(id, pet_id, task_key, current_version, status, "
+                                    "timezone, deadline_at, effective_from, paused_intervals, topic_id, "
+                                    "due_attempts, created_at, updated_at) VALUES "
+                                    "(1, 1, 't1', 1, 'observing', 'Asia/Shanghai', '2026-12-01 00:00:00.000000', "
+                                    "'2026-01-01 00:00:00.000000', '[]', 1, 0, "
+                                    "'2026-01-01 00:00:00.000000', '2026-01-01 00:00:00.000000')"))
+        command.upgrade(db._alembic_config(), 'head')
+        inspector = inspect(db.engine())
+        self.assertIn('agent_conversations', inspector.get_table_names())
+        for table in ('agent_turns', 'agent_care_topics', 'agent_tasks'):
+            self.assertIn('conversation_id', {column['name'] for column in inspector.get_columns(table)})
+        self.assertIn('uq_agent_care_topics_conversation_id',
+                      {index['name'] for index in inspector.get_indexes('agent_care_topics')})
+        with db.engine().connect() as connection:
+            # 宠物 2 没有回合，不建会话；宠物 1 的三条回合（含两种旧话题消息）都归同一个「历史聊天」
+            rows = connection.execute(text('SELECT id, pet_id, kind, title FROM agent_conversations')).fetchall()
+            self.assertEqual([tuple(row) for row in rows], [(1, 1, 'chat', '历史聊天')])
+            turns = connection.execute(text(
+                'SELECT id, conversation_id, topic_id FROM agent_turns ORDER BY id')).fetchall()
+            self.assertEqual([tuple(row) for row in turns], [(1, 1, None), (2, 1, 1), (3, 1, 9)])
+            self.assertEqual(connection.execute(text(
+                'SELECT conversation_id FROM agent_tasks WHERE id = 1')).scalar(), 1)
+            self.assertEqual(connection.execute(text(
+                'SELECT last_turn_at FROM agent_conversations WHERE id = 1')).scalar(),
+                '2026-01-03 00:00:00.000000')
+        command.downgrade(db._alembic_config(), '0022')
+        inspector = inspect(db.engine())
+        self.assertNotIn('agent_conversations', inspector.get_table_names())
+        for table in ('agent_turns', 'agent_care_topics', 'agent_tasks'):
+            self.assertNotIn('conversation_id', {column['name'] for column in inspector.get_columns(table)})
+        with db.engine().connect() as connection:
+            self.assertEqual(connection.execute(text('SELECT COUNT(*) FROM agent_turns')).scalar(), 3)
+
 
 if __name__ == '__main__':
     unittest.main()

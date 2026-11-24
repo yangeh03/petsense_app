@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 import requests
 from group_testkit import FakeSocket
-from helpers import fresh_db
+from helpers import TurnClient, fresh_db
 from simple_websocket import Client, ConnectionClosed
 from sqlalchemy import select
 from werkzeug.serving import make_server
@@ -76,6 +76,8 @@ class FixtureTests(unittest.TestCase):
         pets = self.client.get('/api/app/pets', headers=self.auth).json['pets']
         self.pet = next(pet['id'] for pet in pets if pet['name'] == FIXTURE.SEED_PET)
         self.path = f'/api/app/agent/pets/{self.pet}/turns'
+        # 回合请求自动带上会话（W16）；登录等其它请求照旧走原客户端
+        self.client = TurnClient(self.client, self.pet)
 
     def tearDown(self):
         self.assertTrue(group.wait_idle(30), '夹具里的群聊回合没有在限时内结束')
@@ -150,7 +152,8 @@ class FixtureTests(unittest.TestCase):
     def test_legacy_client_keeps_the_old_protocol(self):
         response = self.client.post(self.path, headers=self.auth, json={'text': '你好', 'requestId': 'legacy-1'})
         self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
-        self.assertEqual(sorted(response.json), ['turn'])
+        # 响应多出会话摘要（W16），其余与改造前一致
+        self.assertEqual(sorted(response.json), ['conversation', 'turn'])
         self.assertEqual(response.json['turn']['reply'], '【照料助手】' + FIXTURE.LEGACY_REPLY)
         # 没声明群聊协议的客户端不能点「两位」：拿到可识别的代码
         refused = self.client.post(self.path, headers=self.auth, json={
@@ -280,7 +283,8 @@ class FixtureTests(unittest.TestCase):
                               f'?token={self.auth[TOKEN_HEADER]}&protocol={group.PROTOCOL}')
         self.addCleanup(quiet_close, sock)
         sent = requests.post(f'{base}{self.path}', headers=self.auth, json={
-            'text': '断线一下', 'requestId': f'fixture-{next(_keys)}', 'protocol': group.PROTOCOL}, timeout=10)
+            'text': '断线一下', 'requestId': f'fixture-{next(_keys)}', 'protocol': group.PROTOCOL,
+            'conversationId': self.client.conversation_id}, timeout=10)
         self.assertEqual(sent.status_code, 202, sent.text)
         turn_id = sent.json()['turn']['id']
 
@@ -311,7 +315,8 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual((len(streamed) >= 2, streamed[-1]), (True, 'assistant'), '断开前正在收照料助手的增量')
         # 断开后的增量没有接收方，消息仍在后台走完；重连后按列表拉齐
         listing = requests.get(f'{base}{self.path}', headers=self.auth,
-                               params={'protocol': group.PROTOCOL}, timeout=10).json()['turns']
+                               params={'protocol': group.PROTOCOL,
+                                       'conversationId': self.client.conversation_id}, timeout=10).json()['turns']
         turn = next(item for item in listing if item['id'] == turn_id)
         self.assertEqual([(message['role'], message['status']) for message in turn['messages']],
                          [('pet', 'complete'), ('assistant', 'complete')])

@@ -26,7 +26,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from helpers import fresh_db
+from helpers import fresh_db, new_conversation
 from sqlalchemy import select
 
 from petsense import db
@@ -83,6 +83,7 @@ class W13InboxBridgeTests(unittest.TestCase):
             self.pet_id = pet.id
             s.add(CompanionSettings(user_id=user.id, assistant_name='助手', owner_title=None,
                                     verbosity='concise', proactivity=1, updated_at=self.now))
+        self.conversation = new_conversation(self.pet_id)  # W16：回合与委托必须属于某个会话
         self._enable_push()
 
     # ── 夹具 ────────────────────────────────────────────────────────────────
@@ -118,7 +119,8 @@ class W13InboxBridgeTests(unittest.TestCase):
     def _topic_turn(self, topic_id, phase='open'):
         """W09 事件交付回合（request id 与 care_jobs 真实 key 一致）。"""
         with db.session_scope() as s:
-            row = AgentTurn(pet_id=self.pet_id, request_id='care:event:%d:%s' % (topic_id, phase),
+            row = AgentTurn(pet_id=self.pet_id, conversation_id=self.conversation,
+                            request_id='care:event:%d:%s' % (topic_id, phase),
                             text='', target='assistant', topic_id=topic_id, reply_to=None,
                             sources='[]', speaker='assistant', reply='已提醒', status='complete',
                             created_at=self.now)
@@ -129,7 +131,7 @@ class W13InboxBridgeTests(unittest.TestCase):
     def _review_turn(self, window):
         """W09 回顾交付回合（request id 与 care_jobs 真实 key 一致）。"""
         with db.session_scope() as s:
-            row = AgentTurn(pet_id=self.pet_id,
+            row = AgentTurn(pet_id=self.pet_id, conversation_id=self.conversation,
                             request_id='care:review:daily:%d:%s' % (self.pet_id, window),
                             text='', target='assistant', topic_id=None, reply_to=None,
                             sources='[]', speaker='assistant', reply='回顾', status='complete',
@@ -142,7 +144,7 @@ class W13InboxBridgeTests(unittest.TestCase):
         """W08 已交付到期回信（turn_id 落在交付行上）。"""
         self._letter_seq = getattr(self, '_letter_seq', 0) + 1
         with db.session_scope() as s:
-            task = AgentTask(pet_id=self.pet_id,
+            task = AgentTask(pet_id=self.pet_id, conversation_id=self.conversation,
                              task_key='task-%d' % self._letter_seq,
                              current_version=1, status='observing', timezone='Asia/Shanghai',
                              deadline_at=self.now + timedelta(days=1),
@@ -152,7 +154,8 @@ class W13InboxBridgeTests(unittest.TestCase):
             s.flush()
             turn_id = None
             if with_turn:
-                turn = AgentTurn(pet_id=self.pet_id, request_id='task:letter:%d' % task.id,
+                turn = AgentTurn(pet_id=self.pet_id, conversation_id=self.conversation,
+                                 request_id='task:letter:%d' % task.id,
                                  text='', target='assistant', topic_id=None, reply_to=None,
                                  sources='[]', speaker='assistant', reply='回信已到',
                                  status='complete', created_at=self.now)

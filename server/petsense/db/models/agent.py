@@ -3,13 +3,36 @@ from sqlalchemy import Column, ForeignKey, Float, Index, Integer, String, Text, 
 from petsense.db.base import Base, UTCDatetime
 
 
+class AgentConversation(Base):
+    """W16 会话（docs/agent-w16-spec.md §4）：一只宠物名下多个彼此独立的对话，历史按会话隔离。
+
+    kind=chat 是主人的会话；kind=care 是主动消息自带的系统会话（关怀主题、周期回顾），
+    care_kind 细分 device / learning / review。title_custom=1 表示主人改过名，之后不再自动更新。
+    last_turn_at 是最后一条回合的时间（列表排序）；deleted_at 软删除，回合与轨迹都保留。
+    """
+    __tablename__ = 'agent_conversations'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    pet_id = Column(Integer, ForeignKey('pets.id'), nullable=False, index=True)
+    kind = Column(String(16), nullable=False)              # chat / care
+    care_kind = Column(String(16), nullable=True)          # device / learning / review（仅 care）
+    title = Column(String(80), nullable=False, default='')
+    title_custom = Column(Integer, nullable=False, default=0)
+    last_turn_at = Column(UTCDatetime, nullable=True)
+    deleted_at = Column(UTCDatetime, nullable=True)
+    created_at = Column(UTCDatetime, nullable=False)
+    updated_at = Column(UTCDatetime, nullable=False)
+
+
 class AgentTurn(Base):
     __tablename__ = 'agent_turns'
     id = Column(Integer, primary_key=True)
     pet_id = Column(Integer, ForeignKey('pets.id'), nullable=False, index=True)
+    # W16：所属会话。迁移已回填存量，之后由代码保证必填（列保持可空，避免在 SQLite 上重建本表）
+    conversation_id = Column(Integer, nullable=True, index=True)
     request_id = Column(String(80), nullable=False)
     text = Column(Text, nullable=False)
     target = Column(String(16), nullable=False)
+    # W16 起不再读写：迁移前对话路径存话题根回合 id、后台交付存关怀主题 id，两种含义混用
     topic_id = Column(Integer, nullable=True)
     reply_to = Column(Integer, nullable=True)
     sources = Column(Text, nullable=False, default='[]')
@@ -238,6 +261,9 @@ class AgentTask(Base):
     effective_from = Column(UTCDatetime, nullable=False)
     observing_since = Column(UTCDatetime, nullable=True)
     paused_intervals = Column(Text, nullable=False, default='[]')
+    # W16：确认该委托的回合所在会话（提醒与回信落在这里）
+    conversation_id = Column(Integer, nullable=True, index=True)
+    # W16 起不再读写（旧的话题锚点）
     topic_id = Column(Integer, nullable=True)
     proposal_id = Column(Integer, nullable=True)
     last_check_at = Column(UTCDatetime, nullable=True)
@@ -309,7 +335,10 @@ class AgentCareTopic(Base):
     updated_at = Column(UTCDatetime, nullable=False)
     recovered_at = Column(UTCDatetime, nullable=True)
     closed_reason = Column(String(120), nullable=True)
-    __table_args__ = (UniqueConstraint('pet_id', 'kind', 'category', 'anchor', 'instance'),)
+    # W16：该主题的主动消息所在的系统会话，首次交付时回填（回顾主题不绑定，为空）
+    conversation_id = Column(Integer, nullable=True)
+    __table_args__ = (UniqueConstraint('pet_id', 'kind', 'category', 'anchor', 'instance'),
+                      Index('uq_agent_care_topics_conversation_id', 'conversation_id', unique=True))
 
 
 class CareDeviceState(Base):

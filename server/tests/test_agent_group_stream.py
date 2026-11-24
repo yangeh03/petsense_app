@@ -100,8 +100,9 @@ class StreamingTests(GroupBase):
         self.settle()
         pet_msg, assistant_msg = self.rows(turn_id)
         self.assertEqual([frame for frame in sock.frames if frame['type'] == 'message_status'],
-                         [{'type': 'message_status', 'petId': self.pet, 'turnId': turn_id,
-                           'messageId': assistant_msg['id'], 'role': 'assistant', 'status': 'searching'}])
+                         [{'type': 'message_status', 'petId': self.pet, 'conversationId': self.client.conversation_id,
+                           'turnId': turn_id, 'messageId': assistant_msg['id'], 'role': 'assistant',
+                           'status': 'searching'}])
         self.assertFalse(any(model.SEARCH_PROGRESS_HINT in (frame.get('text') or '') for frame in sock.frames),
                          '联网进度不是正文，不进任何文本字段')
         self.assertEqual((pet_msg['status'], pet_msg['text'], pet_msg['sources']), ('complete', '我在呢～', []))
@@ -182,7 +183,7 @@ class StreamingTests(GroupBase):
         response = self.retry(turn_id)
         self.assertEqual((response.status_code, response.json.get('code')), (409, 'nothing_to_retry'))
 
-        legacy_id = legacy_turn(self.pet, '在吗', reply='【照料助手】在的。')
+        legacy_id = self.legacy('在吗', reply='【照料助手】在的。')
         response = self.retry(legacy_id)
         self.assertEqual((response.status_code, response.json.get('code')), (409, 'not_group_turn'))
         with patch.dict(os.environ, {'PETSENSE_DUAL_AGENT_ENABLED': '0'}):

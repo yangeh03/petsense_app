@@ -3,9 +3,10 @@ import unittest
 from datetime import timedelta
 from unittest.mock import patch
 from flask import Flask
-from helpers import fresh_db
+from helpers import TurnClient, fresh_db, new_conversation
 from test_pets import seed_user_with_pet
 from petsense import db
+from petsense.agent.conversation_routes import bp as conversation_bp
 from petsense.agent.routes import bp
 from petsense.db.models import AgentTurn, Pet, TelemetryMinute
 from petsense.agent.observations import query
@@ -26,12 +27,17 @@ class AgentTests(unittest.TestCase):
         self.uid = seed_user_with_pet()
         self.app = Flask(__name__)
         self.app.register_blueprint(bp)
-        self.client = self.app.test_client()
         self.auth = patch('petsense.agent.routes.require_app_user', return_value=({'id': self.uid}, None))
         self.auth.start()
         self.addCleanup(self.auth.stop)
         with db.session_scope() as s:
             self.pet = s.execute(select(Pet)).scalar_one().id
+        self.client = TurnClient(self.app.test_client(), self.pet)
+        self.app.register_blueprint(conversation_bp)  # 会话级已读接口（W16）
+        conversation_auth = patch('petsense.agent.conversation_routes.require_app_user',
+                                  return_value=({'id': self.uid}, None))
+        conversation_auth.start()
+        self.addCleanup(conversation_auth.stop)
         self.path = f'/api/app/agent/pets/{self.pet}/turns'
 
     def test_idempotency_and_restart_history(self):
@@ -72,12 +78,29 @@ class AgentTests(unittest.TestCase):
         self.assertEqual([call.args[3] for call in push_delta.call_args_list],
                          ['你', '你好呀', '你好呀！欢迎。'])
         self.assertEqual(result.json['turn']['status'], 'complete')
-        push_turn.assert_called_once_with(self.uid, self.pet, result.json['turn'])
+        push_turn.assert_called_once_with(self.uid, self.pet, result.json['turn'],
+                                          conversation=result.json['conversation'])
 
     def test_owner_scope_and_invalid_input(self):
         with patch('petsense.agent.routes.require_app_user', return_value=({'id': self.uid + 1}, None)):
             self.assertEqual(self.client.get(self.path).status_code, 404)
         self.assertEqual(self.client.post(self.path, json={'text': 'hi'}).status_code, 400)
+
+    def test_conversation_is_required_and_must_be_visible(self):
+        """W16：取历史与发消息都必须指定本人名下、未删除的会话。"""
+        raw = self.client.raw
+        self.assertEqual(raw.get(self.path).status_code, 400)
+        self.assertEqual(raw.get(f'{self.path}?conversationId=abc').status_code, 400)
+        self.assertEqual(raw.get(f'{self.path}?conversationId=99999').status_code, 404)
+        # TurnClient 没有显式给 conversationId 时才自动补上；这里显式给了一个不存在的会话
+        missing = self.client.post(self.path, json={'text': 'hi', 'requestId': 'x', 'conversationId': 99999})
+        self.assertEqual(missing.status_code, 404)
+        with patch('petsense.agent.model.respond', return_value=model_turn(allowed_stance() + '你好')):
+            first = self.client.post(self.path, json={'text': 'hi', 'requestId': 'y'})
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(first.json['turn']['conversationId'], self.client.conversation_id)
+        other = new_conversation(self.pet)
+        self.assertEqual(self.client.get(f'{self.path}?conversationId={other}').json['turns'], [])
 
     def test_failure_preserves_owner_message(self):
         with patch('petsense.agent.model.respond', side_effect=ValueError('missing key')):
@@ -171,16 +194,16 @@ class AgentTests(unittest.TestCase):
     def test_pending_turn_recovers_as_interrupted(self):
         from petsense.db.models.agent import AgentTurn
         with db.session_scope() as s:
-            s.add(AgentTurn(pet_id=self.pet, request_id='old', text='原话', target='auto',
+            s.add(AgentTurn(pet_id=self.pet, conversation_id=self.client.conversation_id, request_id='old',
+                            text='原话', target='auto',
                             status='pending', reply='', created_at=db.utc_now() - timedelta(minutes=6)))
         turn = self.client.get(self.path).json['turns'][0]
         self.assertEqual(turn['status'], 'failed')
         self.assertEqual(turn['text'], '原话')
 
-    def test_invalid_time_and_topic_reference(self):
+    def test_invalid_time_window(self):
         url = f'/api/app/agent/pets/{self.pet}/observations'
         self.assertEqual(self.client.get(url, query_string={'start': '2026-01-01', 'end': '2026-01-02'}).status_code, 400)
-        self.assertEqual(self.client.post(self.path, json={'text': 'hi', 'requestId': 'x', 'topicId': 99999}).status_code, 404)
 
     def test_learning_coverage_is_durable_versioned_and_deduplicated(self):
         from petsense.telemetry.observations import ingest_observation
@@ -218,16 +241,21 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(values[1]['validDays'], 7)
 
     def test_read_state_persists_and_is_owner_scoped(self):
+        """会话级已读（W16）：重复标记幂等，摘要里的未读数归零，别人的会话不可读。"""
         with patch('petsense.agent.model.respond', return_value=model_turn(allowed_stance() + '你好')):
             turn = self.client.post(self.path, json={'text': '你好', 'requestId': 'read'}).json['turn']
-        url = f'/api/app/agent/pets/{self.pet}/read'
-        first = self.client.post(url, json={'ids': [turn['id']]}).json['turns'][0]
-        second = self.client.post(url, json={'ids': [turn['id']]}).json['turns'][0]
-        self.assertIsNotNone(first['readAt'])
-        self.assertEqual(first['readAt'], second['readAt'])
-        with patch('petsense.agent.routes.require_app_user', return_value=({'id': self.uid+1}, None)):
-            self.assertEqual(self.client.post(url, json={'ids': [turn['id']]}).status_code, 404)
-
+        url = f'/api/app/agent/conversations/{self.client.conversation_id}/read'
+        first = self.client.post(url, json={'ids': [turn['id']]}).json
+        second = self.client.post(url, json={'ids': [turn['id']]}).json
+        self.assertIsNotNone(first['turns'][0]['readAt'])
+        self.assertEqual((second['markedCount'], second['turns']), (0, []))  # 已读过的不再重复返回
+        self.assertEqual(self.client.get(self.path).json['turns'][0]['readAt'],
+                         first['turns'][0]['readAt'])  # 已读状态落库，重新读取不丢
+        self.assertEqual((first['conversation']['unread'], first['markedCount']), (0, 1))
+        self.assertEqual(self.client.post(url, json={'ids': []}).status_code, 400)
+        with patch('petsense.agent.conversation_routes.require_app_user',
+                   return_value=({'id': self.uid + 1}, None)):
+            self.assertEqual(self.client.post(url, json={}).status_code, 404)
     def test_unavailable_capabilities_answered_without_tools(self):
         """未开放能力（联网/持续留意）由模型按注册表如实说明，不走固定文案分支；
         W03 起档案与设定写入工具已注册，不再属于「未开放」。"""

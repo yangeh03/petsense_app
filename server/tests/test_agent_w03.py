@@ -9,7 +9,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from flask import Flask
-from helpers import fresh_db
+from helpers import TurnClient, fresh_db
 from test_agent import allowed_stance, model_turn
 from test_pets import seed_user_with_pet
 
@@ -233,13 +233,13 @@ class AgentRouteTests(unittest.TestCase):
         self.uid = seed_user_with_pet()
         self.app = Flask(__name__)
         self.app.register_blueprint(agent_bp)
-        self.client = self.app.test_client()
         self.auth = patch('petsense.agent.routes.require_app_user',
                           return_value=({'id': self.uid}, None))
         self.auth.start()
         self.addCleanup(self.auth.stop)
         with db.session_scope() as s:
             self.pet = s.execute(select(Pet)).scalar_one().id
+        self.client = TurnClient(self.app.test_client(), self.pet)
         self.path = f'/api/app/agent/pets/{self.pet}/turns'
 
     def test_turn_attaches_proposal_card_and_decision_flips_state(self):

@@ -12,6 +12,9 @@
      首版串行：下一条开始前上一条已提交，所以后发的可以承接先发的；
   3. 收尾：全部终态后镜像成旧回合结构（reply/blocks/speaker/sources）并推 turn 帧。
 关掉开关即回退：新消息回到旧路径，已入队的回合按持久化的计划收尾。
+
+多会话（docs/agent-w16-spec.md §5.3、§5.5）：路由参考与模型历史只取回合所在的会话；消息帧与流式帧
+都带 conversationId；回合收尾的 turn 帧附带会话摘要，客户端据此更新会话列表。
 """
 import json
 import logging
@@ -27,9 +30,9 @@ from sqlalchemy import select, update
 
 from petsense.db import iso_z, session_scope, utc_now
 from petsense.db.models import Pet
-from petsense.db.models.agent import AgentMessage, AgentRoute, AgentTurn
+from petsense.db.models.agent import AgentConversation, AgentMessage, AgentRoute, AgentTurn
 from petsense.db.models.memory import PetMemory
-from petsense.agent import jobs, loop, model, router, runs, snapshot, ws
+from petsense.agent import conversations, jobs, loop, model, router, runs, snapshot, ws
 from petsense.agent import settings as settings_service
 from petsense.agent.registry import ASSISTANT_ROLE, PET_ROLE
 
@@ -227,6 +230,12 @@ def _public(turn, messages):
     return public(turn, messages)
 
 
+def _conversation_summary(session, conversation_id):
+    """会话摘要，随收尾的 turn 帧返回（W16）；同样延迟导入。"""
+    from petsense.agent.routes import conversation_summary
+    return conversation_summary(session, conversation_id)
+
+
 def message_list(session, turn):
     rows = message_rows(session, [turn.id]).get(turn.id)
     return [message_public(row) for row in rows] if rows is not None else project(turn)
@@ -301,11 +310,11 @@ def quoted_message(session, turn):
 
 
 def topic_lines(session, turn):
-    """路由参考的近期话题：话题内最近几轮，由早到晚，每位发言人各一行（历史查询与旧路径同口径）。"""
-    from petsense.agent.routes import history_rows
+    """路由参考的近期上下文：当前会话里最近几轮，由早到晚，每位发言人各一行（与模型历史同口径）。"""
+    from petsense.agent import conversations
     lines = []
-    for row in reversed(history_rows(session, turn.pet_id, turn.id, turn.topic_id,
-                                     limit=router.TOPIC_TURNS)):
+    for row in conversations.history(session, turn.pet_id, turn.id, turn.conversation_id,
+                                     limit=router.TOPIC_TURNS):
         lines.append({'speaker': '主人', 'text': row.text or '（图片）'})
         if not (row.reply or '').strip():
             continue
@@ -567,7 +576,7 @@ def _generate(message_id, item, budget, deadline, now):
         if abandoned:
             _finalize_message(message_id, status='failed', error='model_error', now=utc_now())
             return
-        ws.push_message(user_id, pet_id, opened)
+        ws.push_message(user_id, pet_id, opened, turn.conversation_id)
         on_progress = context.pop('on_progress')
         try:
             outcome = loop.run_dialogue(context, on_progress=on_progress)
@@ -590,15 +599,19 @@ def _generate(message_id, item, budget, deadline, now):
 
 
 def _context(session, row, turn, pet, now, budget, deadline, assigned_request=None):
-    """单角色运行的输入：范围与任务取自已持久化的路由，承接与引用取自已提交的消息。"""
-    from petsense.agent.routes import history_rows
+    """单角色运行的输入：范围与任务取自已持久化的路由，承接与引用取自已提交的消息。
+
+    历史只取回合所在的会话（W16）；关怀主题自带的会话另给一行确定性提示，让模型知道本会话对应
+    哪条主动提醒。
+    """
     siblings = message_rows(session, [turn.id])[turn.id]
     route = session.execute(select(AgentRoute).where(AgentRoute.turn_id == turn.id)).scalar_one_or_none()
     scope, intent = (route.scope, route.intent) if route is not None else ('unknown', 'unknown')
+    conversation = session.get(AgentConversation, turn.conversation_id) if turn.conversation_id else None
     context = {
         'pet_id': pet.id, 'user_id': pet.user_id, 'text': turn.text, 'target': turn.target,
         'history': [{'text': old.text, 'reply': old.reply, 'images': _load(old.images, [])}
-                    for old in reversed(history_rows(session, pet.id, turn.id, turn.topic_id))],
+                    for old in conversations.history(session, pet.id, turn.id, turn.conversation_id)],
         'images': _load(turn.images, []), 'snapshot': snapshot.assemble(session, pet, now),
         'now_iso': iso_z(now), 'turn_id': turn.id, 'settings': settings_service.load(session, pet.user_id),
         'role': row.role, 'route': {'scope': scope, 'intent': intent},
@@ -607,6 +620,7 @@ def _context(session, row, turn, pet, now, budget, deadline, assigned_request=No
         'task': task_text(row.role, row.kind, intent, scope, len(siblings) > 1),
         'message_id': row.id, 'route_id': route.id if route is not None else None, 'pet_name': pet.name,
         'deadline': deadline, 'turn_budget': budget,
+        'care_hint': conversations.care_hint(session, conversation) if conversation is not None else None,
     }
     earlier = [old for old in siblings if old.position < row.position]
     if row.follows and earlier and earlier[-1].status == 'complete' and (earlier[-1].text or '').strip():
@@ -626,11 +640,12 @@ def _context(session, row, turn, pet, now, budget, deadline, assigned_request=No
     # 副作用调用先落写前意图再执行：重试时据此核对哪些操作已经生效（design doc §2.1）
     context['on_effect'] = _effect_journal(row.id)
     # 帧里的 messageId 用公开 id（m<行 id>）：客户端按它对上快照与增量，两种帧必须是同一个值
-    context['on_progress'] = _progress(pet.user_id, pet.id, turn.id, row.id, row.role, row.version, earlier)
+    context['on_progress'] = _progress(pet.user_id, pet.id, turn.id, row.id, row.role, row.version, earlier,
+                                       turn.conversation_id)
     return context
 
 
-def _progress(user_id, pet_id, turn_id, row_id, role, version, earlier):
+def _progress(user_id, pet_id, turn_id, row_id, role, version, earlier, conversation_id=None):
     """流式回调：按消息 ID/版本推增量；同时把累计正文镜像给旧协议连接与轮询快照。"""
     message_id = f'm{row_id}'
     state = {'pushed': None, 'last_push': None, 'last_write': None, 'version': version}
@@ -643,7 +658,7 @@ def _progress(user_id, pet_id, turn_id, row_id, role, version, earlier):
     def on_progress(speaker, text):
         if text == model.SEARCH_PROGRESS_HINT:
             # 联网进度是状态而不是正文：只推状态帧，不进消息文本
-            ws.push_message_status(user_id, pet_id, turn_id, message_id, role, 'searching')
+            ws.push_message_status(user_id, pet_id, turn_id, message_id, role, 'searching', conversation_id)
             return
         if not text.strip():
             return  # 空白首帧与工具轮之间的空文本不覆盖当前内容（与旧路径一致）
@@ -658,8 +673,9 @@ def _progress(user_id, pet_id, turn_id, row_id, role, version, earlier):
             state['last_write'] = moment
         if text != state['pushed'] and (rewritten or state['last_push'] is None
                                         or moment - state['last_push'] >= WS_THROTTLE_S):
-            ws.push_message_delta(user_id, pet_id, turn_id, message_id, role, text, state['version'])
-            ws.push_delta(user_id, pet_id, turn_id, legacy_text(text), role)
+            ws.push_message_delta(user_id, pet_id, turn_id, message_id, role, text, state['version'],
+                                  conversation_id)
+            ws.push_delta(user_id, pet_id, turn_id, legacy_text(text), role, conversation_id)
             state['pushed'], state['last_push'] = text, moment
         if not rewritten and (state['last_write'] is None
                               or moment - state['last_write'] >= DB_THROTTLE_S):
@@ -780,7 +796,9 @@ def _finalize_message(message_id, *, status, text='', blocks=None, sources=None,
         payload, pet_id = message_public(row), row.pet_id
         pet = s.get(Pet, pet_id)
         user_id = pet.user_id if pet else None
-    ws.push_message(user_id, pet_id, payload)
+        turn = s.get(AgentTurn, row.turn_id)
+        conversation_id = turn.conversation_id if turn is not None else None
+    ws.push_message(user_id, pet_id, payload, conversation_id)
     return payload
 
 
@@ -876,7 +894,9 @@ def _finalize(turn_id, now=None):
         payload = turn_public(s, turn)
         pet = s.get(Pet, turn.pet_id)
         user_id, pet_id = (pet.user_id if pet else None), turn.pet_id
-    ws.push_turn(user_id, pet_id, payload)
+        summary = _conversation_summary(s, turn.conversation_id)
+    # 回合落定：turn 帧附带会话摘要，列表的标题、预览与活动时间跟着更新
+    ws.push_turn(user_id, pet_id, payload, conversation=summary)
     return payload
 
 
@@ -903,7 +923,8 @@ def _abandon(turn_id):
         payload = turn_public(s, turn)
         pet = s.get(Pet, turn.pet_id)
         user_id = pet.user_id if pet else None
-    ws.push_turn(user_id, turn.pet_id, payload)
+        summary = _conversation_summary(s, turn.conversation_id)
+    ws.push_turn(user_id, turn.pet_id, payload, conversation=summary)
 
 
 def expire(session, turn, now):

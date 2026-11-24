@@ -21,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from helpers import fresh_db
+from helpers import fresh_db, new_conversation
 from sqlalchemy import select
 
 from petsense import db
@@ -84,6 +84,8 @@ class W11W12PublicationTests(unittest.TestCase):
             s.add(other_pet)
             s.flush()
             self.other_pet_id = other_pet.id
+        # W16：回合与委托必须属于某个会话
+        self.conversations = {pet: new_conversation(pet) for pet in (self.pet_id, self.other_pet_id)}
 
     # ── 夹具：真实回顾生命周期的三件东西 ──────────────────────────────────
     def _review_run(self, *, provenance='model_high_accepted', pet_id=None,
@@ -115,7 +117,8 @@ class W11W12PublicationTests(unittest.TestCase):
         """
         pet_id = pet_id or self.pet_id
         with db.session_scope() as s:
-            turn = AgentTurn(pet_id=pet_id, request_id='care:review:%s:%d:%s' % (kind, pet_id, window),
+            turn = AgentTurn(pet_id=pet_id, conversation_id=self.conversations[pet_id],
+                             request_id='care:review:%s:%d:%s' % (kind, pet_id, window),
                              text='', target='assistant', topic_id=None, reply_to=None,
                              sources='[]', speaker='assistant', reply='回顾已送达',
                              status='complete', created_at=self.now,
@@ -358,11 +361,13 @@ class W11W12PublicationTests(unittest.TestCase):
                                    delivered=0, opened_at=self.now, updated_at=self.now)
             s.add(topic)
             s.flush()
-            s.add(AgentTurn(pet_id=self.pet_id, request_id='care:event:%d:open' % topic.id,
+            s.add(AgentTurn(pet_id=self.pet_id, conversation_id=self.conversations[self.pet_id],
+                            request_id='care:event:%d:open' % topic.id,
                             text='', target='assistant', topic_id=topic.id, reply_to=None,
                             sources='[]', speaker='assistant', reply='设备告警', status='complete',
                             created_at=self.now, blocks='[]'))
-            task = AgentTask(pet_id=self.pet_id, task_key='t1', current_version=1,
+            task = AgentTask(pet_id=self.pet_id, conversation_id=self.conversations[self.pet_id],
+                             task_key='t1', current_version=1,
                              status='observing', timezone='Asia/Shanghai',
                              deadline_at=self.now + timedelta(days=1), effective_from=self.now,
                              paused_intervals='[]', created_at=self.now, updated_at=self.now)
@@ -377,7 +382,8 @@ class W11W12PublicationTests(unittest.TestCase):
                                          created_at=self.now)
             s.add(delivery)
             s.flush()
-            s.add(AgentTurn(pet_id=self.pet_id, request_id='task-%d' % delivery.id,
+            s.add(AgentTurn(pet_id=self.pet_id, conversation_id=self.conversations[self.pet_id],
+                            request_id='task-%d' % delivery.id,
                             text='', target='assistant', topic_id=None, reply_to=None,
                             sources='[]', speaker='assistant', reply='回信正文', status='complete',
                             created_at=self.now, blocks='[]'))
