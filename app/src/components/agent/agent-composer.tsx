@@ -29,7 +29,6 @@ type Props = {
   draft: string;
   target: AgentTarget;
   petName: string | null;
-  inTopic: boolean;
   busy: boolean;
   canSend: boolean;
   keyboardOpen: boolean;
@@ -38,7 +37,7 @@ type Props = {
   canAttach: boolean;
   /** 服务端已确认当前账号开放双 Agent：发言对象里才提供「两位都回」 */
   dualAgent: boolean;
-  /** 正在引用的回复（发言对象或话题上下文），没有引用时为空 */
+  /** 正在引用的回复，没有引用时为空 */
   quote: { name: string; text: string } | null;
   onCancelQuote: () => void;
   onDraft: (draft: string) => void;
@@ -119,7 +118,6 @@ export function AgentComposer({
   draft,
   target,
   petName,
-  inTopic,
   busy,
   canSend,
   keyboardOpen,
@@ -180,7 +178,7 @@ export function AgentComposer({
             : '有图片未上传成功，可点图片重试或移除后再发送'}
         </ThemedText>
       ) : null}
-      {/* 引用预览：这条话是接着谁的哪一句说的；取消后只是不带上引用，仍留在当前话题 */}
+      {/* 引用预览：这条话是接着谁的哪一句说的；取消后只是不带上引用，仍留在当前会话 */}
       {quote ? (
         <View style={[styles.quote, { backgroundColor: theme.backgroundSelected }]}>
           <ThemedText
@@ -315,7 +313,7 @@ export function AgentComposer({
             multiline
             maxLength={4000}
             editable={!busy}
-            placeholder={inTopic ? '继续说这件事…' : '说给伙伴听…'}
+            placeholder="说给伙伴听…"
             placeholderTextColor={theme.textSecondary}
             style={[
               styles.input,

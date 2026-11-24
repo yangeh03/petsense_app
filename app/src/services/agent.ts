@@ -118,7 +118,10 @@ export type AgentTask = {
   deadlineAt: string;
   effectiveFrom: string;
   currentVersion: number;
-  topicId: number | null;
+  /** W16：确认该委托的会话（提醒与回信都落在这里）；没有会话只可能是数据异常 */
+  conversationId: number | null;
+  /** 会话已被主人删除：委托簿不再提供「回到原会话」 */
+  conversationDeleted: boolean;
   pausedIntervals: { start: string; end: string | null }[];
   reminders: number;
   letters: number;
@@ -267,7 +270,8 @@ export type AgentTurn = {
   reply: string;
   status: 'pending' | 'complete' | 'failed';
   createdAt: string;
-  topicId: number | null;
+  /** W16：所属会话；帧与回合都按它归位 */
+  conversationId: number | null;
   replyTo: number | null;
   /** 消息级引用（群聊协议）：精确到被引用回合里的某一条回复 */
   replyToMessage?: string | null;
@@ -300,24 +304,51 @@ export type AgentTaskResultBlock = {
   /** W11 D6：回信冻结的个人比较证据。 */
   changeEvidence?: AgentChangeEvidence[];
 };
-/** 历史列表：dualAgent / protocol 只在服务端确认当前账号进入双 Agent 时出现。 */
+/** W16 会话摘要（docs/agent-w16-spec.md §5.2）：列表项、接口返回与 WS 的 conversation 帧共用这一份 */
+export type AgentConversation = {
+  id: number;
+  petId: number;
+  /** chat 是主人的会话；care 是主动消息自带的系统会话 */
+  kind: 'chat' | 'care';
+  /** 系统会话的细分：设备提醒 / 学习完成 / 周期回顾 / 委托兜底 */
+  careKind: 'device' | 'learning' | 'review' | 'task' | null;
+  /** 空会话的标题是空串，界面显示「新对话」 */
+  title: string;
+  titleCustom: boolean;
+  createdAt: string;
+  updatedAt: string;
+  /** 最后一条回合的时间；没有回合的会话为空，列表按它（或创建时间）倒序 */
+  lastTurnAt: string | null;
+  turnCount: number;
+  /** 会话内未读的回合数 */
+  unread: number;
+  preview: { text: string; at: string } | null;
+  /** 非空表示已删除：只有 WS 的 conversation 帧会带出已删除的会话，接口列表里不会有 */
+  deletedAt: string | null;
+};
+
+/** 某个会话的历史列表；conversation 是它的摘要，dualAgent / protocol 只在服务端确认当前账号进入双 Agent 时出现。 */
 export type AgentTurnListing = {
   turns: AgentTurn[];
+  conversation?: AgentConversation;
   protocol?: string;
   dualAgent?: boolean;
 };
 
-export const fetchAgentTurns = (pet: number, before?: number) =>
+/** 取某个会话的历史（每页 40 条，before 为上一页最早一条的 id）。 */
+export const fetchAgentTurns = (pet: number, conversationId: number, before?: number) =>
   request<AgentTurnListing>(
     `/agent/pets/${pet}/turns?${new URLSearchParams({
+      conversationId: String(conversationId),
       ...(before ? { before: String(before) } : {}),
       protocol: AGENT_GROUP_PROTOCOL,
     })}`,
   );
 
 /**
- * 发送一条主人消息。群聊协议生效时立即返回 202 与带 messages 的回合（生成在后台，结果走 WS）；
+ * 发一条主人消息。群聊协议生效时立即返回 202 与带 messages 的回合（生成在后台，结果走 WS）；
  * 未生效时仍是旧协议的 200。target=both 而账号未开放双 Agent 时返回 400（code=dual_agent_unavailable）。
+ * 响应带会话摘要（标题、预览、活动时间随这条消息更新）。
  */
 export const sendAgentTurn = (
   pet: number,
@@ -325,21 +356,26 @@ export const sendAgentTurn = (
   target: AgentTurn['target'],
   requestId: string,
   options: {
-    topicId?: number;
+    conversationId: number;
     replyTo?: number;
     images?: string[];
     replyToMessage?: string;
-  } = {},
+  },
 ) =>
-  request<{ turn: AgentTurn; protocol?: string; accepted?: boolean }>(`/agent/pets/${pet}/turns`, {
+  request<{
+    turn: AgentTurn;
+    conversation: AgentConversation;
+    protocol?: string;
+    accepted?: boolean;
+  }>(`/agent/pets/${pet}/turns`, {
     method: 'POST',
     body: {
       text,
       target,
       requestId,
       protocol: AGENT_GROUP_PROTOCOL,
-      topicId: options.topicId,
-      replyTo: options.replyTo,
+      conversationId: options.conversationId,
+      ...(options.replyTo ? { replyTo: options.replyTo } : {}),
       ...(options.replyToMessage ? { replyToMessage: options.replyToMessage } : {}),
       ...(options.images?.length ? { images: options.images } : {}),
     },
@@ -462,11 +498,45 @@ export const fetchAgentObservation = (pet: number, start: string, end: string) =
     `/agent/pets/${pet}/observations?${new URLSearchParams({ start, end })}`,
   );
 
-export const markAgentRead = (pet: number, ids: number[]) =>
-  request<AgentTurnListing>(`/agent/pets/${pet}/read`, {
-    method: 'POST',
-    body: { ids, protocol: AGENT_GROUP_PROTOCOL },
+/** W16：会话列表（按最近活动倒序，不含已删除）。 */
+export const fetchAgentConversations = (
+  pet: number,
+  options: { limit?: number; offset?: number } = {},
+) =>
+  request<{ conversations: AgentConversation[]; total: number; hasMore: boolean }>(
+    `/agent/pets/${pet}/conversations?${new URLSearchParams({
+      ...(options.limit != null ? { limit: String(options.limit) } : {}),
+      ...(options.offset ? { offset: String(options.offset) } : {}),
+    })}`,
+  );
+
+/** W16：新建会话。最近一个仍为空且未改名的主人会话会被复用（created=false）。 */
+export const createAgentConversation = (pet: number) =>
+  request<{ conversation: AgentConversation; created: boolean }>(
+    `/agent/pets/${pet}/conversations`,
+    { method: 'POST', body: {} },
+  );
+
+/** W16：改名（1 到 40 个字）。改名后标题不再随首条消息或主题标题变化。 */
+export const renameAgentConversation = (conversationId: number, title: string) =>
+  request<{ conversation: AgentConversation }>(`/agent/conversations/${conversationId}`, {
+    method: 'PATCH',
+    body: { title },
   });
+
+/** W16：删除（软删除）。会话里还有进行中的委托或未结束的提醒时返回 409（code=conversation_busy）。 */
+export const deleteAgentConversation = (conversationId: number) =>
+  request<{ success: true }>(`/agent/conversations/${conversationId}`, { method: 'DELETE' });
+
+/**
+ * W16：把一个会话标为已读。不带 ids 标全部未读，带 ids 只标这些；返回会话摘要与这次新标已读的回合
+ * （最多最近 40 条）。已读过的回合不会再次返回。
+ */
+export const markConversationRead = (conversationId: number, ids?: number[]) =>
+  request<{ conversation: AgentConversation; turns: AgentTurn[]; markedCount: number }>(
+    `/agent/conversations/${conversationId}/read`,
+    { method: 'POST', body: { ...(ids?.length ? { ids } : {}), protocol: AGENT_GROUP_PROTOCOL } },
+  );
 
 /** W09：主题追溯列表（可选状态过滤；依据随行，供「为什么提醒我」下钻）。 */
 export const fetchCareTopics = (pet: number, status?: string) =>

@@ -376,7 +376,7 @@ test('服务函数在请求上声明群聊协议；引用精确到消息', async
   });
   assert.equal(services.AGENT_GROUP_PROTOCOL, 'group-v1');
   const result = await services.sendAgentTurn(3, '今天走了多久', 'both', 'req-1', {
-    topicId: 9,
+    conversationId: 9,
     replyTo: 9,
     replyToMessage: 'm12',
     images: ['img-1'],
@@ -388,25 +388,29 @@ test('服务函数在请求上声明群聊协议；引用精确到消息', async
     target: 'both',
     requestId: 'req-1',
     protocol: 'group-v1',
-    topicId: 9,
+    conversationId: 9,
     replyTo: 9,
     replyToMessage: 'm12',
     images: ['img-1'],
   });
   // 没有消息级引用时不带这个字段（旧协议的服务端不看它）
-  await services.sendAgentTurn(3, '你好', 'auto', 'req-2');
+  await services.sendAgentTurn(3, '你好', 'auto', 'req-2', { conversationId: 9 });
   assert.equal('replyToMessage' in calls[1].init.body, false);
   // 历史列表与已读回执同样声明协议：服务端据此返回逐条回复
-  await services.fetchAgentTurns(3, 20);
-  assert.match(calls[2].path, /\/agent\/pets\/3\/turns\?before=20&protocol=group-v1$/);
-  await services.markAgentRead(3, [7]);
+  await services.fetchAgentTurns(3, 9, 20);
+  assert.match(
+    calls[2].path,
+    /\/agent\/pets\/3\/turns\?conversationId=9&before=20&protocol=group-v1$/,
+  );
+  await services.markConversationRead(9, [7]);
+  assert.equal(calls[3].path, '/agent/conversations/9/read');
   assert.equal(calls[3].init.body.protocol, 'group-v1');
   await services.retryAgentTurn(3, 7);
   assert.equal(calls[4].path, '/agent/pets/3/turns/7/retry');
   assert.equal(calls[4].init.method, 'POST');
 });
 
-test('store：WS 帧落到对应回合的消息上；换话题清掉消息级引用', () => {
+test('store：WS 帧落到对应会话的回合消息上；引用按会话各自保存', () => {
   const create = (initialize) => {
     let state;
     const set = (patch) => {
@@ -424,33 +428,38 @@ test('store：WS 帧落到对应回合的消息上；换话题清掉消息级引
   store.setPet({ id: 3, name: '豆豆' });
   store.setDualAgent(true);
   assert.equal(useAgentChatStore.getState().dualAgent, true);
-  store.setTurns([groupTurn(7, [message('m1', { status: 'queued', text: '', version: 1 })])]);
-  store.applyMessage(7, message('m1', { status: 'running', text: '', version: 2 }));
-  store.applyMessageDelta(3, 7, 'm1', 'assistant', '今天走了', 2);
-  store.applyMessageDelta(99, 7, 'm1', 'assistant', '别的宠物的帧', 9);
-  let current = useAgentChatStore.getState();
-  assert.equal(textOf(current.turns, 'm1'), '今天走了');
-  store.applyMessageStatus(3, 7, 'm1', 'searching');
-  assert.equal(useAgentChatStore.getState().turns[0].messages[0].activity, 'searching');
-  // 别的宠物的状态帧不落到当前会话
-  store.applyMessageStatus(99, 7, 'm1', 'searching');
-  assert.equal(useAgentChatStore.getState().turns[0].messages[0].activity, 'searching');
-  store.applyMessageDelta(3, 7, 'm1', 'assistant', '今天走了 42 分钟', 2);
+  store.openChat(5);
+  store.setActive(5);
+  store.setTurns(5, [groupTurn(7, [message('m1', { status: 'queued', text: '', version: 1 })])], 1);
+  store.applyMessage(5, message('m1', { status: 'running', text: '', version: 2 }));
+  store.applyMessageDelta(5, 7, 'm1', 'assistant', '今天走了', 2);
+  const turns = () => useAgentChatStore.getState().chats[5].turns;
+  assert.equal(textOf(turns(), 'm1'), '今天走了');
+  // 没有会话 id 的帧丢弃；别的（没打开的）会话的帧不落到这个会话
+  store.applyMessageDelta(null, 7, 'm1', 'assistant', '没有会话的帧', 9);
+  store.applyMessageDelta(6, 7, 'm1', 'assistant', '别的会话的帧', 9);
+  store.applyMessageStatus(6, 7, 'm1', 'searching');
+  assert.equal(textOf(turns(), 'm1'), '今天走了');
+  store.applyMessageStatus(5, 7, 'm1', 'searching');
+  assert.equal(turns()[0].messages[0].activity, 'searching');
+  store.applyMessageDelta(5, 7, 'm1', 'assistant', '今天走了 42 分钟', 2);
   // 新正文到了，联网核实之类的瞬时进度不再显示
-  assert.equal(useAgentChatStore.getState().turns[0].messages[0].activity, undefined);
-  assert.equal(textOf(useAgentChatStore.getState().turns, 'm1'), '今天走了 42 分钟');
-  store.setTopic(7);
-  store.setReplyTo(7);
-  store.setReplyToMessage('m1');
-  assert.equal(useAgentChatStore.getState().replyToMessage, 'm1');
-  store.setTopic(8);
-  current = useAgentChatStore.getState();
-  assert.equal(current.replyTo, undefined);
-  assert.equal(current.replyToMessage, undefined);
+  assert.equal(turns()[0].messages[0].activity, undefined);
+  assert.equal(textOf(turns(), 'm1'), '今天走了 42 分钟');
+  // 引用按会话保存：切到别的会话后原会话的引用还在，新会话不受影响
+  store.setReplyTo(5, 7);
+  store.setReplyToMessage(5, 'm1');
+  store.openChat(6);
+  store.setActive(6);
+  let current = useAgentChatStore.getState();
+  assert.equal(current.chats[5].replyTo, 7);
+  assert.equal(current.chats[5].replyToMessage, 'm1');
+  assert.equal(current.chats[6].replyTo, undefined);
+  assert.equal(current.chats[6].replyToMessage, undefined);
   store.resetForUser();
   current = useAgentChatStore.getState();
   assert.equal(current.dualAgent, false);
-  assert.equal(current.replyToMessage, undefined);
+  assert.equal(Object.keys(current.chats).length, 0);
 });
 
 test('群聊渲染：逐条气泡、角色状态与只重试失败的那条都在消息组件里', () => {

@@ -92,21 +92,26 @@ test('换账号时清空会话、草稿、附件及待执行上下文，并标�
   });
   const before = useAgentChatStore.getState();
   before.resetForUser(1);
-  before.setLoadedFor(1);
   before.setPet({ id: 10, name: '旧账号宠物' });
-  before.setDraft('旧账号草稿');
-  before.setTurns([{ id: 8 }]);
-  before.addAttachments([{ key: 'old-image', status: 'done' }]);
-  before.setPending({ text: '旧操作', pet: 10, key: 'old-key' });
+  before.setList([{ id: 5 }], 1);
+  before.setTurns(5, [{ id: 8 }], 1);
+  before.setDraft(5, '旧账号草稿');
+  before.addAttachments(5, [{ key: 'old-image', status: 'done' }]);
+  before.setPending(5, {
+    text: '旧操作',
+    pet: 10,
+    key: 'old-key',
+    target: 'auto',
+    conversation: 5,
+  });
   before.resetForUser(2);
   const after = useAgentChatStore.getState();
   assert.equal(after.ownerId, 2);
-  assert.equal(after.loadedFor, null);
+  assert.equal(after.listFor, null);
+  assert.equal(after.list.length, 0);
+  assert.equal(after.activeId, null);
   assert.equal(after.petId, null);
-  assert.equal(after.draft, '');
-  assert.equal(after.turns.length, 0);
-  assert.equal(after.attachments.length, 0);
-  assert.equal(after.pending, null);
+  assert.equal(Object.keys(after.chats).length, 0); // 草稿、附件、待执行上下文都按会话存，随之清空
 });
 
 test('乐观回合：本地先上屏、服务端回合按 requestId 对账、分页无更早回合时不报错', () => {
@@ -125,21 +130,38 @@ test('乐观回合：本地先上屏、服务端回合按 requestId 对账、分
   });
   const store = useAgentChatStore.getState();
   // mock 的 set 整体替换 state 对象，每次都要重新取快照
-  const ids = () => useAgentChatStore.getState().turns.map((turn) => turn.id);
-  store.setTurns([{ id: 1 }]);
-  store.applyLocalTurn({
-    id: -1,
-    requestId: 'req-1',
-    text: '我刚说的话',
-    status: 'pending',
-    local: true,
-  });
+  store.resetForUser(1);
+  store.openChat(5);
+  store.setActive(5);
+  const ids = () => useAgentChatStore.getState().chats[5].turns.map((turn) => turn.id);
+  store.setTurns(5, [{ id: 1 }], 1);
+  store.applyLocalTurn(
+    {
+      id: -1,
+      requestId: 'req-1',
+      text: '我刚说的话',
+      status: 'pending',
+      local: true,
+    },
+    5,
+  );
   // 本地乐观回合排在最后
   assert.deepEqual(ids(), [1, -1]);
   // 服务端回合到达后替换本地乐观回合，不重复
-  store.applyTurn({ id: 2, requestId: 'req-1', text: '我刚说的话', status: 'complete' });
+  store.applyTurn({
+    id: 2,
+    requestId: 'req-1',
+    text: '我刚说的话',
+    status: 'complete',
+    conversationId: 5,
+  });
   assert.deepEqual(ids(), [1, 2]);
   // 分页返回空（没有更早回合）时列表原样保留，不抛错
-  store.prependOlder([]);
+  store.prependOlder(5, []);
+  assert.deepEqual(ids(), [1, 2]);
+  // 没有会话 id 的帧丢弃；别的（没打开的）会话的帧不落到这个会话
+  store.applyDelta(null, 3, '不该出现', 'assistant');
+  store.applyDelta(6, 3, '别的会话的增量', 'assistant');
+  store.applyMessage(6, { id: 'm9', turnId: 3, role: 'assistant', text: '别的会话' });
   assert.deepEqual(ids(), [1, 2]);
 });

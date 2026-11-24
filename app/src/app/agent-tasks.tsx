@@ -15,7 +15,6 @@ import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
 import { fetchDashboard } from '@/services/api';
 import { agentTaskOp, fetchAgentTasks, type AgentTask } from '@/services/agent';
-import { useAgentChatStore } from '@/stores/agent-chat';
 
 type MultiPlatformIcon = { ios: SFSymbol; android: AndroidSymbol; web: AndroidSymbol };
 
@@ -149,13 +148,16 @@ function TaskRow({
           提醒 {task.reminders} · 回信 {task.letters}
           {task.currentVersion > 1 ? ` · 第 ${task.currentVersion} 版` : ''}
         </ThemedText>
-        {task.topicId ? (
+        {task.conversationId && !task.conversationDeleted ? (
           <Pressable
             accessibilityRole="link"
-            onPress={() => {
-              useAgentChatStore.getState().setTopic(task.topicId ?? undefined);
-              router.back();
-            }}
+            onPress={() =>
+              // 回到确认这个委托的会话（W16）：与收件箱深链同一机制，带上会话参数回到伙伴页
+              router.replace({
+                pathname: '/agent',
+                params: { conversationId: String(task.conversationId) },
+              })
+            }
             style={styles.topicLink}
           >
             <ThemedText type="small" themeColor="tintForeground">

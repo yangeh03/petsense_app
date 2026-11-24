@@ -40,6 +40,8 @@ export const Colors = {
     onlineBackground: '#E4F2EA',
     /** 等待状态胶囊底色（配 warning 文字） */
     warningBackground: '#FBF1DD',
+    /** 浮层（底部面板、侧边抽屉、弹窗）后面的遮罩，只作图形用 */
+    overlay: 'rgba(20, 12, 6, 0.35)',
   },
   dark: {
     text: '#F3EAE0',
@@ -61,6 +63,8 @@ export const Colors = {
     onlineForeground: '#4CC38A',
     onlineBackground: '#1F3A2A',
     warningBackground: '#3B2F19',
+    /** 深色下面板与页面同色，遮罩压得更暗一些才能分开 */
+    overlay: 'rgba(0, 0, 0, 0.55)',
   },
 } as const;
 
