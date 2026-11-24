@@ -65,3 +65,9 @@ test('生产档位仍走 production 通道，OTA 不受影响', () => {
   assert.equal(easConfig.build?.production?.channel, 'production');
   assert.equal(easConfig.build?.internal?.channel, 'production', '内部分发构建接收同一 OTA 通道');
 });
+
+test('真机包的 API 地址与 production OTA 一致，不会连到设备自身 localhost', () => {
+  for (const name of ['internal', 'production']) {
+    assert.equal(easConfig.build[name].env.EXPO_PUBLIC_API_BASE_URL, 'http://81.71.71.31');
+  }
+});

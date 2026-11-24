@@ -788,6 +788,8 @@ def dispatch_delivery(delivery_id, now=None, provider=None):
     except push_provider.ProviderError as exc:
         with session_scope() as s:
             delivery = s.get(PushDelivery, delivery_id)
+            if exc.status == 429:
+                return _schedule_retry(s, delivery, 'http_429', now)
             _finalize(s, delivery, STATE_FAILED, reason='provider_error',
                       error_code=exc.code, now=now, error=exc)
         return {'state': STATE_FAILED, 'reason': 'provider_error'}
@@ -893,13 +895,16 @@ def sweep_receipts(now=None, provider=None):
         if not rows:
             return handled
         ticket_ids = [row.expo_ticket_id for row in rows]
-        try:
-            receipts = provider.get_receipts(ticket_ids)
-        except (push_provider.OutcomeUnknown, push_provider.ProviderError):
-            for row in rows:
-                row.next_attempt_at = now + timedelta(seconds=RECEIPT_POLL_INTERVAL_S)
-                row.updated_at = now
-            return handled
+    # 查询回执也是外部网络调用，不在数据库事务内等待。
+    try:
+        receipts = provider.get_receipts(ticket_ids)
+    except (push_provider.OutcomeUnknown, push_provider.ProviderError):
+        receipts = {}
+    with session_scope() as s:
+        rows = s.execute(select(PushDelivery).where(
+            PushDelivery.state == STATE_SENT,
+            PushDelivery.expo_ticket_id.in_(ticket_ids),
+        )).scalars().all()
         for row in rows:
             receipt = receipts.get(row.expo_ticket_id)
             if receipt is None:
@@ -908,7 +913,7 @@ def sweep_receipts(now=None, provider=None):
                 continue
             status = receipt.get('status')
             row.receipt_status = status
-            if status == 'delivered':
+            if status in ('ok', 'delivered'):
                 _finalize(s, row, STATE_DELIVERED, reason='delivered', now=now)
                 handled += 1
                 continue

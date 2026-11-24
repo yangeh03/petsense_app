@@ -17,12 +17,18 @@
       "ios": {
         "simulator": false
       },
-      "channel": "production"
+      "channel": "production",
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "http://81.71.71.31"
+      }
     },
     "production": {
       "channel": "production",
       "ios": {
         "simulator": false
+      },
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "http://81.71.71.31"
       }
     }
   },

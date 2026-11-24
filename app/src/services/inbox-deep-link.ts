@@ -18,7 +18,7 @@ export const INBOX_FALLBACK_ROUTE = '/agent';
 export function resolveInboxDeepLink(inboxItemId: string): string | null {
   const itemId = (inboxItemId ?? '').trim();
   if (!itemId) return null;
-  return `${INBOX_DEEP_LINK_ROUTE}/${itemId}`;
+  return `${INBOX_DEEP_LINK_ROUTE}/${encodeURIComponent(itemId)}`;
 }
 
 /** 从通知载荷里取稳定的收件箱 ID（服务端只带这一个稳定键）。 */

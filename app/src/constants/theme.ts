@@ -13,7 +13,7 @@ export const Colors = {
     background: '#FBF9F4',
     backgroundElement: '#FFFFFF',
     backgroundSelected: '#F3EAE0',
-    textSecondary: '#94836F',
+    textSecondary: '#776653',
     /** 品牌主色：珊瑚橙 */
     tint: '#E8835C',
     /** 珊瑚橙实底上的文字与图标 */

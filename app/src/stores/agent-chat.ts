@@ -34,6 +34,7 @@ export type AgentAttachment = {
 };
 
 export type AgentChatState = {
+  ownerId: number | null;
   petId: number | null;
   petName: string | null;
   loadedFor: number | null;
@@ -67,7 +68,7 @@ export type AgentChatState = {
   setConnection: (connection: AgentConnection) => void;
   setScrollY: (scrollY: number) => void;
   setPending: (pending: PendingRequest | null) => void;
-  resetForUser: () => void;
+  resetForUser: (ownerId?: number | null) => void;
 };
 
 function upsert(turns: AgentTurn[], turn: AgentTurn) {
@@ -81,6 +82,7 @@ function upsert(turns: AgentTurn[], turn: AgentTurn) {
 }
 
 export const useAgentChatStore = create<AgentChatState>((set) => ({
+  ownerId: null,
   petId: null,
   petName: null,
   loadedFor: null,
@@ -155,8 +157,9 @@ export const useAgentChatStore = create<AgentChatState>((set) => ({
   setConnection: (connection) => set({ connection }),
   setScrollY: (scrollY) => set({ scrollY }),
   setPending: (pending) => set({ pending }),
-  resetForUser: () =>
+  resetForUser: (ownerId = null) =>
     set({
+      ownerId,
       petId: null,
       petName: null,
       loadedFor: null,

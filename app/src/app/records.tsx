@@ -13,7 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SoundTimeline } from '@/components/observations/sound-timeline';
 import { TrendPanel } from '@/components/observations/trend-panel';
 import { ThemedText } from '@/components/themed-text';
-import { BottomTabInset, Fonts, MaxContentWidth, Shadows, Spacing } from '@/constants/theme';
+import { BottomTabInset, MaxContentWidth, Shadows, Spacing } from '@/constants/theme';
 import { useAuth } from '@/hooks/use-auth';
 import { useObservations } from '@/hooks/use-observations';
 import { useTheme } from '@/hooks/use-theme';
@@ -23,6 +23,11 @@ import type { ObservationPeriod } from '@/types/observations';
 
 /** Health history lives here so Today can stay focused on the present moment. */
 export default function RecordsScreen() {
+  const { user } = useAuth();
+  return <RecordsContent key={user?.id ?? 'signed-out'} />;
+}
+
+function RecordsContent() {
   const theme = useTheme();
   const params = useLocalSearchParams<{ petId?: string; start?: string; end?: string }>();
   const originalRange = useRef({ start: params.start, end: params.end });
@@ -81,6 +86,7 @@ export default function RecordsScreen() {
   return (
     <ScrollView
       style={{ backgroundColor: theme.background }}
+      contentInsetAdjustmentBehavior="automatic"
       contentContainerStyle={styles.scroll}
       refreshControl={
         <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={theme.tint} />
@@ -99,13 +105,12 @@ export default function RecordsScreen() {
         style={[
           styles.container,
           {
-            paddingTop: insets.top + Spacing.four,
+            paddingTop: Spacing.four,
             paddingBottom: insets.bottom + BottomTabInset + 28,
           },
         ]}
       >
         <View style={styles.heading}>
-          <ThemedText style={[styles.title, { fontFamily: Fonts.rounded }]}>记录</ThemedText>
           <ThemedText type="small" themeColor="textSecondary">
             只汇总项圈实际观测到的数据
           </ThemedText>

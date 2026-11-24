@@ -86,7 +86,8 @@ class FakeTransport:
             raise self.raises
         if url == push_provider.SEND_URL:
             data = []
-            for _ in payload.get('messages', []):
+            assert isinstance(payload, list), 'Expo send body must be a message array'
+            for _ in payload:
                 data.append(self.tickets.pop(0) if self.tickets else {'status': 'ok', 'id': 't-1'})
             return {'data': data}
         ids = payload.get('ids', [])
@@ -632,7 +633,7 @@ class W13PushTests(unittest.TestCase):
         self._enable()
         self._register()
         self.provider.tickets = [ticket_ok('ticket-abc')]
-        self.provider.receipts = {'ticket-abc': {'status': 'delivered', 'id': 'ticket-abc',
+        self.provider.receipts = {'ticket-abc': {'status': 'ok', 'id': 'ticket-abc',
                                                  'message': None, 'details': {}}}
         self._publish()
         with self._gate_on():
@@ -644,7 +645,7 @@ class W13PushTests(unittest.TestCase):
             push.sweep_receipts(now=self.now + timedelta(seconds=120), provider=self.provider)
         row = self._delivery()
         self.assertEqual(row.state, push.STATE_DELIVERED)
-        self.assertEqual(row.receipt_status, 'delivered')
+        self.assertEqual(row.receipt_status, 'ok')
 
     def test_ticket_business_rejection_fails_without_retry(self):
         self._enable()
@@ -785,15 +786,59 @@ class W13PushTests(unittest.TestCase):
 
     def test_provider_parses_tickets_and_receipts(self):
         transport = FakeTransport(tickets=[{'status': 'ok', 'id': 'ticket-1'}],
-                                  receipts={'ticket-1': {'status': 'delivered', 'id': 'ticket-1',
+                                  receipts={'ticket-1': {'status': 'ok', 'id': 'ticket-1',
                                                          'message': None, 'details': {}}})
         with patch.object(push_provider, '_transport', transport):
             tickets = push_provider.send_messages([{'to': TOKEN_A, 'body': 'x'}])
             self.assertEqual(tickets[0]['status'], 'ok')
             self.assertEqual(tickets[0]['id'], 'ticket-1')
             receipts = push_provider.get_receipts(['ticket-1', 'missing'])
-            self.assertEqual(receipts['ticket-1']['status'], 'delivered')
+            self.assertEqual(receipts['ticket-1']['status'], 'ok')
             self.assertNotIn('missing', receipts)
+
+    def test_explicit_http_rate_limit_retries_with_a_bound(self):
+        self._enable()
+        self._register()
+        self._publish()
+        with self._gate_on(), patch.object(self.provider, 'send_messages', side_effect=
+                push_provider.ProviderError('rate limit', code='http_429', status=429)):
+            push.dispatch_due(now=self.now, provider=self.provider)
+        row = self._delivery()
+        self.assertEqual(row.state, push.STATE_PENDING)
+        self.assertEqual(row.attempts, 1)
+        self.assertEqual(row.reason, 'retry_scheduled')
+        self.assertGreater(row.next_attempt_at, self.now)
+
+    def test_receipt_network_call_holds_no_database_transaction(self):
+        self._enable()
+        self._register()
+        self._publish()
+        def receipt_without_transaction(ids):
+            # session_scope 的嵌套保护会在外层事务尚未关闭时抛异常。
+            with db.session_scope():
+                pass
+            return {ticket: {'status': 'ok'} for ticket in ids}
+        with self._gate_on():
+            push.dispatch_due(now=self.now, provider=self.provider)
+            with patch.object(self.provider, 'get_receipts', side_effect=receipt_without_transaction):
+                push.sweep_receipts(now=self.now + timedelta(seconds=120), provider=self.provider)
+        self.assertEqual(self._delivery().state, push.STATE_DELIVERED)
+
+    def test_provider_uses_expo_wire_format_and_actual_receipt_status(self):
+        transport = FakeTransport(receipts={'t-1': {'status': 'ok'}})
+        message = {'to': TOKEN_A, 'body': '有一条新提醒'}
+        with patch.object(push_provider, '_transport', transport):
+            push_provider.send_messages([message])
+            receipts = push_provider.get_receipts(['t-1'])
+        self.assertEqual(transport.calls[0], (push_provider.SEND_URL, [message]))
+        self.assertEqual(transport.calls[1], (push_provider.RECEIPTS_URL, {'ids': ['t-1']}))
+        self.assertEqual(receipts['t-1']['status'], 'ok')
+
+    def test_malformed_success_response_is_unknown_not_retryable(self):
+        for response in ({}, {'data': []}, {'data': [{'status': 'ok'}]}):
+            with patch.object(push_provider._transport, 'post', return_value=response):
+                with self.assertRaises(push_provider.OutcomeUnknown):
+                    push_provider.send_messages([{'to': TOKEN_A}])
 
     def test_provider_normalizes_error_ticket(self):
         transport = FakeTransport(tickets=[{'status': 'error', 'details': {
@@ -817,7 +862,7 @@ class W13PushTests(unittest.TestCase):
         self._register()
         self._publish()
         transport = FakeTransport(tickets=[{'status': 'ok', 'id': 'tick-1'}],
-                                  receipts={'tick-1': {'status': 'delivered', 'id': 'tick-1',
+                                  receipts={'tick-1': {'status': 'ok', 'id': 'tick-1',
                                                        'message': None, 'details': {}}})
         with self._gate_on():
             with patch.object(push_provider, '_transport', transport):
@@ -829,7 +874,7 @@ class W13PushTests(unittest.TestCase):
                     {'kind': push_jobs.DISPATCH_KIND}, self.now + timedelta(seconds=120))
         row = self._delivery()
         self.assertEqual(row.state, push.STATE_DELIVERED)
-        self.assertEqual(row.receipt_status, 'delivered')
+        self.assertEqual(row.receipt_status, 'ok')
 
     def test_worker_tick_is_a_noop_when_gate_closed(self):
         self._enable()

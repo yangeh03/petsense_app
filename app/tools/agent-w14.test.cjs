@@ -75,3 +75,33 @@ test('care status has a user-facing label; unknown statuses render nothing (W14 
   assert.equal(careStatusLabel('closed'), '已关闭');
   assert.equal(careStatusLabel('something_new'), '');
 });
+
+test('换账号时清空会话、草稿、附件及待执行上下文，并标记新账号', () => {
+  const { load } = require('./helpers/load-ts.cjs');
+  const create = (initialize) => {
+    let state;
+    const set = (patch) => {
+      state = { ...state, ...(typeof patch === 'function' ? patch(state) : patch) };
+    };
+    state = initialize(set);
+    return { getState: () => state };
+  };
+  const { useAgentChatStore } = load('stores/agent-chat.ts', { zustand: { create } });
+  const before = useAgentChatStore.getState();
+  before.resetForUser(1);
+  before.setLoadedFor(1);
+  before.setPet({ id: 10, name: '旧账号宠物' });
+  before.setDraft('旧账号草稿');
+  before.setTurns([{ id: 8 }]);
+  before.addAttachments([{ key: 'old-image', status: 'done' }]);
+  before.setPending({ text: '旧操作', pet: 10, key: 'old-key' });
+  before.resetForUser(2);
+  const after = useAgentChatStore.getState();
+  assert.equal(after.ownerId, 2);
+  assert.equal(after.loadedFor, null);
+  assert.equal(after.petId, null);
+  assert.equal(after.draft, '');
+  assert.equal(after.turns.length, 0);
+  assert.equal(after.attachments.length, 0);
+  assert.equal(after.pending, null);
+});

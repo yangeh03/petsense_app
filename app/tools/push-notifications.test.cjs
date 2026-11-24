@@ -70,6 +70,7 @@ function loadPush(options = {}) {
     installations = [],
   } = options;
   const api = {
+    getToken: options.getToken ?? (() => 'session-test'),
     request: async (url, init) => {
       apiCalls.push({ url, init });
       if (url === '/push/status') {
@@ -491,24 +492,186 @@ test('状态：开关开着但系统权限已被收回时显示未开启', async
 
 // ── 通知响应 → 路由 ─────────────────────────────────────────────────────────
 
-test('通知响应：按稳定收件箱 ID 解析路由，重复点击得到同一条路由', () => {
-  const { push } = loadPush();
-  const response = {
+/**
+ * iOS 远程推送的响应形状（SDK 58 模拟器实测）：`content.data` 为 null，自定义键挂在
+ * 触发器的 payload 上。只读 `content.data` 的实现在真机上点通知是不会跳转的。
+ */
+function remotePushResponse(payload) {
+  const alert = { title: 'PetSense', body: '有一份委托回信待查看' };
+  return {
+    actionIdentifier: 'expo.modules.notifications.actions.DEFAULT',
     notification: {
-      request: { content: { data: { inboxItemId: 'inbox-9', category: 'device_alert' } } },
+      request: {
+        content: { title: 'PetSense', data: null, body: alert.body },
+        identifier: '0DF19FC7-523C-4114-9F23-295F3D2ECE6F',
+        trigger: {
+          payload: { aps: { alert, sound: 'default' }, ...payload },
+          repeats: false,
+          dateComponents: null,
+          class: 'UNPushNotificationTrigger',
+          type: 'push',
+        },
+      },
     },
   };
+}
+
+test('通知响应：远程推送从触发器 payload 取稳定收件箱 ID，重复点击得到同一条路由', () => {
+  const { push } = loadPush();
+  const response = remotePushResponse({ inboxItemId: 'inbox-9', category: 'reply' });
   const first = push.resolveNotificationRoute(response);
   const second = push.resolveNotificationRoute(response);
   assert.equal(first, second, '重复点击解析到同一目标');
+  assert.equal(first, '/inbox/inbox-9');
   assert.equal(push.extractInboxItemId(response), 'inbox-9');
+});
+
+test('通知响应：本地通知从 content.data 取；Expo 把数据包进 body 时同样能取到', () => {
+  const { push } = loadPush();
+  // 本地通知：自定义数据在 content.data
+  assert.equal(
+    push.extractInboxItemId({
+      notification: { request: { content: { data: { inboxItemId: 'local-1' } } } },
+    }),
+    'local-1',
+  );
+  // 远程推送、Expo 把 data 包在顶层 body 里（SDK 此时才会把它放进 content.data）
+  assert.equal(
+    push.extractInboxItemId(remotePushResponse({ body: { inboxItemId: 'wrapped-2' } })),
+    'wrapped-2',
+  );
+  // 两处都有时以触发器为准
+  const both = remotePushResponse({ inboxItemId: 'from-trigger' });
+  both.notification.request.content.data = { inboxItemId: 'from-content' };
+  assert.equal(push.extractInboxItemId(both), 'from-trigger');
 });
 
 test('通知响应：载荷里没有收件箱 ID 时不导航', () => {
   const { push } = loadPush();
+  // 只有系统自己的 aps：不把标题、正文或其它键当作定位依据
+  assert.equal(push.resolveNotificationRoute(remotePushResponse({ category: 'reply' })), null);
   assert.equal(
     push.resolveNotificationRoute({ notification: { request: { content: { data: {} } } } }),
     null,
   );
   assert.equal(push.resolveNotificationRoute({}), null);
+});
+
+test('关闭请求失败不能回显已关闭', async () => {
+  const { push } = loadPush();
+  push.pushApi.setEnabled = async () => {
+    throw new Error('offline');
+  };
+  await assert.rejects(push.disablePush(), /offline/);
+});
+
+test('读不到服务端开关时不申请系统权限', async () => {
+  let requested = false;
+  const { push } = loadPush({
+    notifications: fakeNotifications({
+      requestPermissionsAsync: async () => {
+        requested = true;
+        throw new Error('must not ask');
+      },
+    }),
+  });
+  push.pushApi.status = async () => {
+    throw new Error('offline');
+  };
+  const status = await push.enablePush();
+  assert.equal(requested, false);
+  assert.equal(status.registration, 'error');
+});
+
+test('系统撤回状态在多次刷新后仍保留', async () => {
+  const { push } = loadPush({
+    storage: fakeStorage({ 'petsense.push.permission': 'granted' }),
+    notifications: fakeNotifications({
+      getPermissionsAsync: async () => ({ granted: false, status: 'denied', ios: { status: 1 } }),
+    }),
+  });
+  assert.equal(await push.readPermissionStatus(), 'revoked');
+  assert.equal(await push.readPermissionStatus(), 'revoked');
+});
+
+test('原生 token 更新使用事件值换取 Expo token，避免再次原生注册和监听循环', async () => {
+  let onToken;
+  let exchanged;
+  const nativeToken = { type: 'ios', data: 'native-apns-token' };
+  const { push, apiCalls } = loadPush({
+    storage: fakeStorage({ 'petsense.push.installationId': 'inst-test' }),
+    installations: [{ installationId: 'inst-test', hasToken: true }],
+    notifications: fakeNotifications({
+      ...GRANTED,
+      addPushTokenListener: (listener) => {
+        onToken = listener;
+        return { remove() {} };
+      },
+      getExpoPushTokenAsync: async (options) => {
+        exchanged = options.devicePushToken;
+        return { data: 'ExponentPushToken[rotated]' };
+      },
+    }),
+  });
+  push.subscribeNotificationResponses(() => {});
+  onToken(nativeToken);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(exchanged, nativeToken);
+  const rotation = apiCalls.find((call) => call.url.endsWith('/token'));
+  assert.equal(rotation.init.body.expoToken, 'ExponentPushToken[rotated]');
+});
+
+test('原生 token 事件在推送关闭时不换取凭证或重新注册', async () => {
+  let onToken;
+  let exchanges = 0;
+  const { push, apiCalls } = loadPush({
+    enabled: false,
+    notifications: fakeNotifications({
+      addPushTokenListener: (listener) => {
+        onToken = listener;
+        return { remove() {} };
+      },
+      getExpoPushTokenAsync: async () => {
+        exchanges++;
+        throw new Error('must not exchange');
+      },
+    }),
+  });
+  push.subscribeNotificationResponses(() => {});
+  onToken({ type: 'ios', data: 'native-token' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(exchanges, 0);
+  assert.equal(
+    apiCalls.some((call) => call.url.endsWith('/token')),
+    false,
+  );
+});
+
+test('深链 ID 不能注入路径或查询参数', () => {
+  assert.equal(
+    seam.resolveInboxDeepLink('x/../../agent?pet=2'),
+    '/inbox/x%2F..%2F..%2Fagent%3Fpet%3D2',
+  );
+});
+
+test('开启时切换账号：权限返回后不把旧操作注册到新账号', async () => {
+  let session = 'account-a';
+  const { push, apiCalls } = loadPush({
+    getToken: () => session,
+    notifications: fakeNotifications({
+      requestPermissionsAsync: async () => {
+        session = 'account-b';
+        return { granted: true, status: 'granted', ios: { status: 2 } };
+      },
+    }),
+  });
+  await assert.rejects(push.enablePush(), /登录状态已变化/);
+  assert.equal(
+    apiCalls.some((call) => call.url === '/push/installations'),
+    false,
+  );
+  assert.equal(
+    apiCalls.some((call) => call.url === '/push/preferences'),
+    false,
+  );
 });

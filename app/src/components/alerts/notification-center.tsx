@@ -72,8 +72,10 @@ export function NotificationCenter({
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
+      <Pressable style={styles.backdrop} onPress={onClose} accessible={false}>
         <Pressable
+          accessible={false}
+          accessibilityViewIsModal
           style={[
             styles.sheet,
             { backgroundColor: theme.background, paddingBottom: insets.bottom + Spacing.three },
@@ -84,7 +86,12 @@ export function NotificationCenter({
             <ThemedText type="subtitle" style={styles.title}>
               通知
             </ThemedText>
-            <Pressable onPress={onClose} hitSlop={10} accessibilityLabel="关闭通知中心">
+            <Pressable
+              onPress={onClose}
+              hitSlop={10}
+              accessibilityRole="button"
+              accessibilityLabel="关闭通知中心"
+            >
               <SymbolView
                 name={{ ios: 'xmark.circle.fill', android: 'cancel', web: 'cancel' }}
                 size={26}
@@ -93,85 +100,93 @@ export function NotificationCenter({
             </Pressable>
           </View>
 
-          {serverInbox && inboxItems.length > 0 ? (
-            <View style={styles.section}>
-              <View style={styles.sectionHead}>
-                <ThemedText type="smallBold">收件箱</ThemedText>
-                {onOpenInboxList ? (
-                  <Pressable onPress={onOpenInboxList} hitSlop={10} accessibilityLabel="打开收件箱">
-                    <ThemedText type="small" themeColor="textSecondary">
-                      全部
-                    </ThemedText>
-                  </Pressable>
-                ) : null}
-              </View>
-              {inboxItems.map((item) => (
-                <Pressable
-                  key={item.id}
-                  onPress={() => onOpenInbox?.(item.id)}
-                  style={[styles.row, { backgroundColor: theme.backgroundElement }]}
-                  accessibilityLabel={`${INBOX_SOURCE_LABEL[item.sourceKind]} ${item.title}`}
-                >
-                  <View style={styles.texts}>
-                    <ThemedText type="smallBold" numberOfLines={1}>
-                      {item.title}
-                    </ThemedText>
-                    <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
-                      {INBOX_SOURCE_LABEL[item.sourceKind]} · {item.readAt ? '已读' : '未读'}
-                    </ThemedText>
-                  </View>
-                  {!item.readAt ? (
-                    <View style={[styles.dot, { backgroundColor: theme.tint }]} />
-                  ) : null}
-                </Pressable>
-              ))}
-            </View>
-          ) : null}
-
-          {alerts.length === 0 && inboxItems.length === 0 ? (
-            <View style={styles.empty}>
-              <Text style={styles.emptyEmoji}>🐾</Text>
-              <ThemedText type="small" themeColor="textSecondary">
-                一切正常，暂没有需要关注的事
-              </ThemedText>
-            </View>
-          ) : (
-            <ScrollView style={styles.list} contentContainerStyle={{ gap: Spacing.two }}>
-              {alerts.map((alert) => {
-                const color = severityColor(alert.severity);
-                return (
-                  <Animated.View
-                    key={alert.ruleId}
-                    entering={FadeInDown.duration(180)}
-                    exiting={FadeOut.duration(120)}
-                  >
+          <ScrollView style={styles.list} contentContainerStyle={{ gap: Spacing.two }}>
+            {serverInbox ? (
+              <View style={styles.section}>
+                <View style={styles.sectionHead}>
+                  <ThemedText type="smallBold">收件箱</ThemedText>
+                  {onOpenInboxList ? (
                     <Pressable
-                      onPress={() => onAcknowledge(alert.ruleId)}
-                      style={[styles.row, { backgroundColor: theme.backgroundElement }]}
+                      onPress={onOpenInboxList}
+                      hitSlop={10}
+                      accessibilityRole="button"
+                      accessibilityLabel="打开收件箱"
                     >
-                      <View style={[styles.iconDot, { backgroundColor: `${color}1F` }]}>
-                        <SymbolView name={RULE_ICON[alert.ruleId]} size={17} tintColor={color} />
-                      </View>
-                      <View style={styles.texts}>
-                        <ThemedText type="smallBold">
-                          {alert.label}
-                          {alert.detail ? ` · ${alert.detail}` : ''}
-                        </ThemedText>
-                        <ThemedText type="small" themeColor="textSecondary">
-                          {SEVERITY_LABEL[alert.severity]} · 已持续{' '}
-                          {formatDuration(now - alert.triggeredAt)}
-                          {alert.acknowledged ? ' · 已折叠' : ' · 点击折叠'}
-                        </ThemedText>
-                      </View>
-                      {!alert.acknowledged && (
-                        <View style={[styles.dot, { backgroundColor: color }]} />
-                      )}
+                      <ThemedText type="small" themeColor="textSecondary">
+                        全部
+                      </ThemedText>
                     </Pressable>
-                  </Animated.View>
-                );
-              })}
-            </ScrollView>
-          )}
+                  ) : null}
+                </View>
+                {inboxItems.map((item) => (
+                  <Pressable
+                    key={item.id}
+                    accessibilityRole="button"
+                    onPress={() => onOpenInbox?.(item.id)}
+                    style={[styles.row, { backgroundColor: theme.backgroundElement }]}
+                    accessibilityLabel={`${INBOX_SOURCE_LABEL[item.sourceKind]} ${item.title}`}
+                  >
+                    <View style={styles.texts}>
+                      <ThemedText type="smallBold" numberOfLines={1}>
+                        {item.title}
+                      </ThemedText>
+                      <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
+                        {INBOX_SOURCE_LABEL[item.sourceKind]} · {item.readAt ? '已读' : '未读'}
+                      </ThemedText>
+                    </View>
+                    {!item.readAt ? (
+                      <View style={[styles.dot, { backgroundColor: theme.tint }]} />
+                    ) : null}
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
+
+            {alerts.length === 0 && inboxItems.length === 0 ? (
+              <View style={styles.empty}>
+                <Text style={styles.emptyEmoji}>🐾</Text>
+                <ThemedText type="small" themeColor="textSecondary">
+                  暂时没有新通知
+                </ThemedText>
+              </View>
+            ) : (
+              <>
+                {alerts.map((alert) => {
+                  const color = severityColor(alert.severity);
+                  return (
+                    <Animated.View
+                      key={alert.ruleId}
+                      entering={FadeInDown.duration(180)}
+                      exiting={FadeOut.duration(120)}
+                    >
+                      <Pressable
+                        onPress={() => onAcknowledge(alert.ruleId)}
+                        style={[styles.row, { backgroundColor: theme.backgroundElement }]}
+                      >
+                        <View style={[styles.iconDot, { backgroundColor: `${color}1F` }]}>
+                          <SymbolView name={RULE_ICON[alert.ruleId]} size={17} tintColor={color} />
+                        </View>
+                        <View style={styles.texts}>
+                          <ThemedText type="smallBold">
+                            {alert.label}
+                            {alert.detail ? ` · ${alert.detail}` : ''}
+                          </ThemedText>
+                          <ThemedText type="small" themeColor="textSecondary">
+                            {SEVERITY_LABEL[alert.severity]} · 已持续{' '}
+                            {formatDuration(now - alert.triggeredAt)}
+                            {alert.acknowledged ? ' · 已折叠' : ' · 点击折叠'}
+                          </ThemedText>
+                        </View>
+                        {!alert.acknowledged && (
+                          <View style={[styles.dot, { backgroundColor: color }]} />
+                        )}
+                      </Pressable>
+                    </Animated.View>
+                  );
+                })}
+              </>
+            )}
+          </ScrollView>
         </Pressable>
       </Pressable>
     </Modal>
@@ -217,6 +232,7 @@ const styles = StyleSheet.create({
   },
   list: {
     flexGrow: 0,
+    flexShrink: 1,
   },
   section: {
     gap: Spacing.two,

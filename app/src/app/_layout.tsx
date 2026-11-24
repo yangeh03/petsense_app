@@ -121,14 +121,20 @@ function RootNavigator() {
       <Stack.Screen name="notification-settings" options={{ presentation: 'modal' }} />
       <Stack.Screen
         name="records"
-        options={{ headerShown: true, title: '记录', headerBackButtonDisplayMode: 'minimal', headerBackTitle: '返回' }}
+        options={{
+          headerShown: true,
+          title: '记录',
+          headerBackButtonDisplayMode: 'minimal',
+          headerBackTitle: '返回',
+        }}
       />
       <Stack.Screen
         name="exercise-diary"
         options={{
           headerShown: true,
           title: '运动日记',
-          headerBackButtonDisplayMode: 'minimal', headerBackTitle: '返回',
+          headerBackButtonDisplayMode: 'minimal',
+          headerBackTitle: '返回',
         }}
       />
       <Stack.Screen name="monitor" />
@@ -137,7 +143,8 @@ function RootNavigator() {
         options={{
           headerShown: true,
           title: '委托簿',
-          headerBackButtonDisplayMode: 'minimal', headerBackTitle: '返回',
+          headerBackButtonDisplayMode: 'minimal',
+          headerBackTitle: '返回',
         }}
       />
       <Stack.Screen name="pet" />
@@ -147,7 +154,8 @@ function RootNavigator() {
         options={{
           headerShown: true,
           title: '室内地图设置',
-          headerBackButtonDisplayMode: 'minimal', headerBackTitle: '返回',
+          headerBackButtonDisplayMode: 'minimal',
+          headerBackTitle: '返回',
         }}
       />
       <Stack.Screen
@@ -155,7 +163,8 @@ function RootNavigator() {
         options={{
           headerShown: true,
           title: '遛狗地图',
-          headerBackButtonDisplayMode: 'minimal', headerBackTitle: '返回',
+          headerBackButtonDisplayMode: 'minimal',
+          headerBackTitle: '返回',
         }}
       />
     </Stack>

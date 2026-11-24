@@ -26,15 +26,39 @@ import {
   getPermissionsAsync,
   requestPermissionsAsync,
   setNotificationHandler,
+  type DevicePushToken,
 } from 'expo-notifications';
 import { AppState, Platform } from 'react-native';
 
-import { request } from '@/services/api';
+import { getToken, request } from '@/services/api';
 import { readInboxItemId, resolveInboxDeepLink } from '@/services/inbox-deep-link';
 
 const INSTALLATION_KEY = 'petsense.push.installationId';
 const PERMISSION_KEY = 'petsense.push.permission';
 const PENDING_ITEM_KEY = 'petsense.push.pendingInboxItemId';
+
+/** 原生模块与网络都可能不返回，设置页必须能退出等待并给出重试入口。 */
+function within<T>(operation: Promise<T>, milliseconds = 10_000): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  return Promise.race([
+    operation,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('通知服务暂时没有响应')), milliseconds);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+async function pushRequest<T>(
+  path: string,
+  options: Parameters<typeof request>[1] = {},
+): Promise<T> {
+  const controller = new AbortController();
+  try {
+    return await within(request<T>(path, { ...options, signal: controller.signal }));
+  } finally {
+    controller.abort();
+  }
+}
 
 export type PushPermissionStatus =
   'granted' | 'denied' | 'revoked' | 'undetermined' | 'unavailable';
@@ -160,7 +184,7 @@ async function writePermission(status: PushPermissionStatus): Promise<void> {
 export async function readPermissionStatus(): Promise<PushPermissionStatus> {
   if (!pushSupported()) return 'unavailable';
   try {
-    const status = await getPermissionsAsync();
+    const status = await within(getPermissionsAsync());
     const granted =
       status.granted ||
       status.ios?.status === IosAuthorizationStatus.AUTHORIZED ||
@@ -175,7 +199,7 @@ export async function readPermissionStatus(): Promise<PushPermissionStatus> {
       await writePermission('undetermined');
       return 'undetermined';
     }
-    if (last === 'granted') {
+    if (last === 'granted' || last === 'revoked') {
       await writePermission('revoked');
       return 'revoked';
     }
@@ -208,12 +232,14 @@ export async function requestSystemPermission(): Promise<PushPermissionStatus> {
 }
 
 /** 取 Expo Push Service 的 token（只提交给本服务端，不打印）。 */
-export async function fetchExpoPushToken(): Promise<string | null> {
+export async function fetchExpoPushToken(
+  devicePushToken?: DevicePushToken,
+): Promise<string | null> {
   if (!pushSupported()) return null;
   const projectId = easProjectId();
   if (!projectId) return null;
   try {
-    const token = await getExpoPushTokenAsync({ projectId });
+    const token = await within(getExpoPushTokenAsync({ projectId, devicePushToken }), 15_000);
     return token.data;
   } catch {
     return null;
@@ -232,24 +258,24 @@ type PushApi = {
 /** 服务端接口（集中在一处，便于测试替换）。 */
 export const pushApi: PushApi = {
   register: (body) =>
-    request('/push/installations', { method: 'POST', body }) as Promise<{ action: string }>,
+    pushRequest('/push/installations', { method: 'POST', body }) as Promise<{ action: string }>,
   rotate: (installationId, body) =>
-    request(`/push/installations/${encodeURIComponent(installationId)}/token`, {
+    pushRequest(`/push/installations/${encodeURIComponent(installationId)}/token`, {
       method: 'POST',
       body,
     }) as Promise<unknown>,
   reportPermission: (installationId, body) =>
-    request(`/push/installations/${encodeURIComponent(installationId)}/permission`, {
+    pushRequest(`/push/installations/${encodeURIComponent(installationId)}/permission`, {
       method: 'POST',
       body,
     }) as Promise<unknown>,
   unregister: (installationId) =>
-    request(`/push/installations/${encodeURIComponent(installationId)}`, {
+    pushRequest(`/push/installations/${encodeURIComponent(installationId)}`, {
       method: 'DELETE',
     }) as Promise<unknown>,
   setEnabled: (enabled) =>
-    request('/push/preferences', { method: 'PUT', body: { enabled } }) as Promise<unknown>,
-  status: () => request('/push/status') as Promise<PushServerStatus>,
+    pushRequest('/push/preferences', { method: 'PUT', body: { enabled } }) as Promise<unknown>,
+  status: () => pushRequest('/push/status') as Promise<PushServerStatus>,
 };
 
 async function reportPermissionToServer(
@@ -279,12 +305,26 @@ export async function enablePush(): Promise<PushStatus> {
       message: '当前版本仅在 iOS 支持原生推送，Android 与 Web 请继续使用站内收件箱。',
     };
   }
+  const session = getToken();
+  const checkSession = () => {
+    if (!session || session !== getToken()) throw new Error('登录状态已变化，请重新操作');
+  };
   // 服务端闸门没开就不申请系统权限：不弹权限框，如实说明状态
   let server: PushServerStatus | null = null;
   try {
     server = await pushApi.status();
   } catch {
     server = null;
+  }
+  if (!server) {
+    return {
+      supported: true,
+      platform: platformName(),
+      enabled: false,
+      permission: await readPermissionStatus(),
+      registration: 'error',
+      message: '暂时读不到通知设置，请稍后重试。站内收件箱照常。',
+    };
   }
   if (server && !server.gates?.ios) {
     return {
@@ -296,7 +336,9 @@ export async function enablePush(): Promise<PushStatus> {
       message: '推送暂未开放（服务端开关关闭）。站内收件箱照常。',
     };
   }
+  checkSession();
   const permission = await requestSystemPermission();
+  checkSession();
   if (permission !== 'granted') {
     // 拿不到权限就不能留着服务端的开关打开：否则服务端会以为这台设备可收
     try {
@@ -315,6 +357,7 @@ export async function enablePush(): Promise<PushStatus> {
     };
   }
   const token = await fetchExpoPushToken();
+  checkSession();
   if (!token) {
     return {
       supported: true,
@@ -322,10 +365,11 @@ export async function enablePush(): Promise<PushStatus> {
       enabled: false,
       permission,
       registration: 'error',
-      message: '暂时拿不到推送凭证，稍后会自动重试。站内收件箱不受影响。',
+      message: '暂时拿不到推送凭证，请稍后重试。站内收件箱照常。',
     };
   }
   const installationId = await getInstallationId();
+  checkSession();
   try {
     await pushApi.register({
       installationId,
@@ -333,6 +377,7 @@ export async function enablePush(): Promise<PushStatus> {
       expoToken: token,
       permissionStatus: permission,
     });
+    checkSession();
     await pushApi.setEnabled(true);
     return {
       supported: true,
@@ -366,11 +411,7 @@ export async function disablePush(): Promise<PushStatus> {
       message: '当前版本仅在 iOS 支持原生推送，Android 与 Web 请继续使用站内收件箱。',
     };
   }
-  try {
-    await pushApi.setEnabled(false);
-  } catch {
-    // 关闭失败时下次同步会再关
-  }
+  await pushApi.setEnabled(false);
   return {
     supported: true,
     platform: platformName(),
@@ -403,16 +444,21 @@ export async function readPushStatus(): Promise<PushStatus> {
     const receivable = Boolean(own && (own.eligible ?? own.hasToken));
     // 开关已开但系统权限没了，或本机绑定已停用（退出登录、token 失效）→ 如实显示为
     // 未开启；服务端同样不会向不可接收的设备发送
-    const enabled = Boolean(server.enabled) && permission === 'granted' && receivable;
+    const enabled =
+      Boolean(server.enabled && server.gates?.ios) && permission === 'granted' && receivable;
     return {
       supported: true,
       platform,
       enabled,
       permission,
       registration: receivable ? 'registered' : 'none',
-      message: enabled
-        ? '已开启。关键设备提醒和委托回信会推送到这台设备。'
-        : '未开启。站内收件箱仍然照常。',
+      message: !server.gates?.ios
+        ? '推送暂未开放。站内收件箱照常。'
+        : permission === 'denied' || permission === 'revoked'
+          ? '系统通知已关闭，可在系统设置中允许。站内收件箱照常。'
+          : enabled
+            ? '已开启。关键设备提醒和委托回信会推送到这台设备。'
+            : '未开启。站内收件箱仍然照常。',
     };
   } catch {
     return {
@@ -420,8 +466,8 @@ export async function readPushStatus(): Promise<PushStatus> {
       platform,
       enabled: false,
       permission,
-      registration: 'none',
-      message: '暂时读不到推送状态，稍后会自动重试。站内收件箱不受影响。',
+      registration: 'error',
+      message: '暂时读不到通知设置，请稍后重试。站内收件箱照常。',
     };
   }
 }
@@ -479,6 +525,8 @@ export async function syncPermissionToServer(): Promise<void> {
  */
 export async function restoreRegistration(): Promise<void> {
   if (!pushSupported()) return;
+  const session = getToken();
+  if (!session) return;
   const permission = await readPermissionStatus();
   if (permission !== 'granted') return;
   let server: PushServerStatus | null = null;
@@ -492,7 +540,7 @@ export async function restoreRegistration(): Promise<void> {
   const own = server.installations.find((item) => item.installationId === installationId);
   if (own && (own.eligible ?? own.hasToken)) return; // 本机仍可接收
   const token = await fetchExpoPushToken();
-  if (!token) return;
+  if (!token || getToken() !== session) return;
   try {
     await pushApi.register({
       installationId,
@@ -610,17 +658,53 @@ export function releaseNavigation(): void {
   navigationInFlight = false;
 }
 
-/** 从通知响应里取出稳定收件箱 ID。 */
-export function extractInboxItemId(response: {
-  notification?: { request?: { content?: { data?: unknown } } };
-}): string | null {
-  return readInboxItemId(response?.notification?.request?.content?.data);
+type NotificationResponseLike = {
+  notification?: {
+    request?: {
+      content?: { data?: unknown };
+      trigger?: unknown;
+    };
+  };
+};
+
+/** 通知响应里可能承载自定义载荷的位置，按优先级排列。 */
+export function responsePayloads(response: NotificationResponseLike): unknown[] {
+  const request = response?.notification?.request;
+  const trigger = request?.trigger;
+  const payloads: unknown[] = [];
+  if (trigger && typeof trigger === 'object') {
+    const remote = trigger as { type?: unknown; class?: unknown; payload?: unknown };
+    if (remote.type === 'push' || remote.class === 'UNPushNotificationTrigger') {
+      payloads.push(remote.payload);
+    }
+  }
+  payloads.push(request?.content?.data);
+  return payloads;
+}
+
+/**
+ * 从通知响应里取出稳定收件箱 ID。
+ *
+ * iOS 上远程推送的自定义键挂在**触发器的 payload** 上。`content.data` 对远程通知只有在
+ * Expo 把数据包进顶层 `body` 时才有值，对本地通知才是整份数据。所以先读触发器、再读
+ * `content.data`，两种位置都兼容 `body` 里再包一层的写法。
+ */
+export function extractInboxItemId(response: NotificationResponseLike): string | null {
+  for (const payload of responsePayloads(response)) {
+    const itemId = readInboxItemId(payload);
+    if (itemId) return itemId;
+    const wrapped =
+      payload && typeof payload === 'object' ? (payload as { body?: unknown }).body : null;
+    if (wrapped && typeof wrapped === 'object') {
+      const nested = readInboxItemId(wrapped);
+      if (nested) return nested;
+    }
+  }
+  return null;
 }
 
 /** 通知响应 → 应用内路由（走 W12 统一解析）。 */
-export function resolveNotificationRoute(response: {
-  notification?: { request?: { content?: { data?: unknown } } };
-}): string | null {
+export function resolveNotificationRoute(response: NotificationResponseLike): string | null {
   const itemId = extractInboxItemId(response);
   if (!itemId) return null;
   return resolveInboxDeepLink(itemId);
@@ -639,8 +723,23 @@ export function subscribeNotificationResponses(
     const itemId = extractInboxItemId(response);
     onRoute(resolveNotificationRoute(response), itemId);
   });
-  const tokenSubscription = addPushTokenListener(({ data }) => {
-    if (typeof data === 'string' && data) void syncRotatedToken(data);
+  const tokenSubscription = addPushTokenListener((devicePushToken) => {
+    void (async () => {
+      const session = getToken();
+      if (!session) return;
+      try {
+        const status = await pushApi.status();
+        const installationId = await getInstallationId();
+        const own = status.installations.find((item) => item.installationId === installationId);
+        if (!status.enabled || !status.gates.ios || !own?.hasToken || getToken() !== session)
+          return;
+        // 直接使用事件里的 APNs token。重新调用原生注册会再次触发本监听器，形成循环。
+        const token = await fetchExpoPushToken(devicePushToken);
+        if (token && getToken() === session) await syncRotatedToken(token);
+      } catch {
+        // 下次回到前台或登录时同步。
+      }
+    })();
   });
   return () => {
     responseSubscription.remove();

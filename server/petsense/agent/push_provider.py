@@ -118,7 +118,7 @@ def _normalize_ticket(entry):
         return {'status': 'ok', 'id': entry.get('id'), 'code': None, 'message': None}
     details = entry.get('details') or {}
     error = details.get('error') if isinstance(details, dict) else None
-    message = details.get('message') if isinstance(details, dict) else None
+    message = entry.get('message')
     return {'status': 'error', 'id': None, 'code': error or 'UnknownError',
             'message': scrub(message)}
 
@@ -133,7 +133,8 @@ def send_messages(messages):
     """
     if not messages:
         return []
-    payload = {'messages': messages}
+    # Expo 接收消息对象或消息数组，没有 messages 包装层。
+    payload = list(messages)
     encoded = json.dumps(payload, ensure_ascii=False).encode('utf-8')
     if len(encoded) > MAX_PAYLOAD_BYTES:
         # 载荷过大是明确的 schema 错误：不重试，也不把内容写进错误信息
@@ -141,13 +142,14 @@ def send_messages(messages):
     response = _transport.post(SEND_URL, payload)
     data = response.get('data') if isinstance(response, dict) else None
     if not isinstance(data, list):
-        raise ProviderError('服务方响应缺少票据列表', code='MalformedResponse')
+        raise OutcomeUnknown('服务方响应缺少票据列表')
+    if len(data) != len(messages):
+        raise OutcomeUnknown('服务方票据数量不匹配')
     tickets = []
     for entry in data:
         ticket = _normalize_ticket(entry)
         if ticket['status'] == 'ok' and not ticket['id']:
-            ticket = {'status': 'error', 'id': None, 'code': 'MalformedResponse',
-                      'message': '票据缺少 id'}
+            raise OutcomeUnknown('服务方票据缺少 id')
         tickets.append(ticket)
     return tickets
 
