@@ -29,6 +29,8 @@ export function PostCard({
   onEdit,
   expanded = false,
   onDelete,
+  pending,
+  onRetryPending,
 }: {
   post: Post;
   onLike: (post: Post) => void;
@@ -39,10 +41,13 @@ export function PostCard({
   onEdit?: (post: Post) => void;
   expanded?: boolean;
   onDelete?: (post: Post) => void;
+  /** 乐观发布中的本地帖子：还没被服务端确认，互动先禁用 */
+  pending?: 'publishing' | 'syncing' | 'failed';
+  onRetryPending?: () => void;
 }) {
   const theme = useTheme();
   const liked = post.liked_by_me;
-  const canDelete = post.isMine && !!onDelete;
+  const canDelete = post.isMine && !!onDelete && !pending;
 
   const openMenu = () => {
     if (!canDelete) return;
@@ -150,6 +155,39 @@ export function PostCard({
         </Pressable>
       ) : null}
 
+      {pending ? (
+        <Pressable
+          onPress={pending === 'failed' ? onRetryPending : undefined}
+          disabled={pending !== 'failed'}
+          accessibilityRole={pending === 'failed' ? 'button' : 'text'}
+          accessibilityLabel={
+            pending === 'failed'
+              ? '发布失败，点击重试'
+              : pending === 'syncing'
+                ? '发布成功，正在同步'
+                : '正在发布，稍后会自动出现在这里'
+          }
+          style={styles.pendingRow}
+        >
+          <SymbolView
+            name={
+              pending === 'failed'
+                ? { ios: 'exclamationmark.circle', android: 'error', web: 'error' }
+                : { ios: 'clock', android: 'schedule', web: 'schedule' }
+            }
+            size={14}
+            tintColor={pending === 'failed' ? theme.danger : theme.textSecondary}
+          />
+          <ThemedText type="small" themeColor={pending === 'failed' ? 'danger' : 'textSecondary'}>
+            {pending === 'failed'
+              ? '发布失败，点此重试'
+              : pending === 'syncing'
+                ? '发布成功，正在同步…'
+                : '正在发布…'}
+          </ThemedText>
+        </Pressable>
+      ) : null}
+
       <View style={styles.actionRow}>
         <View style={styles.actionGroup}>
           <ActionIcon
@@ -162,6 +200,7 @@ export function PostCard({
             color={liked ? theme.danger : theme.textSecondary}
             accessibilityLabel={liked ? '取消点赞' : '点赞'}
             onPress={() => onLike(post)}
+            disabled={!!pending}
           />
           <ActionIcon
             icon={{
@@ -173,6 +212,7 @@ export function PostCard({
             color={theme.textSecondary}
             accessibilityLabel="评论"
             onPress={() => onOpenComments(post)}
+            disabled={!!pending}
           />
           {/* 收藏放在左侧操作组：卡片右下角会被全局“创建”悬浮按钮盖住。 */}
           {!!onBookmark && (
@@ -186,6 +226,7 @@ export function PostCard({
               color={post.bookmarked_by_me ? theme.tint : theme.textSecondary}
               accessibilityLabel={post.bookmarked_by_me ? '取消收藏' : '收藏帖子'}
               onPress={() => onBookmark(post)}
+              disabled={!!pending}
             />
           )}
         </View>
@@ -200,19 +241,27 @@ function ActionIcon({
   color,
   accessibilityLabel,
   onPress,
+  disabled,
 }: {
   icon: Parameters<typeof SymbolView>[0]['name'];
   label: string;
   color: string;
   accessibilityLabel: string;
   onPress: () => void;
+  disabled?: boolean;
 }) {
   return (
     <Pressable
       onPress={onPress}
+      disabled={disabled}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
-      style={({ pressed }) => [styles.action, pressed && { opacity: 0.6 }]}
+      accessibilityState={{ disabled: !!disabled }}
+      style={({ pressed }) => [
+        styles.action,
+        disabled && styles.actionDisabled,
+        pressed && { opacity: 0.6 },
+      ]}
     >
       <SymbolView name={icon} size={22} tintColor={color} />
       {label !== '0' && (
@@ -282,4 +331,12 @@ const styles = StyleSheet.create({
   },
   actionGroup: { flexDirection: 'row', gap: Spacing.four },
   action: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  actionDisabled: { opacity: 0.45 },
+  pendingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: Spacing.three,
+    paddingBottom: Spacing.two,
+  },
 });

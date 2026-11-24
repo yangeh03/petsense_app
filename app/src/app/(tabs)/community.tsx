@@ -1,6 +1,6 @@
 import { SymbolView } from 'expo-symbols';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -28,6 +28,8 @@ import {
   setBookmark,
   setLike,
 } from '@/services/api';
+import { retryPost } from '@/services/social-publish';
+import { useSocialPendingStore } from '@/stores/social-pending';
 import type { Post, StoryGroup } from '@/types/social';
 
 type Scope = 'discover' | 'following';
@@ -52,9 +54,45 @@ export default function CommunityScreen() {
   const [loadedKey, setLoadedKey] = useState('');
   const sequence = useRef(0);
   const pending = useRef(new Set<string>());
+  // 乐观发布：服务端还没确认的帖子/故事先本地占位，列表立刻可见
+  const pendingPosts = useSocialPendingStore((state) => state.posts);
+  const pendingStories = useSocialPendingStore((state) => state.stories);
   const currentKey = `${user?.id ?? 0}:${scope}`;
   const visiblePosts = loadedKey === currentKey ? posts : [];
-  const visibleStories = loadedKey === currentKey ? stories : [];
+
+  // 本地占位的帖子排在服务端帖子前面；服务端已经收录的（serverId 命中）不再重复显示
+  const mergedPosts = useMemo(() => {
+    if (loadedKey !== currentKey) return [];
+    const serverIds = new Set(posts.map((post) => post.id));
+    const locals = pendingPosts
+      .filter((entry) => entry.serverId === null || !serverIds.has(entry.serverId))
+      .map((entry) => entry.post);
+    return [...locals, ...posts];
+  }, [loadedKey, currentKey, pendingPosts, posts]);
+
+  // 本地故事并进故事环：自己的分组里放最前
+  const mergedStories = useMemo(() => {
+    const base = loadedKey === currentKey ? stories : [];
+    if (!pendingStories.length || !user) return base;
+    const mine = pendingStories.filter((entry) => entry.story.user_id === user.id);
+    if (!mine.length) return base;
+    const groups = base.map((group) =>
+      group.user_id === user.id
+        ? { ...group, stories: [...mine.map((entry) => entry.story), ...group.stories] }
+        : group,
+    );
+    if (groups.some((group) => group.user_id === user.id)) return groups;
+    return [
+      {
+        user_id: user.id,
+        display_name: user.displayName,
+        avatar_emoji: user.avatarEmoji,
+        stories: mine.map((entry) => entry.story),
+        unseen: 0,
+      },
+      ...groups,
+    ];
+  }, [currentKey, loadedKey, pendingStories, stories, user]);
 
   const load = useCallback(async () => {
     const current = ++sequence.current;
@@ -73,6 +111,8 @@ export default function CommunityScreen() {
       const feed = await fetchFeed(undefined, { limit: 20, scope });
       if (current !== sequence.current) return;
       setPosts(feed.posts);
+      // 服务端已收录的乐观帖子：本地占位交回服务端版本
+      useSocialPendingStore.getState().resolvePosts(feed.posts.map((post) => post.id));
       setLoadedKey(currentKey);
       setUnread(0);
       setNextCursor(feed.page.nextCursor);
@@ -107,6 +147,15 @@ export default function CommunityScreen() {
     }, [load, user]),
   );
   usePetChanges(load);
+
+  // 乐观发布的帖子被服务端确认后，拉一次列表换成本地那份之外的服务端版本
+  useEffect(() => {
+    const confirmed = (list: { status: string }[]) =>
+      list.filter((entry) => entry.status === 'confirmed').length;
+    return useSocialPendingStore.subscribe((state, previous) => {
+      if (confirmed(state.posts) > confirmed(previous.posts)) void load();
+    });
+  }, [load]);
 
   const loadMore = async () => {
     if (!nextCursor || loadingMore || refreshing || loading || loadedKey !== currentKey) return;
@@ -280,10 +329,10 @@ export default function CommunityScreen() {
           </Pressable>
         )}
       </View>
-      {visibleStories.length ? (
+      {mergedStories.length ? (
         <FlatList
           horizontal
-          data={visibleStories}
+          data={mergedStories}
           keyExtractor={(item) => String(item.user_id)}
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.storyTray}
@@ -328,22 +377,35 @@ export default function CommunityScreen() {
   return (
     <ThemedView style={[styles.screen, { paddingTop: insets.top + Spacing.two }]}>
       <FlatList
-        data={visiblePosts}
+        data={mergedPosts}
         keyExtractor={(item) => String(item.id)}
         contentContainerStyle={styles.content}
         ListHeaderComponent={header}
-        renderItem={({ item }) => (
-          <PostCard
-            post={item}
-            onLike={handleLike}
-            onBookmark={handleBookmark}
-            onOpenComments={setCommentsFor}
-            onOpenPost={(post) => router.push(`/post?id=${post.id}`)}
-            onEdit={(post) => router.push(`/post-edit?id=${post.id}`)}
-            onOpenAuthor={(post) => router.push(`/user?id=${post.user_id}`)}
-            onDelete={handleDelete}
-          />
-        )}
+        renderItem={({ item }) => {
+          const entry = pendingPosts.find((candidate) => candidate.post.id === item.id);
+          return (
+            <PostCard
+              post={item}
+              onLike={handleLike}
+              onBookmark={handleBookmark}
+              onOpenComments={setCommentsFor}
+              onOpenPost={(post) => router.push(`/post?id=${post.id}`)}
+              onEdit={(post) => router.push(`/post-edit?id=${post.id}`)}
+              onOpenAuthor={(post) => router.push(`/user?id=${post.user_id}`)}
+              onDelete={handleDelete}
+              pending={
+                entry
+                  ? entry.status === 'failed'
+                    ? 'failed'
+                    : entry.status === 'confirmed'
+                      ? 'syncing'
+                      : 'publishing'
+                  : undefined
+              }
+              onRetryPending={entry ? () => retryPost(entry) : undefined}
+            />
+          );
+        }}
         ListEmptyComponent={
           loading || loadedKey !== currentKey ? (
             <ActivityIndicator color={theme.tint} />
