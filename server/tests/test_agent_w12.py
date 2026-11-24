@@ -251,6 +251,31 @@ class W12InboxTests(unittest.TestCase):
             self.assertIsNotNone(row.read_at)    # 已读不被复活
             self.assertEqual(row.previewable, 1)
 
+    def test_enrichment_covers_the_newest_items(self):
+        """富化取最新的一批：条目累计超过一批后，新条目的迟到发布仍能被富化到。"""
+        self._ensure_enabled()
+        with db.session_scope() as s:
+            # 已坐满一批历史条目（学习完成，不参与预览与推送）
+            s.add_all([AgentInboxItem(
+                user_id=self.uid, pet_id=self.pet_id, source_kind='learning',
+                event_key='filler:%d' % n, source_ref='{}', priority=9, previewable=0,
+                published=1, status='available', backfilled=0,
+                created_at=self.now, updated_at=self.now)
+                for n in range(inbox.ENRICH_LIMIT)])
+        topic_id = self._topic('device', 'battery_low', 'dev-w12-latest')
+        with db.session_scope() as s:
+            inbox.project_user(s, self.uid)
+            item_id = s.execute(select(AgentInboxItem.id).where(
+                AgentInboxItem.pet_id == self.pet_id,
+                AgentInboxItem.source_kind == 'device_fact')).scalar_one()
+            self.assertEqual(s.get(AgentInboxItem, item_id).published, 0)
+        turn_id = self._turn('care:event:%d:open' % topic_id, topic_id=topic_id)
+        with db.session_scope() as s:
+            inbox.project_user(s, self.uid)
+            row = s.get(AgentInboxItem, item_id)
+            self.assertEqual(row.published, 1, '最新一批里的新条目被富化')
+            self.assertEqual(row.turn_id, turn_id)
+
     def test_backfill_never_becomes_push_candidate(self):
         self._auto_enable = False
         topic_id = self._topic('device', 'battery_low', 'dev-w12', severity='critical')

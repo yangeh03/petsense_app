@@ -495,10 +495,11 @@ def project_pet(session, pet, now=None):
                 created += 1
             state.delivery_watermark = delivery.id
         state.updated_at = now
-    # 富化：发布可能晚于水位推进，重新解析精确回合身份并刷新判定
+    # 富化：发布可能晚于水位推进，重新解析精确回合身份并刷新判定。
+    # 取**最新**的一批：迟到的发布总是落在新条目上，条目累计超过一批后最旧的不再刷新。
     rows = session.execute(select(AgentInboxItem).where(
-        AgentInboxItem.pet_id == pet.id).order_by(AgentInboxItem.id).limit(ENRICH_LIMIT)
-    ).scalars().all()
+        AgentInboxItem.pet_id == pet.id).order_by(AgentInboxItem.id.desc())
+        .limit(ENRICH_LIMIT)).scalars().all()
     for row in rows:
         _enrich_item(session, row, now=now)
     return created
