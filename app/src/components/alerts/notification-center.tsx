@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
+import { INBOX_SOURCE_LABEL, type InboxItem } from '@/services/agent-inbox';
 import type { AlertEvent, AlertRuleId, AlertSeverity } from '@/types/alerts';
 
 type SymbolName = ComponentProps<typeof SymbolView>['name'];
@@ -36,17 +37,25 @@ const SEVERITY_LABEL: Record<AlertSeverity, string> = {
   info: '提示',
 };
 
-/** 通知中心抽屉：活跃告警按严重级排列，点击折叠（回稳后自动消失），不打断任何页面。 */
+/** 通知中心抽屉：服务端收件箱 + 活跃本机告警，点击折叠（回稳后自动消失），不打断任何页面。 */
 export function NotificationCenter({
   visible,
   alerts,
+  inboxItems = [],
+  serverInbox = false,
   onClose,
   onAcknowledge,
+  onOpenInbox,
+  onOpenInboxList,
 }: {
   visible: boolean;
   alerts: AlertEvent[];
+  inboxItems?: InboxItem[];
+  serverInbox?: boolean;
   onClose: () => void;
   onAcknowledge: (ruleId: AlertRuleId) => void;
+  onOpenInbox?: (id: number) => void;
+  onOpenInboxList?: () => void;
 }) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
@@ -84,7 +93,42 @@ export function NotificationCenter({
             </Pressable>
           </View>
 
-          {alerts.length === 0 ? (
+          {serverInbox && inboxItems.length > 0 ? (
+            <View style={styles.section}>
+              <View style={styles.sectionHead}>
+                <ThemedText type="smallBold">收件箱</ThemedText>
+                {onOpenInboxList ? (
+                  <Pressable onPress={onOpenInboxList} hitSlop={10} accessibilityLabel="打开收件箱">
+                    <ThemedText type="small" themeColor="textSecondary">
+                      全部
+                    </ThemedText>
+                  </Pressable>
+                ) : null}
+              </View>
+              {inboxItems.map((item) => (
+                <Pressable
+                  key={item.id}
+                  onPress={() => onOpenInbox?.(item.id)}
+                  style={[styles.row, { backgroundColor: theme.backgroundElement }]}
+                  accessibilityLabel={`${INBOX_SOURCE_LABEL[item.sourceKind]} ${item.title}`}
+                >
+                  <View style={styles.texts}>
+                    <ThemedText type="smallBold" numberOfLines={1}>
+                      {item.title}
+                    </ThemedText>
+                    <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
+                      {INBOX_SOURCE_LABEL[item.sourceKind]} · {item.readAt ? '已读' : '未读'}
+                    </ThemedText>
+                  </View>
+                  {!item.readAt ? (
+                    <View style={[styles.dot, { backgroundColor: theme.tint }]} />
+                  ) : null}
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
+
+          {alerts.length === 0 && inboxItems.length === 0 ? (
             <View style={styles.empty}>
               <Text style={styles.emptyEmoji}>🐾</Text>
               <ThemedText type="small" themeColor="textSecondary">
@@ -173,6 +217,15 @@ const styles = StyleSheet.create({
   },
   list: {
     flexGrow: 0,
+  },
+  section: {
+    gap: Spacing.two,
+    marginBottom: Spacing.three,
+  },
+  sectionHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   row: {
     flexDirection: 'row',

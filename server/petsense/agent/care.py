@@ -46,7 +46,8 @@ MANAGED_RULES = ('battery_low', 'data_stale', 'readings_invalid')
 
 DEVICE_CATEGORIES = ('battery_low', 'data_stale', 'readings_invalid')
 # 回顾发现类别白名单（服务端校验模型提案；未知归 other）
-REVIEW_CATEGORIES = ('walk_volume', 'sound_events', 'coverage', 'observation', 'other')
+REVIEW_CATEGORIES = ('walk_volume', 'sound_events', 'coverage', 'observation',
+                     'personal_change', 'other')
 
 CATEGORY_TITLES = {
     'battery_low': '项圈电量偏低',

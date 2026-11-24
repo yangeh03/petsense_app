@@ -15,6 +15,7 @@ import { SymbolView } from 'expo-symbols';
 import { useRouter } from 'expo-router';
 import AgentImageViewer from '@/components/agent/agent-image-viewer';
 import { ActionCard } from '@/components/agent/action-card';
+import { ChangeCard } from '@/components/agent/change-card';
 import { AgentMarkdownText } from '@/components/agent/markdown-text';
 import { ProposalCard } from '@/components/agent/proposal-card';
 import { TaskProposalCard } from '@/components/agent/task-proposal-card';
@@ -33,6 +34,7 @@ import {
   type AgentTurn,
   type AgentWindowSource,
 } from '@/services/agent';
+import type { AgentChangeEvidence } from '@/services/agent-change';
 import { assistantDisplayName, useCompanionSettingsStore } from '@/stores/companion-settings';
 
 type Props = {
@@ -469,13 +471,18 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry, o
   const careBlocks = blocks.filter(
     (block): block is { type: 'care'; care: AgentCareInfo } => block.type === 'care',
   );
+  const changeBlocks = blocks.filter(
+    (block): block is { type: 'personal_change'; change: AgentChangeEvidence } =>
+      block.type === 'personal_change',
+  );
   const hasUnknownBlocks =
     blocks.length >
     textSegments.length +
       proposals.length +
       actions.length +
       taskResults.length +
-      careBlocks.length;
+      careBlocks.length +
+      changeBlocks.length;
   // 来源去重只算一次：可展示卡（web/带日期）与未知来源回退分别派生（UI 一致性调整）。
   const uniqueSources = [...new Map((turn.sources ?? []).map((s) => [sourceKey(s), s]))];
   const cardSources = uniqueSources.filter(
@@ -553,6 +560,7 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry, o
         actions.length ||
         taskResults.length ||
         careBlocks.length ||
+        changeBlocks.length ||
         cardSources.length ? (
           // 结构化卡与正文同列：左缘统一缩进到头像右侧的文本列（34 头像 + 9 间距 = 43，
           // 与 replyFootnote 同值），右缘沿用列宽；来源回退文本留在脚注区。
@@ -578,6 +586,9 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry, o
                 care={block.care}
                 onAskWhy={() => onAskWhy?.(turn)}
               />
+            ))}
+            {changeBlocks.map((block, index) => (
+              <ChangeCard key={`${block.change.evidenceId}-${index}`} change={block.change} />
             ))}
             {actions.map((block) => (
               <ActionCard key={block.action.id} action={block.action} petId={petId} />

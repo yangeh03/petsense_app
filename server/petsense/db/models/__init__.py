@@ -24,9 +24,10 @@ __all__ = [
     'PetgifIdentity', 'AgentTurn', 'AgentLearningDay', 'CompanionSettings', 'AgentProposal', 'PetMemory',
     'AgentAction', 'AgentJob', 'AgentTask', 'AgentTaskPlan', 'AgentTaskDelivery',
     'AgentCareTopic', 'CareDeviceState', 'CarePetState',
+    'AgentInboxItem', 'AgentInboxState',
 ]
 
-from petsense.db.models.agent import (AgentAction, AgentCareTopic, AgentJob, AgentLearningDay,
-    AgentProposal, AgentTask, AgentTaskDelivery, AgentTaskPlan, AgentTurn,
+from petsense.db.models.agent import (AgentAction, AgentCareTopic, AgentInboxItem, AgentInboxState,
+    AgentJob, AgentLearningDay, AgentProposal, AgentTask, AgentTaskDelivery, AgentTaskPlan, AgentTurn,
     CareDeviceState, CarePetState, CompanionSettings)
 from petsense.db.models.memory import PetMemory

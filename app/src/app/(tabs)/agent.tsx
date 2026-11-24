@@ -4,7 +4,7 @@
  * 底部安全区沿用 NativeTabs 结论，只用一次（agent-w01-spec.md §4.2/§4.4）。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Keyboard,
@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { SymbolView } from 'expo-symbols';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AgentComposer } from '@/components/agent/agent-composer';
 import { AgentMessage } from '@/components/agent/agent-message';
@@ -28,7 +28,9 @@ import { useAuth } from '@/hooks/use-auth';
 import { useTheme } from '@/hooks/use-theme';
 import { useAgentChatStore } from '@/stores/agent-chat';
 import { assistantDisplayName, useCompanionSettingsStore } from '@/stores/companion-settings';
-import type { AgentTurn } from '@/services/agent';
+import type { AgentCareTopic, AgentTurn } from '@/services/agent';
+import { fetchInboxItem, fetchInboxTurn, markInboxRead } from '@/services/agent-inbox';
+import { anchorKey, findAnchorTurnId, parseAnchorParams } from '@/services/inbox-anchor';
 
 export default function CompanionScreen() {
   const { user } = useAuth();
@@ -95,10 +97,129 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
     };
   }, []);
 
-  const visible =
-    loadedFor === (user?.id ?? -1)
-      ? turns.filter((turn) => topic === undefined || (turn.topicId ?? turn.id) === topic)
-      : [];
+  const visible = useMemo(
+    () =>
+      loadedFor === (user?.id ?? -1)
+        ? turns.filter((turn) => topic === undefined || (turn.topicId ?? turn.id) === topic)
+        : [],
+    [loadedFor, turns, topic, user?.id],
+  );
+
+  // W12 深链锚点：收件箱条目按稳定 id 解析到这里，定位到**那条来源消息**（不是占位路由）。
+  // 查找范围是全部已加载回合（不受当前话题过滤影响）；不在已加载范围（早于第一页）
+  // 时按稳定回合 id 向服务端精确取回；安静主题没有交付回合时取权威主题本身。
+  // 目标**展示之后**才标已读；展示失败或账号变更后不应用，保持未读。
+  const linkParams = useLocalSearchParams<{
+    topicId?: string;
+    deliveryId?: string;
+    turnId?: string;
+    inboxId?: string;
+  }>();
+  const linkTurnId = linkParams.turnId;
+  const linkTopicId = linkParams.topicId;
+  const linkDeliveryId = linkParams.deliveryId;
+  const linkInboxId = linkParams.inboxId;
+  const anchorTarget = useMemo(
+    () =>
+      parseAnchorParams({
+        turnId: linkTurnId,
+        topicId: linkTopicId,
+        deliveryId: linkDeliveryId,
+        inboxId: linkInboxId,
+      }),
+    [linkTurnId, linkTopicId, linkDeliveryId, linkInboxId],
+  );
+  const anchorIdentity = anchorKey(anchorTarget);
+  const [anchorOffsets, setAnchorOffsets] = useState<Record<number, number>>({});
+  const [anchor, setAnchor] = useState<{
+    key: string;
+    turn: AgentTurn | null;
+    topic: AgentCareTopic | null;
+    error: string;
+    presented: boolean;
+  }>({ key: '', turn: null, topic: null, error: '', presented: false });
+  const ownerRef = useRef(ownerId);
+  useEffect(() => {
+    ownerRef.current = ownerId;
+  }, [ownerId]);
+  const localAnchorId = useMemo(() => findAnchorTurnId(turns, anchorTarget), [turns, anchorTarget]);
+  const anchorFresh = anchor.key === anchorIdentity;
+  const anchorTurn = anchorFresh ? anchor.turn : null;
+  const anchorTopic = anchorFresh ? anchor.topic : null;
+  const anchorError = anchorFresh ? anchor.error : '';
+  const anchorPresented = localAnchorId !== null || (anchorFresh && anchor.presented);
+
+  // 取回锚点来源：本地命中就定位，否则按稳定 id 向服务端精确取回（不依赖会话分页）。
+  useEffect(() => {
+    if (
+      anchorTarget.turnId === null &&
+      anchorTarget.topicId === null &&
+      anchorTarget.deliveryId === null
+    ) {
+      return;
+    }
+    if (localAnchorId !== null) return; // 本地已命中：只滚动定位，不重复取回
+    const requestOwner = ownerRef.current;
+    let cancelled = false;
+    (async () => {
+      try {
+        if (anchorTarget.turnId !== null) {
+          const data = await fetchInboxTurn(anchorTarget.turnId);
+          if (cancelled || ownerRef.current !== requestOwner) return; // 账号变更后不应用
+          setAnchor({
+            key: anchorIdentity,
+            turn: data.turn,
+            topic: null,
+            error: '',
+            presented: true,
+          });
+        } else if (anchorTarget.inboxId !== null) {
+          const data = await fetchInboxItem(anchorTarget.inboxId);
+          if (cancelled || ownerRef.current !== requestOwner) return;
+          setAnchor({
+            key: anchorIdentity,
+            turn: null,
+            topic: (data.item.source?.topic as AgentCareTopic | undefined) ?? null,
+            error: '',
+            presented: true,
+          });
+        }
+      } catch {
+        if (cancelled || ownerRef.current !== requestOwner) return;
+        setAnchor({
+          key: anchorIdentity,
+          turn: null,
+          topic: null,
+          error: '这条通知的来源暂时打不开',
+          presented: false,
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    anchorIdentity,
+    localAnchorId,
+    anchorTarget.turnId,
+    anchorTarget.topicId,
+    anchorTarget.deliveryId,
+    anchorTarget.inboxId,
+  ]);
+
+  // 本地命中时滚动到那条消息（偏移来自 onLayout 的 state，布局变化会重跑）。
+  useEffect(() => {
+    if (localAnchorId === null) return;
+    const y = anchorOffsets[localAnchorId];
+    if (y == null) return;
+    scroll.current?.scrollTo({ y: Math.max(0, y - 96), animated: true });
+  }, [localAnchorId, anchorOffsets]);
+
+  // 目标已展示 → 标已读（展示失败不标）。
+  useEffect(() => {
+    if (!anchorPresented || anchorTarget.inboxId === null) return;
+    void markInboxRead(anchorTarget.inboxId).catch(() => undefined);
+  }, [anchorPresented, anchorTarget.inboxId]);
   // W07（spec §4.1）：有图未全完成（上传中或失败）不可发；纯图（无文字）可发；失败重试入口与草稿同源
   const uploading = attachments.some((item) => item.status === 'uploading');
   const hasFailed = attachments.some((item) => item.status === 'failed');
@@ -322,16 +443,69 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
             )}
           </View>
         ) : null}
+        {anchorTurn || anchorTopic || anchorError ? (
+          <View style={[styles.anchorCard, { backgroundColor: theme.backgroundElement }]}>
+            <View style={styles.anchorHead}>
+              <ThemedText type="smallBold">来自收件箱</ThemedText>
+              <Pressable
+                onPress={() => router.push('/agent-inbox')}
+                hitSlop={10}
+                accessibilityLabel="返回收件箱"
+              >
+                <ThemedText type="small" themeColor="textSecondary">
+                  返回收件箱
+                </ThemedText>
+              </Pressable>
+            </View>
+            {anchorError ? (
+              <ThemedText type="small" themeColor="textSecondary">
+                {anchorError}
+              </ThemedText>
+            ) : null}
+            {anchorTurn ? (
+              <AgentMessage
+                turn={anchorTurn}
+                petId={petId}
+                petName={petName}
+                onContinueTopic={onContinueTopic}
+                onRetry={onRetry}
+                onAskWhy={onAskWhy}
+              />
+            ) : null}
+            {anchorTopic ? (
+              <View style={styles.anchorTopic}>
+                <ThemedText type="smallBold">{anchorTopic.title}</ThemedText>
+                {anchorTopic.detail ? (
+                  <ThemedText type="small" themeColor="textSecondary">
+                    {anchorTopic.detail}
+                  </ThemedText>
+                ) : null}
+                <ThemedText type="small" themeColor="textSecondary">
+                  主题 {anchorTopic.id} · {anchorTopic.category} · {anchorTopic.status}
+                </ThemedText>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
         {visible.map((turn) => (
-          <AgentMessage
+          <View
             key={turn.id}
-            turn={turn}
-            petId={petId}
-            petName={petName}
-            onContinueTopic={onContinueTopic}
-            onRetry={onRetry}
-            onAskWhy={onAskWhy}
-          />
+            onLayout={(event) => {
+              const y = event.nativeEvent.layout.y;
+              setAnchorOffsets((current) =>
+                current[turn.id] === y ? current : { ...current, [turn.id]: y },
+              );
+            }}
+          >
+            <AgentMessage
+              turn={turn}
+              petId={petId}
+              petName={petName}
+              onContinueTopic={onContinueTopic}
+              onRetry={onRetry}
+              onAskWhy={onAskWhy}
+            />
+          </View>
         ))}
         {busy && !visible.some((turn) => turn.status === 'pending') ? (
           <View style={styles.waiting}>
@@ -446,4 +620,16 @@ const styles = StyleSheet.create({
     maxWidth: MaxContentWidth,
     alignSelf: 'center',
   },
+  anchorCard: {
+    gap: 8,
+    borderRadius: 16,
+    padding: 12,
+    marginBottom: 12,
+  },
+  anchorHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  anchorTopic: { gap: 4 },
 });

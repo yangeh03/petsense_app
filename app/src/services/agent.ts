@@ -1,4 +1,5 @@
 import { absoluteUrl, getToken, request, uploadRequest } from '@/services/api';
+import type { AgentChangeEvidence } from '@/services/agent-change';
 import type { UploadImage } from '@/services/normalize-image';
 
 /** W07 聊天图片引用（服务端 public() 的 images 项） */
@@ -58,6 +59,8 @@ export type AgentTaskPlan = {
   condition: AgentTaskCondition | null;
   comparison: { band: 'below' | 'above' } | null;
   baselineStrategy: 'fact_first' | 'wait_baseline' | null;
+  /** W11 D3：基线未就绪时确认卡须由主人明确选择（缺少选择不静默生效）。 */
+  baselineStrategyChoiceRequired?: boolean;
   timezone: string;
   startAt: string;
   deadlineAt: string;
@@ -79,6 +82,8 @@ export type AgentTaskDelivery = {
   id: number;
   taskId: number;
   kind: 'reminder' | 'letter' | 'degraded_letter';
+  /** W11 D6：交付时冻结的个人比较证据（历史回信按原证据展示）。 */
+  changeEvidence?: AgentChangeEvidence[];
   planVersion: number;
   text: string;
   windowStart: string | null;
@@ -236,6 +241,7 @@ export type AgentTurn = {
         | { type: 'action'; action: AgentAction }
         | { type: 'task_result'; task: AgentTaskResultBlock }
         | { type: 'care'; care: AgentCareInfo }
+        | { type: 'personal_change'; change: AgentChangeEvidence }
       )[]
     | null;
   images: AgentImageMeta[];
@@ -251,6 +257,8 @@ export type AgentTaskResultBlock = {
   version: number;
   deadlineAt: string;
   degraded: boolean;
+  /** W11 D6：回信冻结的个人比较证据。 */
+  changeEvidence?: AgentChangeEvidence[];
 };
 export const fetchAgentTurns = (pet: number, before?: number) =>
   request<{ turns: AgentTurn[] }>(`/agent/pets/${pet}/turns${before ? `?before=${before}` : ''}`);
@@ -268,15 +276,17 @@ export const sendAgentTurn = (
     body: { text, target, requestId, topicId, replyTo, ...(images?.length ? { images } : {}) },
   });
 
-/** 确认卡决策：幂等；响应带刷新后的 turn（按 id 覆盖本地回合）。 */
+/** 确认卡决策：幂等；响应带刷新后的 turn（按 id 覆盖本地回合）。
+ *  baselineStrategy 为 W11 D3 的主人实际选择（等基线 / 先记录绝对事实）。 */
 export const decideAgentProposal = (
   pet: number,
   proposalId: number,
   action: 'confirm' | 'reject',
+  baselineStrategy?: 'fact_first' | 'wait_baseline',
 ) =>
   request<{ proposal: AgentProposal; turn: AgentTurn | null }>(
     `/agent/pets/${pet}/proposals/${proposalId}/decision`,
-    { method: 'POST', body: { action } },
+    { method: 'POST', body: baselineStrategy ? { action, baselineStrategy } : { action } },
   );
 
 /** W08 委托簿：列表 / 详情 / 直接操作（暂停恢复取消即时生效，幂等）。 */

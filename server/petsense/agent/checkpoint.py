@@ -11,6 +11,7 @@
 import json
 import logging
 
+from petsense.agent import change as change_service
 from petsense.agent import loop, registry, runs
 from petsense.db import iso_z
 
@@ -34,7 +35,8 @@ _CHECKPOINT_SYSTEM = (
     'text ≤300 字：先给结论或「无法下结论」，再给关键数值、实际覆盖与缺口，'
     '语气像照料助手写给主人的一段话，不用列表，不展示字段名）。'
     '个人比较必须引用证据中的基线范围与版本；基线未就绪或不可比时如实说明，'
-    '只给事实观察。评估不修改计划本身。')
+    '只给事实观察。若证据里 comparisonAllowed 为 false（主人选了先记录绝对事实），'
+    '只能陈述绝对事实，不得做任何个人比较。评估不修改计划本身。')
 
 _RETRY_INSTRUCTION = (
     '上一次输出不是合法的决策 JSON。重新输出：只输出一个 JSON 对象 '
@@ -47,6 +49,7 @@ def _compact_evidence(evidence):
         'windowStart', 'windowEnd', 'observedSeconds', 'gapSeconds', 'pausedSeconds',
         'walkSeconds', 'soundEventCount', 'dataThrough', 'comparisonStarted')}
     compact['actionSeconds'] = evidence.get('actionSeconds')
+    compact['comparisonAllowed'] = evidence.get('comparisonAllowed', True)
     compact['daily'] = (evidence.get('daily') or [])[-7:]
     baseline = evidence.get('baseline')
     if isinstance(baseline, dict) and not baseline.get('error'):
@@ -129,6 +132,17 @@ def evaluate(ctx, now):
     if decision is not None and ctx['mode'] == 'ordinary' and decision['decision'] == 'letter':
         # 普通检查不交付回信（spec §3：到期才回信），按继续观察记录
         decision = {'decision': 'continue', 'text': ''}
+    if decision is not None and decision.get('text'):
+        # W11：回信里的个人比较必须有已验证证据支撑——方向与已接受证据相反或
+        # 完全没有合格证据时，判为不合法输出（走有界重试与降级回信），不得交付。
+        eligible = [slot for slot in (evidence.get('changeSlots') or []) if slot.get('eligible')]
+        claimed = change_service.claim_directions(decision['text'])
+        if change_service.asserts_comparison(decision['text']):
+            allowed = {slot.get('direction') for slot in eligible}
+            if not eligible or (claimed and not claimed <= allowed):
+                decision = None
+                if error is None:
+                    error = 'comparison_without_evidence'
     if decision is not None and ctx['mode'] == 'due' and decision['decision'] != 'letter':
         decision = None  # due 必须 letter
         if error is None:

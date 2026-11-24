@@ -13,6 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ExerciseDiaryEntry } from '@/components/dashboard/exercise-diary-entry';
 import { ActivityCard } from '@/components/dashboard/activity-card';
 import { NotificationBell } from '@/components/alerts/notification-bell';
+import { InboxPreviewCard } from '@/components/alerts/inbox-preview-card';
 import { PetHero } from '@/components/dashboard/pet-hero';
 import { PetStatusStrip } from '@/components/dashboard/pet-status-strip';
 import { VitalsCard } from '@/components/dashboard/vitals-card';
@@ -101,6 +102,7 @@ export default function DashboardScreen() {
           </ThemedText>
           <NotificationBell />
         </View>
+        <InboxPreviewCard petId={pet?.id} />
         <View style={styles.welcome}>
           <ThemedText style={[styles.pageTitle, { fontFamily: Fonts.rounded }]}>
             {replay

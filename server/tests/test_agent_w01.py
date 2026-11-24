@@ -157,7 +157,11 @@ class RegistryMatrixTests(unittest.TestCase):
                                       'read_pet_profile', 'prepare_profile_update', 'prepare_role_settings',
                                       'read_web_page', 'create_diary', 'draft_social_post',
                                       'read_task', 'propose_task_change', 'read_care_topics'})
+        # W11 起回顾形态开放 read_baseline（个人变化合流）；事件形态权限不扩大
         self.assertEqual({s['name'] for s in registry.schemas_for('review', 'allowed')},
+                         {'query_observations', 'read_current_status', 'read_pet_profile',
+                          'read_baseline'})
+        self.assertEqual({s['name'] for s in registry.schemas_for('event', 'allowed')},
                          {'query_observations', 'read_current_status', 'read_pet_profile'})
 
 

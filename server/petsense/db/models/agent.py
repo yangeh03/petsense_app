@@ -277,6 +277,54 @@ class CareDeviceState(Base):
     updated_at = Column(UTCDatetime, nullable=False)
 
 
+class AgentInboxItem(Base):
+    """W12 收件箱索引（agent-w12-spec.md §服务端和跨端契约）。
+
+    只存稳定来源引用、类型、时间与已读状态；正文与证据仍从原主题/回信读取（D4）。
+    (pet_id, source_kind, event_key) 唯一：重复投影、并发写入与重启恢复都不重复
+    （幂等靠唯一索引 + on_conflict_do_nothing）。read_at 与来源状态各自持久化：
+    标记已读不解除告警（D3）。
+    """
+    __tablename__ = 'agent_inbox_items'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    pet_id = Column(Integer, ForeignKey('pets.id'), nullable=False, index=True)
+    source_kind = Column(String(16), nullable=False)   # device_fact / care / reply / learning
+    event_key = Column(String(120), nullable=False)
+    source_ref = Column(Text, nullable=False, default='{}')  # 只存稳定来源引用（不复制正文）
+    priority = Column(Integer, nullable=False, default=9)
+    previewable = Column(Integer, nullable=False, default=0)
+    published = Column(Integer, nullable=False, default=0)
+    turn_id = Column(Integer, nullable=True)             # 精确的来源→交付回合身份
+    relevance = Column(String(16), nullable=False, default='')   # W11 明确相关性（缺失即不成立）
+    frozen_evidence = Column(Integer, nullable=False, default=0)   # W11 已冻结证据
+    delivery_approved = Column(Integer, nullable=False, default=0)  # W09 已批准交付
+    high_relevance = Column(Integer, nullable=False, default=0)  # W11 高相关比较标记
+    push_candidate = Column(Integer, nullable=False, default=0)  # W13 推送候选
+    status = Column(String(16), nullable=False, default='available')  # available / unavailable
+    backfilled = Column(Integer, nullable=False, default=0)  # 首次启用补入的历史设备告警
+    read_at = Column(UTCDatetime, nullable=True)
+    created_at = Column(UTCDatetime, nullable=False)
+    updated_at = Column(UTCDatetime, nullable=False)
+    __table_args__ = (UniqueConstraint('pet_id', 'source_kind', 'event_key'),)
+
+
+class AgentInboxState(Base):
+    """W12 收件箱投影水位（可恢复投影）：每宠物一行。
+
+    enabled_at 为该宠首次被投影到的时刻（D5 启用）：早于它的来源不补入，只有当下
+    仍开放的设备告警会被补入；其余类型从启用后开始入箱。care_watermark /
+    delivery_watermark 记录主题与回信的 id 水位，恢复与重启后从水位继续，
+    不重复投影也不复活已读。
+    """
+    __tablename__ = 'agent_inbox_states'
+    pet_id = Column(Integer, ForeignKey('pets.id'), primary_key=True)
+    enabled_at = Column(UTCDatetime, nullable=False)
+    care_watermark = Column(Integer, nullable=False, default=0)
+    delivery_watermark = Column(Integer, nullable=False, default=0)
+    updated_at = Column(UTCDatetime, nullable=False)
+
+
 class CarePetState(Base):
     """W09 宠物级水位（agent-w09-spec.md §2）：回顾首次启用水位与学习状态水位。
 

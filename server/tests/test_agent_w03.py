@@ -352,6 +352,20 @@ class AgentRouteTests(unittest.TestCase):
         self.assertIn('妈妈', system)
         self.assertIn('【照料助手】', system)  # 身份标注不随改名变化
 
+    def test_default_settings_do_not_put_none_in_system_prompt(self):
+        """未设置对主人的称呼（默认）时，提示里不得出现字面量 None。
+
+        真实模型轮次见过模型照着「称呼主人用「None」」把主人称呼成 None
+        （W11 行为评测 E66，2026-11-24）。
+        """
+        with patch('petsense.agent.model.respond',
+                   return_value=model_turn(allowed_stance() + '【照料助手】你好。')) as respond:
+            self.client.post(self.path, json={'text': '你好', 'requestId': 's1'})
+        system = respond.call_args.args[0][0]['content']
+        self.assertIn('助手设定', system)
+        self.assertNotIn('None', system)
+        self.assertIn('自然称呼', system)
+
 
 class PetsProfileTests(unittest.TestCase):
     def setUp(self):

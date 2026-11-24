@@ -87,9 +87,20 @@ class W08TestCase(unittest.TestCase):
         plan.update(overrides)
         return {k: v for k, v in plan.items() if v is not None}
 
-    def _decide(self, proposal_id, action='confirm'):
+    def _decide(self, proposal_id, action='confirm', baseline_strategy=None):
+        # W11 D3：个人比较候选在基线未就绪时须带上主人实际选择（W08 用例沿用计划里的既定策略）
+        body = {'action': action}
+        if baseline_strategy is None and action == 'confirm':
+            with db.session_scope() as s:
+                row = s.get(AgentProposal, proposal_id)
+                fields = json.loads(row.payload) if row is not None else {}
+            plan = fields.get('plan') or {}
+            if plan.get('kind') == 'comparison':
+                baseline_strategy = plan.get('baselineStrategy')
+        if baseline_strategy:
+            body['baselineStrategy'] = baseline_strategy
         response = self.client.post(f'/api/app/agent/pets/{self.pet}/proposals/{proposal_id}/decision',
-                                    json={'action': action})
+                                    json=body)
         return response
 
     def _task(self):

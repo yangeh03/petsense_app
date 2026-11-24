@@ -21,7 +21,7 @@ from datetime import timedelta
 
 from sqlalchemy import select
 
-from petsense.agent import care, deliver, jobs, loop, registry, runs
+from petsense.agent import care, change as change_service, deliver, jobs, loop, registry, runs
 from petsense.agent import settings as settings_service
 from petsense.agent.observations import query as observations_query, walk_seconds
 from petsense.db import iso_z, session_scope, utc_now
@@ -46,9 +46,16 @@ _REVIEW_SYSTEM = (
     '按主人设置的主动程度把握分寸。'
     '输出 JSON：{"say": "给主人看的回顾消息（没事可说时为空字符串）", '
     '"level": "high或normal", '
-    '"findings": [{"category": "walk_volume|sound_events|coverage|observation|other", '
+    '"findings": [{"category": "walk_volume|sound_events|coverage|observation|personal_change|other", '
     '"anchor": "同一事件的自然键（小写英文与数字；跨天指同一件事时保持一致）", '
-    '"title": "短标题", "text": "这条发现的一句说明"}]}。'
+    '"title": "短标题", "text": "这条发现的一句说明", '
+    '"evidenceId": "仅 personal_change 需要：候选的 evidenceId（原样照抄）", '
+    '"direction": "仅 personal_change 需要：above 或 below（原样照抄）", '
+    '"value": "仅 personal_change 需要：候选的实际值（数字，原样照抄）"}]}。'
+    '个人变化（category=personal_change）只能在 personalChange.eligible 里列出的时段上成立，'
+    '并且必须原样带上该候选的 evidenceId、direction、value 三个字段；'
+    '候选 status 为 within 时只能说在平时范围内，不能说比平时多或少；没有合格候选时'
+    '只能陈述绝对事实，不要提「比平时」。是否值得说由你判断：没有值得说的就少说或不说。'
     'say 中不要罗列全部数字，挑值得说的说。'
     'level=high 表示值得现在打扰主人（异常、里程碑、主人关心的事）；'
     'level=normal 是一般发现，只有多提醒档才会主动发出。'
@@ -173,12 +180,47 @@ def review_facts(session, pet, window_start, window_end):
         AgentCareTopic.pet_id == pet.id,
         AgentCareTopic.status.in_(('open', 'ongoing', 'recovered')))
         .order_by(AgentCareTopic.updated_at.desc()).limit(5)).scalars().all()
+    change = change_service.review_candidates(session, pet, window_start, window_end,
+                                               now=utc_now(), tz=tz)
     return {'window': {'startAt': iso_z(window_start), 'endAt': iso_z(window_end)},
             'days': days, 'coveredDays': len(covered), 'totalDays': len(days),
             'activeTasks': _active_task_facts(session, pet),
+            'personalChange': _change_facts(change),
             'openTopics': [{'id': t.id, 'category': t.category, 'title': t.title,
                             'status': t.status, 'anchor': t.anchor,
                             'updatedAt': iso_z(t.updated_at)} for t in topics]}
+
+
+def _change_facts(change):
+    """个人变化候选的提示词视图（只给可引用的事实，模型按 evidenceId 引用）。"""
+    items = []
+    eligible = []
+    for record in change.get('candidates') or []:
+        entry = {'evidenceId': record['evidenceId'], 'feature': record.get('feature'),
+                 'dimension': record.get('dimension'),
+                 'metric': record.get('metric'), 'unit': record.get('unit'),
+                 'date': record['date'], 'slot': record['slot'], 'slotLabel': record.get('slotLabel'),
+                 'status': record['status'], 'value': record.get('value'),
+                 'comparable': record.get('comparable'), 'eligible': record.get('eligible'),
+                 'coverageMinutes': record.get('coverageMinutes'),
+                 'samples': record.get('samples'), 'sampleStartDay': record.get('sampleStartDay'),
+                 'sampleEndDay': record.get('sampleEndDay'), 'version': record.get('version'),
+                 'revision': record.get('revision'), 'range': record.get('range'),
+                 'direction': record.get('direction'), 'note': record.get('note')}
+        items.append(entry)
+        if record.get('eligible'):
+            # 合格候选单独列出并附「原样照抄」的三个字段，降低模型漏字段的概率
+            eligible.append({'evidenceId': record['evidenceId'],
+                             'direction': record.get('direction'),
+                             'value': record.get('value'),
+                             'range': record.get('range'),
+                             'date': record['date'], 'slotLabel': record.get('slotLabel'),
+                             'dimension': record.get('dimension'),
+                             'coverageMinutes': record.get('coverageMinutes')})
+    return {'dates': change.get('dates') or [], 'counts': change.get('counts') or {},
+            'candidates': items, 'eligible': eligible,
+            'note': '只有 eligible 里的时段可作为个人变化主题；引用时把 evidenceId、'
+                    'direction、value 三个字段原样照抄；status 为 within 时不得说比平时多或少。'}
 
 
 def _active_task_facts(session, pet):
@@ -227,7 +269,7 @@ def _observation_topic(session, pet_id, anchor):
         AgentCareTopic.status.in_(('open', 'ongoing')))).scalars().first()
 
 
-def _validate_findings(payload, pet_id, session, now=None):
+def _validate_findings(payload, pet_id, session, now=None, candidates=None):
     """校验模型发现：类别白名单、锚点归一、同锚点去重与交付预算。
 
     返回 (new_findings, merged_anchors)：new_findings 为开了新主题的发现（授权证据），
@@ -237,7 +279,7 @@ def _validate_findings(payload, pet_id, session, now=None):
     raw = payload.get('findings') if isinstance(payload, dict) else None
     if not isinstance(raw, list):
         return [], []
-    findings, merged = [], []
+    findings, merged, rejects = [], [], []
     for item in raw:
         if not isinstance(item, dict):
             continue
@@ -245,6 +287,50 @@ def _validate_findings(payload, pet_id, session, now=None):
         anchor = str(item.get('anchor') or '').strip().lower()[:120]
         text = str(item.get('text') or '').strip()[:300]
         if not anchor or not text:
+            continue
+        if category == 'personal_change':
+            # W11：个人变化必须引用真实的时段证据。
+            # evidenceId 是必需的稳定引用；direction/value 是模型对证据的复述，
+            # 给出时必须与证据相符（不符 = 相反结论，拒绝），缺省时以服务端证据为准
+            # （用户可见句子由服务端锚定，不用模型措辞）。
+            evidence_id = str(item.get('evidenceId') or '').strip()
+            record = (candidates or {}).get(evidence_id)
+            if not evidence_id:
+                rejects.append({'reason': 'missing_evidence_id', 'anchor': anchor})
+                continue
+            if record is None:
+                rejects.append({'reason': 'unknown_evidence', 'evidenceId': evidence_id})
+                continue
+            if not record.get('eligible'):
+                rejects.append({'reason': 'not_eligible', 'evidenceId': evidence_id,
+                                'status': record.get('status')})
+                continue
+            direction = item.get('direction')
+            if direction is not None and direction != record.get('direction'):
+                rejects.append({'reason': 'direction_mismatch', 'evidenceId': evidence_id,
+                                'claimed': direction, 'actual': record.get('direction')})
+                continue
+            value = item.get('value')
+            if value is not None and value != record.get('value'):
+                rejects.append({'reason': 'value_mismatch', 'evidenceId': evidence_id,
+                                'claimed': value, 'actual': record.get('value')})
+                continue
+            anchor = f"change:{evidence_id}"
+            evidence = change_service.freeze(record)
+            if any(f['anchor'] == anchor for f in findings) or anchor in merged:
+                continue
+            existing = _observation_topic(session, pet_id, anchor)
+            if existing is not None:
+                merged.append(anchor)
+                care.append_evidence(existing, {'at': iso_z(now), 'kind': 'review',
+                                                'note': text[:120], 'evidence': evidence})
+                continue
+            findings.append({'category': category, 'anchor': anchor,
+                             'title': str(item.get('title') or record.get('dimension') or '个人变化')[:80],
+                             'text': evidence['note'], 'modelText': text,
+                             'evidence': evidence, 'evidenceId': evidence_id})
+            if len(findings) >= FINDING_BUDGET:
+                break
             continue
         if any(f['anchor'] == anchor for f in findings) or anchor in merged:
             continue
@@ -258,7 +344,56 @@ def _validate_findings(payload, pet_id, session, now=None):
                          'title': str(item.get('title') or category)[:80], 'text': text})
         if len(findings) >= FINDING_BUDGET:
             break
-    return findings, merged
+    return findings, merged, rejects
+
+
+def _change_diagnostics(facts, findings, rejects, say, payload=None):
+    """个人变化的定位信息（合成安全：只含计数、状态与拒绝原因，不含真实数据）。
+
+    用于区分「模型判定无显著性」「模型给了非法主张」「没有合格候选」与运行时错误，
+    便于真实模型轮次失败时定位。
+    """
+    change = facts.get('personalChange') or {}
+    accepted = [f for f in findings if f.get('category') == 'personal_change']
+    if not change.get('eligible'):
+        reason = 'no_eligible_candidate'
+    elif not accepted and rejects:
+        reason = 'rejected_findings'
+    elif not accepted:
+        reason = 'model_no_finding'
+    else:
+        reason = 'accepted'
+    model_findings = []
+    raw = (payload or {}).get('findings') if isinstance(payload, dict) else None
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        model_findings.append({'category': item.get('category'),
+                                'evidenceId': item.get('evidenceId'),
+                                'direction': item.get('direction'),
+                                'value': item.get('value'),
+                                'hasText': bool(str(item.get('text') or '').strip())})
+    return {'eligibleCandidates': len(change.get('eligible') or []),
+            'candidateCount': len(change.get('candidates') or []),
+            'accepted': len(accepted),
+            'reason': reason,
+            'rejects': rejects[:5],
+            'modelFindings': model_findings,
+            'modelProvidedSay': bool(str((payload or {}).get('say') or '').strip())
+            if isinstance(payload, dict) else False,
+            'sayClaimsComparison': change_service.claims_personal_change(say),
+            'sayDirections': sorted(change_service.claim_directions(say))}
+
+
+def _publication_provenance(payload, relevance):
+    """发布溯源：区分「模型判定高相关 + 发现被接受 + 经 W09 发布」与旧的默认高相关。
+
+    W13 后续据此区分主动消息来源（旧客户端路径没有这条记录）。
+    """
+    model_level = (payload or {}).get('level') if isinstance(payload, dict) else None
+    if model_level in ('high', 'normal'):
+        return 'model_%s_accepted' % model_level
+    return 'legacy_default_%s' % relevance
 
 
 def _relevance(payload, findings):
@@ -292,7 +427,7 @@ def handle_review(job, now):
     trigger = {'kind': payload['kind'], 'window': payload['key'], 'petId': pet.id,
                'windowStart': payload['windowStart'], 'windowEnd': payload['windowEnd'],
                'scheduledAt': payload.get('scheduledAt')}
-    degraded, say, findings, merged = [], '', [], []
+    degraded, say, findings, merged, rejects = [], '', [], [], []
     relevance = 'high'
     outcome = loop.run_structured({
         'pet_id': pet.id, 'user_id': pet.user_id, 'form': registry.REVIEW,
@@ -317,10 +452,32 @@ def handle_review(job, now):
     else:
         say = str(payload_json.get('say') or '').strip()
         with session_scope() as s:
-            findings, merged = _validate_findings(payload_json, pet.id, s, now=now)
+            findings, merged, rejects = _validate_findings(
+                payload_json, pet.id, s, now=now,
+                candidates=change_service.eligible_map(facts.get('personalChange', {}).get('candidates') or []))
         relevance = _relevance(payload_json, findings)
         # 授权证据 = 开了新主题的发现（与既有主题同锚点的重复提报不再发消息）
         authorized = bool(findings)
+        # W11 兜底：比较必须有已验证证据支撑。
+        # a) 没有任何通过校验的个人变化证据 → 回退绝对事实描述；
+        # b) 模型措辞的方向与已接受证据相反 → 用服务端锚定的比较句替换
+        #    （比较仍被锚定，绝对事实叙述保留）。
+        accepted = [f for f in findings if f['category'] == 'personal_change']
+        # 回顾路径保持严格：学习期/无合格证据时，正文出现「比平时」等说法一律回退事实摘要
+        # （W05/W09 的「认识中不说比平时」由服务端兜底；E51 按原文子串断言）。
+        # 到期回信才用否定感知的 asserts_comparison——「无法判断是否比平时少」是如实交代。
+        if change_service.claims_personal_change(say):
+            if not accepted:
+                degraded.append('personal_change_without_evidence')
+                say = _review_fallback_text(facts)
+                authorized = facts['coveredDays'] > 0
+            else:
+                allowed = {f['evidence'].get('direction') for f in accepted}
+                claimed = change_service.claim_directions(say)
+                if claimed and not claimed <= allowed:
+                    degraded.append('personal_change_narrative_corrected')
+                    anchored = '\n'.join(f['evidence']['note'] for f in accepted)
+                    say = f'{anchored}\n{_review_fallback_text(facts)}'
     deliverable = bool(say) and authorized and proactivity > 0 and (
         proactivity >= 2 or relevance == 'high')
     status = 'degraded' if degraded else 'complete'
@@ -328,6 +485,16 @@ def handle_review(job, now):
     trace['degraded'] = degraded
     trace['conclusion'] = {'reason_code': 'degraded:' + ','.join(degraded) if degraded else 'ok',
                            'window': payload['key'], 'findings': len(findings),
+                           'personalChange': _change_diagnostics(facts, findings, rejects, say,
+                                                                 payload_json),
+                           'publication': {'provenance': _publication_provenance(payload_json,
+                                                                                relevance),
+                                           'relevance': relevance,
+                                           'modelLevel': (payload_json or {}).get('level'),
+                                           'acceptedFindings': len(findings),
+                                           'acceptedChanges': len([f for f in findings
+                                                                  if f['category'] == 'personal_change'])},
+                           'deliveredBy': 'w09_review',
                            'mergedAnchors': merged, 'proactivity': proactivity,
                            'relevance': relevance, 'authorized': bool(authorized),
                            'delivered': bool(deliverable),
@@ -337,20 +504,47 @@ def handle_review(job, now):
     delivered = None
     with session_scope() as s:
         for finding in findings:
+            evidence_rows = [{'at': iso_z(now), 'kind': 'review',
+                              'note': finding['text'][:120], 'window': payload['key']}]
+            if finding.get('evidence'):
+                evidence_rows.insert(0, {'at': iso_z(now), 'kind': 'personal_change',
+                                         'note': finding['text'][:120],
+                                         'change': finding['evidence']})
             care.open_topic(s, pet.id, 'observation', finding['category'], finding['anchor'],
                             severity='info', title=finding['title'], detail=finding['text'],
-                            evidence=[{'at': iso_z(now), 'kind': 'review', 'note': finding['text'][:120],
-                                       'window': payload['key']}], now=now)
+                            evidence=evidence_rows, now=now)
+            # 稳定 run id：把本次回顾运行挂到主题上，W12 据此把「已确认高相关发布」
+            # 与该主题精确关联（运行 + 宠物 + 已交付回合三重匹配，见 inbox_publication）。
+            topic = s.execute(select(AgentCareTopic).where(
+                AgentCareTopic.pet_id == pet.id, AgentCareTopic.kind == 'observation',
+                AgentCareTopic.anchor == finding['anchor'],
+                AgentCareTopic.status.in_(('open', 'ongoing')))).scalars().first()
+            if topic is not None:
+                topic.run_id = topic.run_id or run_id
         if deliverable:
-            blocks = [{'type': 'text', 'speaker': 'assistant', 'text': say},
-                      {'type': 'care', 'care': {'kind': 'review', 'category': payload['kind'],
-                                                'title': '周期回顾', 'status': 'info',
-                                                'windowStart': payload['windowStart'],
-                                                'windowEnd': payload['windowEnd'],
-                                                'runId': run_id}}]
+            blocks = [{'type': 'text', 'speaker': 'assistant', 'text': say}]
+            for finding in findings:
+                if finding.get('category') == 'personal_change' and finding.get('evidence'):
+                    blocks.append({'type': 'personal_change',
+                                   'change': finding['evidence']})
+            blocks.append({'type': 'care', 'care': {'kind': 'review', 'category': payload['kind'],
+                                                    'title': '周期回顾', 'status': 'info',
+                                                    'windowStart': payload['windowStart'],
+                                                    'windowEnd': payload['windowEnd'],
+                                                    'runId': run_id}})
+            sources = []
+            for finding in findings:
+                evidence = finding.get('evidence')
+                if not evidence:
+                    continue
+                sources.append({'type': 'observations', 'startAt': evidence.get('slotStartAt'),
+                                'endAt': evidence.get('slotEndAt'),
+                                'observedSeconds': evidence.get('coverageSeconds'),
+                                'soundEventCount': (evidence.get('value')
+                                                    if evidence.get('feature') == 'sounds' else None)})
             turn, created = deliver.deliver_background_message(
                 s, pet.id, 'care:review:%s:%d:%s' % (payload['kind'], pet.id, payload['key']),
-                blocks, sources=[], now=now)
+                blocks, sources=sources, now=now)
             if created:
                 delivered = (pet.user_id, turn)
     if delivered:
