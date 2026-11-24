@@ -302,17 +302,167 @@ class W13PushTests(unittest.TestCase):
         self.assertEqual(result['reason'], 'stale_event')
         self.assertEqual(self._deliveries(), [])
 
+    # ── A1：不补推旧事件 ────────────────────────────────────────────────────
+
+    def test_events_before_opt_in_are_not_pushed(self):
+        """开启推送之前发生的事件不补推：只给开启之后发生的事件建行。"""
+        enabled_at = self.now - timedelta(hours=1)
+        with db.session_scope() as s:
+            push.set_user_enabled(s, self.uid, True, now=enabled_at)
+            push.register_installation(s, self.uid, INSTALLATION_A, 'ios', TOKEN_A,
+                                       permission_status='granted', now=enabled_at)
+        earlier = iso_z(enabled_at - timedelta(minutes=5))
+        result = self._publish(self._item('device_fact', id='old', createdAt=earlier))
+        self.assertEqual(result['published'], 0)
+        self.assertEqual(result['reason'], 'before_opt_in')
+        later = iso_z(enabled_at + timedelta(minutes=5))
+        result = self._publish(self._item('device_fact', id='new', createdAt=later))
+        self.assertEqual(result['published'], 1)
+        self.assertIsNone(self._delivery_by_item('old'))
+        self.assertIsNotNone(self._delivery_by_item('new'))
+
+    def test_re_enabling_push_does_not_backlog_earlier_events(self):
+        """关掉再打开：打开之前的事件即使被重新递交也不补发。"""
+        self._enable()
+        self._register()
+        item = self._item('device_fact')
+        with self._gate_off():
+            with db.session_scope() as s:
+                push.publish_inbox_item(s, item, now=self.now)     # 闸门关闭：不建行
+        re_enabled = self.now + timedelta(minutes=10)
+        with db.session_scope() as s:
+            push.set_user_enabled(s, self.uid, False, now=re_enabled)
+            push.set_user_enabled(s, self.uid, True, now=re_enabled)
+        with self._gate_on():
+            with db.session_scope() as s:
+                result = push.publish_inbox_item(s, item, now=re_enabled)
+        self.assertEqual(result['published'], 0)
+        self.assertEqual(result['reason'], 'before_opt_in')
+        self.assertEqual(self._deliveries(), [])
+
+    def test_device_regained_eligibility_does_not_backlog(self):
+        """设备失去接收条件期间发生的事件，恢复后不补推；恢复之后的事件照常建行。"""
+        self._enable()
+        self._register()
+        revoked = self.now + timedelta(minutes=1)
+        with db.session_scope() as s:
+            push.update_installation_permission(s, self.uid, INSTALLATION_A,
+                                                push.PERMISSION_REVOKED, now=revoked)
+        self.assertIsNone(self._installation().eligible_since)
+        during = iso_z(revoked + timedelta(minutes=30))
+        with self._gate_on():
+            with db.session_scope() as s:
+                result = push.publish_inbox_item(
+                    s, self._item('device_fact', id='while-revoked', createdAt=during),
+                    now=revoked + timedelta(minutes=30))
+        self.assertEqual(result['published'], 0)
+        self.assertEqual(self._deliveries(), [])
+        regained = self.now + timedelta(hours=2)
+        with db.session_scope() as s:
+            push.update_installation_permission(s, self.uid, INSTALLATION_A,
+                                                push.PERMISSION_GRANTED, now=regained)
+        self.assertEqual(self._installation().eligible_since, regained)
+        after = regained + timedelta(minutes=5)
+        with self._gate_on():
+            with db.session_scope() as s:
+                again = push.publish_inbox_item(
+                    s, self._item('device_fact', id='while-revoked', createdAt=during), now=after)
+                fresh = push.publish_inbox_item(
+                    s, self._item('device_fact', id='after-regain', createdAt=iso_z(after)),
+                    now=after)
+        self.assertEqual((again['published'], fresh['published']), (0, 1))
+        self.assertEqual([row.inbox_item_id for row in self._deliveries()], ['after-regain'])
+
+    def test_eligible_since_tracks_receive_readiness(self):
+        """具备接收条件的起始时间：注册即记下，持续满足时不变，中断后重新计时。"""
+        self._register()
+        since = self.now
+        self.assertEqual(self._installation().eligible_since, since)
+        later = self.now + timedelta(hours=1)
+        with db.session_scope() as s:
+            # 仍在接收条件内的常规更新（权限上报、token 轮换）不改变起始时间
+            push.update_installation_permission(s, self.uid, INSTALLATION_A,
+                                                push.PERMISSION_GRANTED, now=later)
+            push.update_installation_token(s, self.uid, INSTALLATION_A, TOKEN_B, now=later)
+        self.assertEqual(self._installation().eligible_since, since)
+        with db.session_scope() as s:
+            push.unregister_installation(s, self.uid, INSTALLATION_A, now=later)
+        self.assertIsNone(self._installation().eligible_since, '退出登录后不再具备接收条件')
+        relogin = self.now + timedelta(hours=2)
+        with db.session_scope() as s:
+            push.register_installation(s, self.uid, INSTALLATION_A, 'ios', TOKEN_B,
+                                       permission_status='granted', now=relogin)
+        installation = self._installation()
+        self.assertEqual(installation.state, push.INSTALLATION_ACTIVE)
+        self.assertEqual(installation.eligible_since, relogin, '重新登录后重新计时')
+        swap = self.now + timedelta(hours=3)
+        with db.session_scope() as s:
+            push.register_installation(s, self.other_uid, INSTALLATION_A, 'ios', TOKEN_B,
+                                       permission_status='granted', now=swap)
+        installation = self._installation()
+        self.assertEqual(installation.user_id, self.other_uid)
+        self.assertEqual(installation.eligible_since, swap, '换账号：新主人从换绑这一刻起算')
+        self.assertTrue(push.installation_public(installation)['eligible'])
+
+    def test_reregister_reactivates_an_unregistered_installation(self):
+        """服务方判过 token 失效的安装实例，本人重新注册后重新可收。"""
+        self._register()
+        with db.session_scope() as s:
+            row = s.execute(select(PushInstallation).where(
+                PushInstallation.installation_id == INSTALLATION_A)).scalar_one()
+            row.state = push.INSTALLATION_UNREGISTERED
+            row.expo_token = ''
+            row.eligible_since = None
+            s.flush()
+        self.assertFalse(push.installation_public(self._installation())['eligible'])
+        later = self.now + timedelta(hours=1)
+        with db.session_scope() as s:
+            row, action = push.register_installation(s, self.uid, INSTALLATION_A, 'ios', TOKEN_B,
+                                                     permission_status='granted', now=later)
+        self.assertEqual(action, 'updated')
+        row = self._installation()
+        self.assertEqual(row.state, push.INSTALLATION_ACTIVE)
+        self.assertEqual(row.eligible_since, later)
+
+    def test_cutoff_ignores_sub_millisecond_truncation(self):
+        """同一时刻写下的事件与开启时间：创建时间经 iso_z 只剩毫秒，不得被判成更早。"""
+        self._register()
+        with db.session_scope() as s:
+            push.set_user_enabled(s, self.uid, True, now=self.now)
+        item = self._item('device_fact', createdAt=iso_z(self.now))
+        parsed = push._event_created(item)
+        self.assertEqual(parsed.microsecond % 1000, 0, '夹具：传出时间确实只到毫秒')
+        self.assertLessEqual(parsed, self.now)
+        result = self._publish(item)
+        self.assertEqual(result['published'], 1)
+        # 真正早于开启时刻（哪怕只早一毫秒）的事件仍然不补推
+        with db.session_scope() as s:
+            push.set_user_enabled(s, self.uid, True, now=self.now + timedelta(milliseconds=2))
+        result = self._publish(self._item('device_fact', id='inbox-2', createdAt=iso_z(self.now)))
+        self.assertEqual((result['published'], result['reason']), (0, 'before_opt_in'))
+
     # ── A1：安静档 ──────────────────────────────────────────────────────────
 
-    def test_quiet_mode_blocks_personal_change_at_publish(self):
-        """安静档在发布时不建行（延迟而非作废）：不进入发送队列。"""
+    def test_quiet_mode_personal_change_is_suppressed_not_deferred(self):
+        """安静档下个人变化入队后被抑制，且抑制是终态：调回标准档也不会补发。"""
         self._enable()
         self._register()
         self._proactivity(0)
         result = self._publish(self._item('care'))
-        self.assertEqual(result['published'], 0)
-        self.assertEqual(result['reason'], 'quiet_mode')
-        self.assertEqual(self._deliveries(), [])
+        self.assertEqual(result['published'], 1, '安静档不拦入队，由发送前复核抑制')
+        delivery_id = self._delivery().id
+        with self._gate_on():
+            push.dispatch_delivery(delivery_id, now=self.now, provider=self.provider)
+        row = self._delivery()
+        self.assertEqual(row.state, push.STATE_SUPPRESSED)
+        self.assertEqual(row.reason, 'quiet_mode')
+        self.assertEqual(self.provider.sent, [])
+        # 调回标准档后重复递交：不建新行，已抑制的也不会复活
+        self._proactivity(1)
+        self._publish(self._item('care'))
+        self.assertEqual(len(self._deliveries()), 1)
+        self.assertEqual(self._delivery().state, push.STATE_SUPPRESSED)
+        self.assertEqual(self.provider.sent, [])
 
     def test_quiet_mode_set_after_publish_suppresses_at_send(self):
         """发布后才调到安静档：发送前复核按当前主动程度抑制。"""
@@ -788,10 +938,17 @@ class W13PushTests(unittest.TestCase):
         result = self._publish(self._item('reply', id='inbox-2'))
         self.assertEqual(result['published'], 2, '回信入队不受安静档影响')
 
-        # 个人变化在安静档下发布 → 不建行
+        # 个人变化在安静档下照常入队，发送前复核按当前主动程度抑制（终态）
         result = self._publish(self._item('care', id='inbox-3'))
-        self.assertEqual(result['published'], 0)
-        self.assertEqual(result['reason'], 'quiet_mode')
+        self.assertEqual(result['published'], 2)
+        with self._gate_on():
+            for row in self._deliveries():
+                if row.inbox_item_id == 'inbox-3':
+                    push.dispatch_delivery(row.id, now=self.now, provider=self.provider)
+        suppressed = [row for row in self._deliveries() if row.inbox_item_id == 'inbox-3']
+        self.assertEqual({row.state for row in suppressed}, {push.STATE_SUPPRESSED})
+        self.assertEqual({row.reason for row in suppressed}, {'quiet_mode'})
+        self.assertEqual(len(self.provider.sent), 1, '只有那条设备告警真正发出')
 
     def test_due_letter_requires_published_delivery(self):
         """未交付的回信中心策略判为不可推 → 不建投递行（已交付后转交推送）。"""

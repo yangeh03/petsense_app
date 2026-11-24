@@ -36,6 +36,9 @@ class PushInstallation(Base):
     state: active（可发送）/ revoked（用户退出或换账号后停用）/ unregistered
     （服务方回执判定 token 已失效，或同 token 被新安装实例接管）。
     permission_status: granted / denied / revoked / undetermined / unavailable。
+    eligible_since: 这台设备**具备接收条件**（在用 ∧ 有 token ∧ 系统已授权）的起始时间；
+    条件中断即清空，恢复时重新计时。只给该时刻之后发生的事件建投递行，所以开启
+    推送、重新登录或重新授权都不会把之前的通知补发过来。
 
     **token 只保留当前一枚**：审计与比较一律走 ``token_digest``（SHA-256）与
     ``token_version``，不把历史 token 明文留在库里（``expo_token`` 只有一个当前值，
@@ -54,6 +57,7 @@ class PushInstallation(Base):
     token_version = Column(Integer, nullable=False, default=1)
     state = Column(String(16), nullable=False, default='active')
     permission_status = Column(String(16), nullable=False, default='undetermined')
+    eligible_since = Column(UTCDatetime, nullable=True)
     created_at = Column(UTCDatetime, nullable=False)
     updated_at = Column(UTCDatetime, nullable=False)
     last_seen_at = Column(UTCDatetime, nullable=True)

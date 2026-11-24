@@ -33,6 +33,7 @@ def upgrade():
         sa.Column('token_version', sa.Integer(), nullable=False),
         sa.Column('state', sa.String(16), nullable=False),
         sa.Column('permission_status', sa.String(16), nullable=False),
+        sa.Column('eligible_since', UTCDatetime(), nullable=True),
         sa.Column('created_at', UTCDatetime(), nullable=False),
         sa.Column('updated_at', UTCDatetime(), nullable=False),
         sa.Column('last_seen_at', UTCDatetime(), nullable=True),

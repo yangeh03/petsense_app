@@ -1,10 +1,9 @@
 """W13 原生推送领域（首版仅 iOS）：发布缝、资格复核、投递状态机与审计。
 
-与 W12 的关系是**单向**：W12 在持久化收件箱条目的事务里调用
-``publish_inbox_item(session, facts)``，并安装「当前来源解析器」
-（``set_inbox_source``）。本模块**不 import** W12 的 ``inbox``，也不读写 W12 的表；
-只 import W12 的中心策略模块 ``inbox_eligibility``（该模块不依赖 ``petsense``，
-不会形成环）。
+与 W12 的关系是**单向**：W12 每轮投影与富化后都把当前仍是推送候选的条目交给
+``publish_inbox_item(session, facts)``，并安装「当前来源解析器」（``set_inbox_source``）。
+本模块**不 import** W12 的 ``inbox``，也不读写 W12 的表；只 import W12 的中心策略
+模块 ``inbox_eligibility``（该模块不依赖 ``petsense``，不会形成环）。
 
 **资格判定只有一处**：是否可推由 W12 的中心策略给出（``facts['pushCandidate']``），
 本模块不重新推导严重度、状态或证据门槛，避免口径分叉。本模块只补 W13 自己的
@@ -25,6 +24,13 @@
   遵守用户的开关与系统权限（D7）。
 - **去重键**：``(收件箱条目, 安装实例)``。同一账号的多台设备各一行；token 轮换
   不换安装实例，因此轮换不会产生重复投递。
+- **重复递交、恰好一次**：W12 每轮都重新递交当前候选，本模块按去重键建行。闸门
+  关闭时不建行，开闸后由下一轮递交补上，且只补新事件窗口（24h）内的事件。
+- **不补推旧事件**：事件必须晚于用户开启推送的时刻，也晚于这台设备具备接收条件
+  的时刻。刚开启推送、重新登录或重新授权的设备不会收到之前的通知，那些内容留在
+  收件箱里。
+- **安静档是抑制而不是延迟**：个人变化入队后按发送时的主动程度判定，安静档下
+  抑制即终态，调回标准档后不会补发。
 - **未知即停**：调用服务方后若结果不明（超时、进程中断），标记 ``unknown`` 并
   停止该条重试——宁可少一次提醒，也不给用户重复打扰（收件箱不受影响）。
 
@@ -42,7 +48,7 @@ from sqlalchemy import select, update
 from petsense.agent import inbox_eligibility
 from petsense.agent import push_provider
 from petsense.agent import settings as settings_service
-from petsense.db import iso_z, session_scope, utc_now
+from petsense.db import dialect_insert, iso_z, session_scope, utc_now
 from petsense.db.models.push import PushDelivery, PushInstallation, PushPreference
 
 logger = logging.getLogger(__name__)
@@ -272,12 +278,20 @@ def _parse_iso(value):
     return parsed
 
 
-def _event_age_seconds(facts, now):
-    """条目创建至今的秒数；无法解析时返回 None（表示「未知龄期」）。"""
-    created = _parse_iso(facts.get('createdAt'))
-    if created is None:
-        return None
-    return (now - created).total_seconds()
+def _event_created(facts):
+    """条目创建时间（aware UTC）；无法解析时返回 None（表示「未知龄期」）。"""
+    return _parse_iso(facts.get('createdAt'))
+
+
+def _precedes(moment, threshold):
+    """``moment`` 是否严格早于 ``threshold``。
+
+    条目创建时间经 ``iso_z`` 传出时只保留毫秒，而库里的时间戳是微秒：两边先统一到
+    毫秒再比，同一时刻写下的时间不会被截断误差判成「更早」。
+    """
+    def milliseconds(value):
+        return value.replace(microsecond=(value.microsecond // 1000) * 1000)
+    return milliseconds(moment) < milliseconds(threshold)
 
 
 def dedup_key(inbox_item_id, installation_id):
@@ -354,6 +368,25 @@ def active_installations(session, user_id, platform=PLATFORM_IOS):
     )).scalars().all()
 
 
+def _installation_eligible(row):
+    """这台设备此刻能否接收：在用、有 token、系统已授权。"""
+    return (row.state == INSTALLATION_ACTIVE and bool(row.expo_token)
+            and row.permission_status == PERMISSION_GRANTED)
+
+
+def _refresh_eligible_since(row, now):
+    """维护「具备接收条件的起始时间」：刚具备时记下，中断即清空（恢复时重新计时）。
+
+    发布只给这个时刻之后发生的事件建行，所以开启推送、重新登录或重新授权都不会
+    把之前的通知补发到这台设备上。
+    """
+    if _installation_eligible(row):
+        if row.eligible_since is None:
+            row.eligible_since = now
+    else:
+        row.eligible_since = None
+
+
 def _revoke_same_token(session, expo_token, keep_installation_id, now):
     """同一 Expo token 只允许绑定一个安装实例。
 
@@ -367,6 +400,7 @@ def _revoke_same_token(session, expo_token, keep_installation_id, now):
     for row in stale:
         row.state = INSTALLATION_UNREGISTERED
         row.expo_token = ''            # 清空以释放唯一约束；摘要留在库里做审计
+        row.eligible_since = None
         row.updated_at = now
         suppress_pending(session, row.user_id, 'token_rebound', now=now,
                          installation_id=row.installation_id)
@@ -394,23 +428,26 @@ def register_installation(session, user_id, installation_id, platform, expo_toke
                                permission_status=permission_status,
                                state=INSTALLATION_ACTIVE, created_at=now, updated_at=now)
         session.add(row)
+        _refresh_eligible_since(row, now)
         return row, 'created'
     if row.user_id != user_id:
-        # 换账号：旧归属的待发件作废，旧 token 立即失效
+        # 换账号：旧归属的待发件作废，旧 token 立即失效；新主人从这一刻起才算具备接收条件
         suppress_pending(session, row.user_id, 'ownership_changed', now=now,
                          installation_id=installation_id)
         row.user_id = user_id
         row.state = INSTALLATION_ACTIVE
+        row.eligible_since = None
     if row.expo_token != expo_token:
         row.previous_token_digest = row.token_digest or None
         row.expo_token = expo_token
         row.token_digest = digest
         row.token_version = (row.token_version or 1) + 1
     row.permission_status = permission_status
-    if row.state == INSTALLATION_REVOKED:
-        row.state = INSTALLATION_ACTIVE
+    # 本人重新注册即重新启用（退出登录留下的 revoked、服务方判过失效的 unregistered）
+    row.state = INSTALLATION_ACTIVE
     row.updated_at = now
     row.last_seen_at = now
+    _refresh_eligible_since(row, now)
     return row, 'updated'
 
 
@@ -436,6 +473,7 @@ def update_installation_token(session, user_id, installation_id, expo_token,
                              installation_id=installation_id)
     row.updated_at = now
     row.last_seen_at = now
+    _refresh_eligible_since(row, now)
     return row
 
 
@@ -453,6 +491,7 @@ def update_installation_permission(session, user_id, installation_id, permission
     if permission_status != PERMISSION_GRANTED:
         suppress_pending(session, user_id, 'permission_not_granted', now=now,
                          installation_id=installation_id)
+    _refresh_eligible_since(row, now)
     return row
 
 
@@ -470,6 +509,7 @@ def unregister_installation(session, user_id, installation_id, now=None):
         return None
     row.state = INSTALLATION_REVOKED
     row.updated_at = now
+    _refresh_eligible_since(row, now)
     suppress_pending(session, user_id, 'logged_out', now=now, installation_id=installation_id)
     return row
 
@@ -486,6 +526,7 @@ def installation_public(row):
         'hasToken': bool(row.expo_token),
         'tokenRotated': bool(row.previous_token_digest),
         'tokenVersion': row.token_version,
+        'eligible': _installation_eligible(row),
         'lastSeenAt': iso_z(row.last_seen_at) if row.last_seen_at else None,
         'updatedAt': iso_z(row.updated_at),
     }
@@ -515,13 +556,14 @@ def delivery_public(row):
 # ── 发布：为每个可发送安装实例建投递行 ──────────────────────────────────────
 
 def publish_inbox_item(session, facts, now=None):
-    """W12 发布缝入口：当前事件成为推送候选时入队。
+    """W12 发布缝入口：把一条当前仍是推送候选的收件条目入队（重复调用是幂等的）。
 
     入参是 W12 给出的**当前**事实（形状见 ``ITEM_CONTRACT``）。返回
-    ``{'published': n, 'reason': str|None, 'category': str|None}``；
-    不可推、闸门关闭、用户未开启、安静档或没有可发送安装实例时 published=0。
+    ``{'published': n, 'reason': str|None, 'category': str|None}``；不可推、闸门关闭、
+    超出新事件窗口、用户未开启、事件早于开启时刻或没有可接收的设备时 published=0。
 
-    幂等：去重键为 ``(收件箱条目, 安装实例)``，同一事件被重复投影时只会有一行。
+    幂等：去重键为 ``(收件箱条目, 安装实例)``，W12 每轮重新递交同一条目只会有一行。
+    闸门关闭时不建行，之后每轮递交都会再来一次，所以开闸后自然补上。
     """
     now = now or utc_now()
     candidate = classify_item(facts)
@@ -531,28 +573,24 @@ def publish_inbox_item(session, facts, now=None):
     if not platform_enabled(PLATFORM_IOS):
         # 闸门关闭时不建行；开闸后也只补「新事件窗口」内的事件，不补历史。
         return {'published': 0, 'reason': 'platform_disabled', 'category': category}
-    age = _event_age_seconds(candidate, now)
-    if age is not None and age > PUSH_EVENT_MAX_AGE_S:
+    created = _event_created(candidate)
+    if created is not None and (now - created).total_seconds() > PUSH_EVENT_MAX_AGE_S:
         # 历史事件不补推（迟到恢复的旧事件也算历史）。
         return {'published': 0, 'reason': 'stale_event', 'category': category}
     user_id = candidate['userId']
-    if not user_enabled(session, user_id):
+    preference = session.get(PushPreference, user_id)
+    if preference is None or not preference.enabled:
         return {'published': 0, 'reason': 'user_disabled', 'category': category}
-    if category == CATEGORY_PERSONAL_CHANGE and proactivity_level(session, user_id) <= 0:
-        # 安静档：**延迟**而非作废——安静结束后由下一次投影补入队（仍在新事件窗口内）。
-        return {'published': 0, 'reason': 'quiet_mode', 'category': category}
-    installations = active_installations(session, user_id, PLATFORM_IOS)
+    if created is not None and preference.updated_at and _precedes(created, preference.updated_at):
+        # 开启推送之前发生的事件不补推（留在站内收件箱）。
+        return {'published': 0, 'reason': 'before_opt_in', 'category': category}
     published = 0
-    for installation in installations:
-        if installation.permission_status != PERMISSION_GRANTED:
+    for installation in active_installations(session, user_id, PLATFORM_IOS):
+        if not _installation_eligible(installation):
             continue
-        if not installation.expo_token:
-            continue
-        key = dedup_key(candidate['inboxItemId'], installation.installation_id)
-        existing = session.execute(select(PushDelivery).where(
-            PushDelivery.dedup_key == key)).scalar_one_or_none()
-        if existing is not None:
-            continue  # 同一 (条目, 安装实例) 只发一次
+        if created is not None and (installation.eligible_since is None
+                                    or _precedes(created, installation.eligible_since)):
+            continue  # 这台设备具备接收条件之前发生的事件不补推
         meta = {
             'severity': candidate.get('severity'),
             'sourceStatus': candidate.get('sourceStatus'),
@@ -562,8 +600,9 @@ def publish_inbox_item(session, facts, now=None):
             'highRelevance': candidate.get('highRelevance'),
             'petId': candidate.get('petId'),
         }
-        row = PushDelivery(
-            dedup_key=key,
+        # 并发递交（读路径投影与后台投影同时进行）时靠唯一键静默去重，不抛约束错误
+        stmt = dialect_insert(session, PushDelivery).values(
+            dedup_key=dedup_key(candidate['inboxItemId'], installation.installation_id),
             inbox_item_id=candidate['inboxItemId'],
             installation_id=installation.installation_id,
             user_id=user_id,
@@ -578,9 +617,9 @@ def publish_inbox_item(session, facts, now=None):
             meta=json.dumps(meta, ensure_ascii=False),
             created_at=now,
             updated_at=now,
-        )
-        session.add(row)
-        published += 1
+        ).on_conflict_do_nothing(index_elements=['dedup_key'])
+        if (session.execute(stmt).rowcount or 0) == 1:
+            published += 1
     return {'published': published, 'reason': None if published else 'no_eligible_installation',
             'category': category}
 
@@ -793,6 +832,7 @@ def _apply_device_not_registered(session, delivery, installation, now=None):
     if same_token:
         installation.state = INSTALLATION_UNREGISTERED
         installation.expo_token = ''
+        _refresh_eligible_since(installation, now)
         installation.updated_at = now
     _finalize(session, delivery, STATE_REJECTED, reason='device_not_registered',
               error_code=push_provider.ERROR_DEVICE_NOT_REGISTERED, now=now)

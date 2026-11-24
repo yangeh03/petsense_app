@@ -4,13 +4,16 @@
 `inbox.project_*` 真实投影产生，「当前来源」解析器由 `inbox.install_push_bridge()`
 真实安装，只有 Expo Push Service 用假 provider（不接触真实服务方）。覆盖：
 
-- 条目**首次**成为推送候选时入队（恰好一次；重复投影/富化不重复入队）
+- 条目是推送候选时入队：创建时、每轮富化与资格写入后都会重新递交，W13 按安装实例
+  去重（恰好一次；重复投影不重复入队；递交从不改写 W12 的候选位）
 - 发布晚于投影：富化补齐回合身份后那次投影入队（此前不建行）
 - 启用补入（backfilled）与超出新事件窗口的历史条目不入队
+- 闸门关闭不建行，开闸后的下一轮递交补上；开启推送之前发生的事件不补推
 - 发送前按真实当前来源复核：告警关闭 → not_push_candidate；宠物转走 →
   pet_scope_changed；来源缺失 → source_unavailable
 - 到期回信路径：已交付回信入队并发送
-- W11 个人变化路径：`mark_personal_eligibility` 三项齐备才入队；安静档抑制
+- W11 个人变化路径：`mark_personal_eligibility` 三项齐备才入队；安静档在发送前抑制
+  且为终态
 """
 import json
 import os
@@ -101,10 +104,10 @@ class W13InboxBridgeTests(unittest.TestCase):
             inbox.project_user(s, self.uid, now=self.now)
 
     def _topic(self, kind='device', category='battery_low', *, status='open', severity='warning',
-               evidence=None):
+               evidence=None, anchor='anchor-1'):
         with db.session_scope() as s:
             row = AgentCareTopic(pet_id=self.pet_id, kind=kind, category=category,
-                                 anchor='anchor-1', instance=1, status=status,
+                                 anchor=anchor, instance=1, status=status,
                                  severity=severity, title=category, detail='',
                                  evidence=json.dumps(evidence or [], ensure_ascii=False),
                                  delivered=0, opened_at=self.now, updated_at=self.now)
@@ -164,7 +167,7 @@ class W13InboxBridgeTests(unittest.TestCase):
             return delivery.id
 
     def _project(self):
-        """跑一轮真实投影（闸门开启时条目首次成为候选会在同一事务入队）。"""
+        """跑一轮真实投影（闸门开启时当前候选条目会在同一事务里重新递交）。"""
         with self._gate_on():
             with db.session_scope() as s:
                 return inbox.project_user(s, self.uid, now=self.now)
@@ -360,8 +363,8 @@ class W13InboxBridgeTests(unittest.TestCase):
                                                 now=self.now)
         self.assertEqual(len(self._deliveries()), 1)
 
-    def test_personal_change_quiet_mode_defers_at_publish(self):
-        """安静档：个人变化发布时不建行（延迟），设备告警不受影响。"""
+    def test_personal_change_quiet_mode_is_suppressed_at_send(self):
+        """安静档：个人变化照常入队，发送前复核抑制且为终态；设备告警不受影响。"""
         item_id = self._care_item()
         with db.session_scope() as s:
             row = s.get(CompanionSettings, self.uid)
@@ -372,15 +375,84 @@ class W13InboxBridgeTests(unittest.TestCase):
                 inbox.mark_personal_eligibility(s, self.uid, item_id, relevance='high',
                                                 frozen_evidence=True, delivery_approved=True,
                                                 now=self.now)
-        self.assertEqual(self._deliveries(), [], '安静档不入队（延迟而非作废）')
-        # 恢复主动程度后的下一次投影补入队（候选位被清回未入队，投影重新触发）
+            row = s.get(AgentInboxItem, item_id)
+            self.assertEqual(row.push_candidate, 1, '递交不改写 W12 的候选位')
+        rows = self._deliveries()
+        self.assertEqual(len(rows), 1, '安静档不拦入队，由发送前复核抑制')
+        self.assertEqual(self._dispatch(rows[0].id)['state'], push.STATE_SUPPRESSED)
+        self.assertEqual(self.provider.sent, [])
+        self.assertEqual((self._deliveries()[0].state, self._deliveries()[0].reason),
+                         (push.STATE_SUPPRESSED, 'quiet_mode'))
+        # 调回标准档后再投影：不建新行，已抑制的也不复活（抑制是终态，不是延迟）
         with db.session_scope() as s:
             row = s.get(CompanionSettings, self.uid)
             row.proactivity = 1
             row.updated_at = self.now
             s.flush()
         self._project()
-        self.assertEqual(len(self._deliveries()), 1, '安静结束后由下一次投影补入队')
+        rows = self._deliveries()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0].state, rows[0].reason), (push.STATE_SUPPRESSED, 'quiet_mode'))
+
+    # ── 重复递交：不改写候选位；闸门重开补上，晚开启不补推 ─────────────────
+
+    def test_offer_never_rewrites_the_inbox_candidate_flag(self):
+        """闸门关闭时不建行也不动 W12 的候选位；开闸后的下一轮投影补上。"""
+        self._enable_inbox()
+        topic_id = self._topic()
+        self._topic_turn(topic_id)
+        with db.session_scope() as s:            # 闸门关闭（环境默认）
+            inbox.project_user(s, self.uid, now=self.now)
+        self.assertEqual(self._deliveries(), [])
+        self.assertEqual([item.push_candidate for item in self._items()], [1],
+                         '候选位如实反映中心策略，不因闸门关闭被清掉')
+        self._project()
+        self.assertEqual(len(self._deliveries()), 1, '开闸后的下一轮投影入队')
+        self._project()
+        self.assertEqual(len(self._deliveries()), 1, '重复投影不重复入队')
+
+    def test_item_created_as_candidate_enqueues_on_creation(self):
+        """创建时就已是候选的条目（重启后恢复资格的那类）在创建事务里入队。"""
+        self._enable_inbox()
+        topic_id = self._topic()
+        self._topic_turn(topic_id)
+        with self._gate_on():
+            with db.session_scope() as s:
+                # W09/W11 的事务内投影入口：只插入条目，不经过富化
+                pet = s.get(Pet, self.pet_id)
+                created = inbox.project_source(s, pet, s.get(AgentCareTopic, topic_id))
+        self.assertTrue(created)
+        self.assertEqual(len(self._deliveries()), 1, '创建即候选 → 创建事务里入队')
+        self._project()
+        self.assertEqual(len(self._deliveries()), 1)
+
+    def test_enabling_push_later_does_not_backlog_earlier_events(self):
+        """事件先发生、用户之后才开启推送：不补推；开启之后发生的事件照常入队。"""
+        with db.session_scope() as s:            # setUp 默认已开启：先关掉并解绑
+            push.set_user_enabled(s, self.uid, False, now=self.now)
+            push.unregister_installation(s, self.uid, INSTALLATION_A, now=self.now)
+        self._enable_inbox()
+        topic_id = self._topic()
+        self._topic_turn(topic_id)
+        self._project()
+        self.assertEqual(self._deliveries(), [], '未开启推送时不建行')
+        later = self.now + timedelta(hours=1)
+        with db.session_scope() as s:
+            push.set_user_enabled(s, self.uid, True, now=later)
+            push.register_installation(s, self.uid, INSTALLATION_A, 'ios', TOKEN_A,
+                                       permission_status='granted', now=later)
+        self._project()
+        self.assertEqual(self._deliveries(), [], '开启之前发生的事件被重新递交也不补推')
+        # 开启之后发生的事件照常入队
+        next_id = self._topic(anchor='anchor-2')
+        self._topic_turn(next_id)
+        with self._gate_on():
+            with db.session_scope() as s:
+                inbox.project_user(s, self.uid, now=later)
+        rows = self._deliveries()
+        newest = max(item.id for item in self._items())
+        self.assertEqual([row.inbox_item_id for row in rows], [str(newest)],
+                         '只有开启之后的那条入队')
 
     # ── app 装配 ────────────────────────────────────────────────────────────
 

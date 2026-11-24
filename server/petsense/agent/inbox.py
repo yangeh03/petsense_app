@@ -202,26 +202,27 @@ def install_push_bridge():
     push.set_inbox_source(_push_source)
 
 
-def _maybe_publish_push(session, item, *, was_candidate):
-    """条目**首次**成为推送候选时在同一事务里入队（False → True 迁移触发）。
+def offer_push(session, item):
+    """把条目**当前**的候选状态交给 W13（每轮投影、富化与资格写入后都会调用；幂等）。
 
-    - 已候选条目的重复投影、富化与已候选状态下的重读都不再触发；W13 侧再按
-      (收件箱条目, 安装实例) 幂等去重，双保险保证「入队恰好一次」。
-    - 历史补入条目中心策略恒为非候选，天然不会迁移；闸门关闭时 W13 不建行，
-      开闸后也只推「新事件窗口」内的条目，不补发历史。
-    - 安静档与闸门关闭是**延迟而非作废**：入队被这两类原因挡下时把候选位清回
-      未入队，安静结束/开闸后的下一次投影会重新入队（仍受新事件窗口约束）。
+    - 是否可推只看中心策略对**当前**来源状态的判定；本函数不改写条目上的候选位，
+      ``push_candidate`` 始终如实反映 W12 的判定。
+    - 「入队恰好一次」由 W13 按 ``(收件箱条目, 安装实例)`` 去重。闸门关闭、用户尚未
+      开启或设备尚不具备接收条件时 W13 不建行，之后每轮重新递交；开闸后只补新事件
+      窗口内的事件，开启之前发生的事件不补推（截止规则在 W13 侧）。
+    - 历史补入条目中心策略恒为非候选，天然不会递交。
     """
     try:
         from petsense.agent import push
     except Exception:  # pragma: no cover - 推送域不可用时收件箱仍要工作
         return
     facts = push_facts(session, item)
-    if facts['pushCandidate'] and not was_candidate:
-        result = push.publish_inbox_item(session, facts)
-        if not result['published'] and result.get('reason') in ('quiet_mode',
-                                                                'platform_disabled'):
-            item.push_candidate = 0
+    if not facts['pushCandidate']:
+        return
+    try:
+        push.publish_inbox_item(session, facts)
+    except Exception:  # noqa: BLE001 - 推送入队失败不得影响收件箱投影与来源事务
+        logger.exception('push offer failed for inbox item %s', item.id)
 
 
 
@@ -365,6 +366,8 @@ def _project_topic(session, pet, topic, *, backfilled=False, now=None):
     _item, created = _insert_item(session, pet, source_kind, event_key,
                                   source_ref=source_ref, eligibility=eligibility,
                                   backfilled=backfilled, now=now)
+    if created:
+        offer_push(session, _item)
     return created
 
 
@@ -380,6 +383,8 @@ def _project_delivery(session, pet, delivery, now=None):
                   'instanceKey': delivery.instance_key}
     _item, created = _insert_item(session, pet, SOURCE_REPLY, 'delivery:%d' % delivery.id,
                                   source_ref=source_ref, eligibility=eligibility, now=now)
+    if created:
+        offer_push(session, _item)
     return created
 
 
@@ -395,7 +400,6 @@ def project_source(session, pet, source, *, now=None):
 def _enrich_item(session, item, now=None):
     """富化：重新解析精确的来源→回合身份并刷新策略判定（不复活已读、不改 id）。"""
     now = now or utc_now()
-    was_candidate = bool(item.push_candidate)
     eligibility = _eligibility_of(item)
     ref = json.loads(item.source_ref or '{}')
     turn_id = None
@@ -444,7 +448,7 @@ def _enrich_item(session, item, now=None):
                           push_candidate=push_candidate(policy),
                           backfilled=updated.backfilled, reason=updated.reason)
     _store_eligibility(session, item, updated, now=now)
-    _maybe_publish_push(session, item, was_candidate=was_candidate)
+    offer_push(session, item)
     return updated
 
 
@@ -627,12 +631,11 @@ def mark_personal_eligibility(session, user_id, item_id, *, relevance=None,
     row = session.get(AgentInboxItem, item_id)
     if row is None or row.user_id != user_id:
         return None
-    current = _eligibility_of(row)
-    updated = current.with_personal(relevance=relevance,
-                                    frozen_evidence=frozen_evidence,
-                                    delivery_approved=delivery_approved)
+    updated = _eligibility_of(row).with_personal(relevance=relevance,
+                                                 frozen_evidence=frozen_evidence,
+                                                 delivery_approved=delivery_approved)
     _store_eligibility(session, row, updated, now=now)
-    _maybe_publish_push(session, row, was_candidate=current.push_candidate)
+    offer_push(session, row)
     return row
 
 
