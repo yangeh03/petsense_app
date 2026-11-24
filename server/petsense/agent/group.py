@@ -147,6 +147,46 @@ def task_text(role, mode):
     return ('回答主人这条消息：需要数据时现场查询，结论只来自本次工具结果；第一句先给结论。')
 
 
+# 存量在途回合（部署前已写入 agent_routes 的旧路由计划）沿用旧的任务文案，避免上线瞬间
+# 那一小批回合拿到与旧 kind 不匹配的新文案。旧 kind：respond / acknowledge / clarify / answer。
+_LEGACY_PET_TASKS = {
+    'respond': '回应主人对你说的话：用一两句陪伴表达接住主人的情绪或寒暄。',
+    'acknowledge': '主人点名了你，但这句话里需要查证、知识或操作的部分归照料助手。'
+                   '你只用一句话接住主人的话（例如把那部分交给照料助手），不回答专业内容，也不报任何数据。',
+    'clarify': '这句话还看不清主人想聊什么：用你的口吻问一个简短的必要澄清问题，不猜测主题，也不展开。',
+    'answer': '回应主人这句话：用一两句陪伴表达自然接话。',
+}
+_LEGACY_ASSISTANT_INTENTS = {
+    'read': '回答主人关于本宠已观测数据的问题：需要数据时用观测工具现场查询，结论只来自本次工具结果。',
+    'knowledge': '回答主人的养宠知识问题，第一句先给结论。',
+    'search': '主人要求联网核实，或答案依赖会过期的信息：判断后决定是否搜索，搜索了就给出来源。',
+    'write': '处理主人的修改或保存请求：明确指令按规则直写，其余出确认卡。',
+    'observe': '主人希望你持续留意或到时回信：按委托协议生成待确认候选。',
+    'social': '回应主人对你说的话。',
+    'unknown': '回答主人这条消息。',
+}
+
+
+def legacy_task_text(role, kind, intent, scope, together):
+    """旧路由计划的任务文案（只给部署时仍在途的回合用）。"""
+    if role == PET_ROLE:
+        task = _LEGACY_PET_TASKS.get(kind, _LEGACY_PET_TASKS['respond'])
+        if together:
+            task += '事实、查证或操作的部分由照料助手另发一条，你不展开。'
+        elif kind == 'respond':
+            task += '这句话里如果还有要查证或操作的部分，用一句话交给照料助手，自己不展开。'
+        return task
+    if kind == 'clarify':
+        return '这句话还看不清主人想要什么：只问一个简短的必要澄清问题，不猜测主题，不调用工具。'
+    if scope == 'out_of_scope':
+        return '这句话不在服务范围内：简短说明不处理的原因；如果其中有与宠物相关的部分，只回应那一部分。'
+    task = _LEGACY_ASSISTANT_INTENTS.get(intent, _LEGACY_ASSISTANT_INTENTS['unknown'])
+    if together:
+        task += ('爱宠负责陪伴表达：你不替它说话，也不复述或评价它的感受。'
+                 '只回答主人明确请求的专业部分；陪伴话语中的动作不是另一个求助。')
+    return task
+
+
 # ---------------------------------------------------------------------------
 # 序列化：消息视图与旧回合投影
 # ---------------------------------------------------------------------------
@@ -421,7 +461,10 @@ def _dispatch_stage(turn_id, now):
     with session_scope() as s:
         existing = s.execute(select(AgentRoute).where(AgentRoute.turn_id == turn_id)).scalar_one_or_none()
         if existing is not None:
-            return _load(existing.plan_json, [])  # 重试沿用同一份派发结果，不重新派发
+            # 重试沿用同一份派发结果；存量在途回合（旧路由记录在、消息行还没建）按旧计划补建消息行
+            plan = _load(existing.plan_json, [])
+            _ensure_message_rows(s, turn_id, plan, now)
+            return plan
         turn = s.get(AgentTurn, turn_id)
         pet = s.get(Pet, turn.pet_id) if turn else None
         if turn is None or pet is None or turn.status != 'pending':
@@ -432,7 +475,9 @@ def _dispatch_stage(turn_id, now):
     with session_scope() as s:
         row = s.execute(select(AgentRoute).where(AgentRoute.turn_id == turn_id)).scalar_one_or_none()
         if row is not None:
-            return _load(row.plan_json, [])  # 并发触发下另一位已写
+            plan = _load(row.plan_json, [])
+            _ensure_message_rows(s, turn_id, plan, now)
+            return plan  # 并发触发下另一位已写
         turn = s.get(AgentTurn, turn_id)
         pet = s.get(Pet, pet_id)
         if turn is None or pet is None or turn.status != 'pending':
@@ -443,16 +488,30 @@ def _dispatch_stage(turn_id, now):
             reason=f'按主人选择「{target}」派发', source='target',
             plan_json=json.dumps(plan, ensure_ascii=False),
             raw_json=json.dumps({'target': target}, ensure_ascii=False), created_at=now))
-        for position, item in enumerate(plan):
-            s.add(AgentMessage(turn_id=turn_id, pet_id=pet_id, role=item['role'], position=position,
-                               kind=item['kind'], follows=int(item['follows']), status='queued',
-                               text='', version=1, sources='[]', effect_json='[]', attempts=0,
-                               created_at=now))
+        _ensure_message_rows(s, turn_id, plan, now)
         s.flush()
         payload = turn_public(s, turn)
         user_id = pet.user_id
     ws.push_turn(user_id, pet_id, payload)  # 让客户端尽早拿到消息 ID 与排队状态
     return plan
+
+
+def _ensure_message_rows(session, turn_id, plan, now):
+    """按计划补齐排队中的消息行（幂等）：存量在途回合与并发重入都走这里。"""
+    if not plan:
+        return
+    existing = {row.role for row in session.execute(
+        select(AgentMessage).where(AgentMessage.turn_id == turn_id)).scalars().all()}
+    turn = session.get(AgentTurn, turn_id)
+    if turn is None:
+        return
+    for position, item in enumerate(plan):
+        if item['role'] in existing:
+            continue
+        session.add(AgentMessage(turn_id=turn_id, pet_id=turn.pet_id, role=item['role'], position=position,
+                                 kind=item['kind'], follows=int(item.get('follows', False)),
+                                 status='queued', text='', version=1, sources='[]', effect_json='[]',
+                                 attempts=0, created_at=now))
 
 
 def _handoff_stage(turn_id, now):
@@ -639,6 +698,8 @@ def _context(session, row, turn, pet, now, budget, deadline, assigned_request=No
     siblings = message_rows(session, [turn.id])[turn.id]
     route = session.execute(select(AgentRoute).where(AgentRoute.turn_id == turn.id)).scalar_one_or_none()
     scope, intent = (route.scope, route.intent) if route is not None else ('unknown', 'unknown')
+    # 存量在途回合（部署前写的旧路由记录）沿用旧任务文案；新回合的记录 source='target'
+    legacy = route is not None and route.source in ('model', 'fallback')
     earlier = [old for old in siblings if old.position < row.position]
     handoff_from = None
     if row.role == ASSISTANT_ROLE:
@@ -646,6 +707,8 @@ def _context(session, row, turn, pet, now, budget, deadline, assigned_request=No
         handoff_from = next((old.text for old in reversed(earlier)
                              if old.role == PET_ROLE and old.kind == 'handoff'), None)
     mode = 'handoff' if handoff_from else (turn.target or 'auto')
+    task = (legacy_task_text(row.role, row.kind, intent, scope, len(siblings) > 1) if legacy
+            else task_text(row.role, mode))
     context = {
         'pet_id': pet.id, 'user_id': pet.user_id, 'text': turn.text, 'target': turn.target,
         'history': [{'text': old.text, 'reply': old.reply, 'images': _load(old.images, [])}
@@ -655,7 +718,7 @@ def _context(session, row, turn, pet, now, budget, deadline, assigned_request=No
         'role': row.role, 'route': {'scope': scope, 'intent': intent},
         'handoff_allowed': bool(handoff_allowed),
         'assigned_request': assigned_request or turn.text,
-        'task': task_text(row.role, mode),
+        'task': task,
         'message_id': row.id, 'route_id': route.id if route is not None else None, 'pet_name': pet.name,
         'deadline': deadline, 'turn_budget': budget,
     }

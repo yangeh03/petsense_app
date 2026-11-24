@@ -395,15 +395,17 @@ export function sendableTarget(
 }
 
 /**
- * 还没路由出谁来说话时，等待占位归谁：只点名了一位（且这条话没有引用别的发言人的消息）时，
- * 谁接话已经确定；「两位都回」、带引用和未指定时先发言的要等路由结果，不预设发言人。
+ * 还没收到第一条消息时，等待占位归谁。服务端的派发是确定的（W18：没有前置意图路由）：
+ * 只点名了一位就是那位；「两位都回」与未指定都由爱宠先接（未指定时爱宠可能把专业部分
+ * 转交给照料助手，届时由照料助手的消息接管气泡）。「两位都回」与未指定且带引用时
+ * 先发言的是被引用的那位，这里不查它的身份，用通用占位。
  */
 export function placeholderRole(
   target: AgentTurn['target'],
   quoted = false,
 ): AgentTurn['speaker'] | null {
-  if (quoted || target === 'auto' || target === 'both') return null;
-  return target;
+  if (quoted && (target === 'auto' || target === 'both')) return null;
+  return target === 'auto' || target === 'both' ? 'pet' : target;
 }
 
 const SPEAKER_MARK = /^\s*【(?:爱宠|照料助手)】\s*/;

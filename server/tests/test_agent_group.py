@@ -12,6 +12,7 @@ from datetime import timedelta
 from group_testkit import PROTOCOL, GroupBase, pet_says, say, user_texts
 from petsense.agent import group, jobs, loop, registry
 from petsense.db import session_scope, utc_now
+from petsense.db.models.agent import AgentRoute
 from petsense.db.models.agent import AgentMessage
 from sqlalchemy import select
 
@@ -253,6 +254,29 @@ class HandoffTests(GroupBase):
         messages = self.rows(turn_id)
         self.assertEqual(len(messages), 2, '重复进入不会多出一条助手消息')
         self.assertEqual([item['role'] for item in messages], ['pet', 'assistant'])
+
+    def test_legacy_in_flight_turn_keeps_the_old_plan_and_task_text(self):
+        """D7：部署时仍在途的旧回合（只有旧路由记录、消息行还没建）按旧计划补建消息行，
+        并沿用旧的任务文案；转交工具不挂载（旧回合没有转交语义）。"""
+        script = self.use(pet='我来陪你。', assistant=say('今天没有走动数据。'))
+        turn_id = self.accepted('小白，今天有点累', target='both')
+        # 模拟旧代码留下的路由记录：source='model'、旧 kind（acknowledge/answer）
+        with session_scope() as s:
+            s.add(AgentRoute(
+                turn_id=turn_id, pet_id=self.pet, scope='allowed', intent='read',
+                companion=1, professional=1, follows=0, reason='测试路由', source='model',
+                plan_json=json.dumps([{'role': 'pet', 'kind': 'acknowledge', 'follows': False},
+                                      {'role': 'assistant', 'kind': 'answer', 'follows': False}]),
+                raw_json='{}', created_at=utc_now()))
+        self.settle()
+        messages = self.rows(turn_id)
+        self.assertEqual([(item['role'], item['kind']) for item in messages],
+                         [('pet', 'acknowledge'), ('assistant', 'answer')])
+        pet_prompt = script.of('pet')[0]['items'][0]['content']
+        self.assertIn('你只用一句话接住主人的话', pet_prompt, '旧回合沿用旧任务文案')
+        self.assertNotIn('handoff_to_assistant', pet_prompt, '旧回合没有转交语义')
+        self.assertNotIn('handoff_to_assistant', script.of('pet')[0]['tools'],
+                         '旧回合不挂转交工具')
 
 
 class PermissionTests(GroupBase):
