@@ -56,7 +56,7 @@ from flask import request  # noqa: E402
 from sqlalchemy import func, select  # noqa: E402
 
 from petsense import config  # noqa: E402
-from petsense.agent import group, loop, model, router, runs, ws  # noqa: E402
+from petsense.agent import group, loop, model, runs, ws  # noqa: E402
 from petsense.db import session_scope  # noqa: E402
 from petsense.db.models.agent import AgentMessage, AgentRun, AgentTurn  # noqa: E402
 
@@ -67,13 +67,11 @@ FIXTURE_WEB = {'url': 'https://example.com/petsense-fixture/care-note',
                'title': '夹具来源页（非真实网页）', 'snippet': '这段摘要来自验收夹具，不是真实搜索结果。'}
 
 # 一段 = 一次流式回调后的可见正文；delay 是相邻两段之间的间隔（秒），让分段在界面上看得见
-_DUAL = {'scope': 'allowed', 'intent': 'read', 'companion': True, 'professional': True,
-         'order': ['pet', 'assistant'], 'follows': False}
 SCENARIOS = {
     'dual': {
         'title': '双答：爱宠先发一条，照料助手再发一条',
         'trigger': '陪我聊两句',
-        'router': dict(_DUAL, reason='既要陪伴也要查走动数据'),
+        'target': 'both',
         'pet': ['想你啦！', '今天有乖乖等你回家，', '走动的事让照料助手告诉你。'],
         'assistant': ['我查了今天的记录：', '这项圈还没有上传走动数据，', '所以暂时给不出今天走了多久。'],
         'delay': 0.4,
@@ -82,22 +80,35 @@ SCENARIOS = {
                    '爱宠正文里的「照料助手」是普通文字，不会把这条气泡拆成两个人',
                    '两条都结束后整轮完成；trace 的 route.plan 是 pet → assistant'],
     },
+    'handoff': {
+        'title': '默认模式转交：爱宠先说一句，照料助手接着答专业部分',
+        'trigger': '它今天走了多久',
+        'target': 'auto',
+        'handoff': True,
+        'pet': ['这个我不懂，', '让照料助手帮你看看。'],
+        'assistant': ['我查了今天的记录：', '这项圈还没有上传走动数据，', '所以暂时给不出今天走了多久。'],
+        'delay': 0.4,
+        'expect': ['爱宠那条先出现并完成：它只说一句陪伴话，没有任何数据',
+                   '爱宠转交之后才出现照料助手的气泡，专业答案只在那一条里',
+                   '照料助手的输入里带「爱宠已经把需要查证的部分交给你」（trace 的 assistant 运行可见）',
+                   'trace 的 pet 运行 tool_summary 里有 handoff_to_assistant（allowed=true）'],
+    },
     'slow': {
         'title': '第二位慢：爱宠已完成，照料助手逐段慢慢出字',
         'trigger': '慢慢说',
-        'router': dict(_DUAL, intent='knowledge', follows=True, reason='先寒暄再问养宠知识'),
+        'target': 'both',
         'pet': ['我在呢～', '你慢慢说。'],
         'assistant': ['狗狗一天睡够 12 到 14 小时都算正常。', '刚睡醒时精神好、', '吃喝照常，',
                       '就不用太担心；', '如果整天蔫着不吃，再联系兽医。'],
         'delay': 1.6,
         'expect': ['爱宠那条先停在完成态（不再出字），照料助手那条仍显示生成中',
                    '等待期间上翻或切后台再回来，两条气泡的 ID 与顺序不变',
-                   '照料助手承接了爱宠那条（trace 里 assistant 运行的输入带「群里爱宠在本轮已经先发了」）'],
+                   '两位各自独立：照料助手那条不引用爱宠的话，只回答专业部分'],
     },
     'fail': {
         'title': '第二位失败：爱宠成功，照料助手失败，可只重试失败的那条',
         'trigger': '第二位失败',
-        'router': dict(_DUAL, reason='陪伴加查数据'),
+        'target': 'both',
         'pet': ['我在呢，', '让照料助手帮你查。'],
         'assistant': ['这次查到了：', '今天没有走动记录。'],
         'fail_first': {'assistant': True},
@@ -110,7 +121,7 @@ SCENARIOS = {
     'drop': {
         'title': '断线：照料助手出字途中服务端主动断开 WS',
         'trigger': '断线一下',
-        'router': dict(_DUAL, intent='knowledge', reason='陪伴加养宠知识'),
+        'target': 'both',
         'pet': ['别担心，', '问问照料助手吧。'],
         'assistant': ['先说结论：', '多数情况下不用紧张，', '观察一天，', '没有好转再去医院。'],
         'drop_after': {'role': 'assistant', 'deltas': 2},
@@ -122,7 +133,7 @@ SCENARIOS = {
     'order': {
         'title': '重复与乱序帧：服务端在真实帧之间插入旧版本与重复帧',
         'trigger': '乱序一下',
-        'router': dict(_DUAL, reason='陪伴加查数据'),
+        'target': 'both',
         'pet': ['我来陪你。', '数据让照料助手说。'],
         'assistant': ['查到了：', '今天暂时没有走动数据，', '有数据时我会在这一条里告诉你。'],
         'inject': True,
@@ -134,7 +145,7 @@ SCENARIOS = {
     'source': {
         'title': '查询与来源卡：照料助手先查观测再回答，来源卡只挂在照料助手那条',
         'trigger': '查一下来源',
-        'router': dict(_DUAL, reason='陪伴加查数据'),
+        'target': 'both',
         'pet': ['我玩得挺开心的！', '走了多久要问照料助手。'],
         'assistant': ['我查了今天零点到现在的记录：', '没有有效观测，', '所以不能说它走了多久。'],
         'tool': 'query_observations',
@@ -146,8 +157,7 @@ SCENARIOS = {
     'search': {
         'title': '联网状态与网页来源：照料助手先显示核实中，再出字并带网页来源卡',
         'trigger': '联网核实一下',
-        'router': {'scope': 'allowed', 'intent': 'search', 'companion': False, 'professional': True,
-                   'order': ['assistant'], 'follows': False, 'reason': '要求联网核实'},
+        'target': 'assistant',
         'assistant': ['刚核实过：', '这条结论来自下面的来源页，', '具体细节以来源为准。'],
         'search': True,
         'delay': 0.8,
@@ -156,50 +166,51 @@ SCENARIOS = {
                    'trace 的 runs 里 assistant 运行的 tool_summary 有一条 reason=server_side 的 web_search'],
     },
     'pet': {
-        'title': '不点名或只点爱宠：闲聊由爱宠一个人回',
+        'title': '不点名：闲聊由爱宠一个人回',
         'trigger': '想我了吗',
-        'router': {'scope': 'allowed', 'intent': 'social', 'companion': True, 'professional': False,
-                   'order': ['pet'], 'follows': False, 'reason': '纯陪伴'},
+        'target': 'auto',
         'pet': ['想啦！', '一直趴在门口等你。'],
         'delay': 0.5,
         'expect': ['只有爱宠一条气泡，照料助手不出现'],
     },
     'named_pet': {
-        'title': '点名爱宠但要求查证：爱宠只接话，照料助手查证并署名',
+        'title': '点名爱宠但要求查证：只有爱宠回答，它说不懂并建议问照料助手',
         'trigger': '我今天有点累',
-        'router': dict(_DUAL, reason='点名爱宠且要查数据'),
-        'pet': ['辛苦啦，抱抱你。', '走动的事让照料助手告诉你。'],
-        'assistant': ['我查了今天的记录：', '还没有走动数据，', '等项圈上传后我再告诉你。'],
+        'target': 'pet',
+        'pet': ['辛苦啦，抱抱你。', '走动的事我不懂，你问照料助手吧。'],
         'delay': 0.6,
-        'expect': ['爱宠那条没有任何数据或结论；数据与说明只在照料助手那条',
-                   'trace 里 pet 那条运行的 tool_summary 为空（爱宠没有可用的查证工具）'],
+        'expect': ['只有爱宠一条气泡：没有任何数据或结论，建议去问照料助手',
+                   'trace 里 pet 那条运行的 tool_summary 为空（爱宠没有可用的查证工具）',
+                   'trace 的 route.source=target：派发由主人的选择决定，不看消息内容'],
     },
     'assistant': {
         'title': '只点照料助手：专业问题一个人答',
-        'trigger': '今天走了多久',
-        'router': {'scope': 'allowed', 'intent': 'read', 'companion': False, 'professional': True,
-                   'order': ['assistant'], 'follows': False, 'reason': '查走动数据'},
+        'trigger': '只问照料助手',
+        'target': 'assistant',
         'assistant': ['我查了今天的记录：', '还没有走动数据，', '暂时没法告诉你走了多久。'],
         'delay': 0.4,
         'expect': ['只有照料助手一条气泡，爱宠不出现'],
     },
-    'clarify': {
-        'title': '路由异常：路由器调用失败，改为一条有限澄清',
-        'trigger': '路由异常',
-        'router': 'raise',
+    'scope_out': {
+        'title': '范围外：照料助手自报范围外，不挂工具如实拒答',
+        'trigger': '帮我写段代码',
+        'target': 'auto',
+        'handoff': True,
+        'scope': 'out_of_scope',
+        'pet': ['这个我不会，', '让照料助手看看。'],
+        'assistant': ['这个我帮不了。', '我只回答养宠相关的问题。'],
         'delay': 0.5,
-        'clarify': ['我没太确定你想问哪方面：', '是想聊聊天，还是要我查它的记录？'],
-        'expect': ['只有一条澄清消息，不带工具（trace 的 route.source=fallback、scope=unknown）',
-                   '澄清之后再发消息，照常重新路由'],
+        'expect': ['爱宠转交后，照料助手如实说明不在服务范围内',
+                   'trace 里 assistant 运行的 tool_summary 为空（自报范围外不挂工具）',
+                   'trace 的 route.scope=out_of_scope'],
     },
     'default': {
-        'title': '其它消息：照料助手单独回复（与旧路径的单人回答一致）',
+        'title': '其它消息：爱宠先回（默认由爱宠接话）',
         'trigger': None,
-        'router': {'scope': 'allowed', 'intent': 'social', 'companion': False, 'professional': False,
-                   'order': ['assistant'], 'follows': False, 'reason': '未命中剧本'},
-        'assistant': ['我在。', '有什么想了解的可以直接问我。'],
+        'target': 'auto',
+        'pet': ['我在呢。', '今天也在等你回来。'],
         'delay': 0.3,
-        'expect': ['只有照料助手一条气泡'],
+        'expect': ['只有爱宠一条气泡'],
     },
 }
 
@@ -245,14 +256,25 @@ def _attempts(role):
             AgentMessage.turn_id == turn_id, AgentMessage.role == role)).scalar_one_or_none() or 1
 
 
-def _stream(chunks, on_delta, delay, base=''):
+def _stream(chunks, on_delta, delay, base='', prefix=''):
     text = base
+    if prefix:
+        text = prefix
+        if on_delta:
+            on_delta(text)
     for index, chunk in enumerate(chunks):
         text += chunk
         if on_delta:
             on_delta(text)
         if index < len(chunks) - 1:
             time.sleep(delay)
+
+
+def _assistant_stance(scenario):
+    """照料助手的范围声明行（W18：范围由它自己这一次调用给出，服务端剥离、不上屏）。"""
+    scope = 'out_of_scope' if scenario.get('scope') == 'out_of_scope' else 'allowed'
+    intent = 'search' if scenario.get('search') else 'read'
+    return json.dumps({'scope': scope, 'intent': intent, 'speaker': 'assistant'}, ensure_ascii=False)
 
 
 def _today_window():
@@ -263,16 +285,9 @@ def _today_window():
 
 
 def fake_respond(input_items, tools=None, on_delta=None, max_output_tokens=1800, web_search=False):
-    """替换 petsense.agent.model.respond：按系统提示区分路由、哪一位的角色运行、旧协议。"""
+    """替换 petsense.agent.model.respond：按系统提示区分是哪一位的角色运行、旧协议。"""
     system = input_items[0].get('content') if input_items else ''
     system = system if isinstance(system, str) else ''
-    if system == router.SYSTEM_PROMPT:
-        scenario, _ = _script()
-        time.sleep(0.3)
-        if scenario['router'] == 'raise':
-            raise RuntimeError('fixture: router unavailable')
-        text = json.dumps(scenario['router'], ensure_ascii=False)
-        return {'text': text, 'function_calls': [], 'usage': {}}
     if system.startswith(loop._PET_SYSTEM_PROMPT[:24]):
         role = 'pet'
     elif system.startswith(loop._GROUP_ASSISTANT_HEAD[:24]):
@@ -283,20 +298,27 @@ def fake_respond(input_items, tools=None, on_delta=None, max_output_tokens=1800,
         _stream([legacy], on_delta, 0)
         return {'text': legacy, 'function_calls': [], 'usage': {}}
     scenario, name = _script()
-    chunks = scenario.get('clarify', []) if role == 'assistant' and scenario.get('clarify') \
-        else list(scenario.get(role) or [])
+    chunks = list(scenario.get(role) or [])
     answered = any(item.get('type') == 'function_call_output' for item in input_items)
+    # 范围声明只出现在第一次回复里（与真实模型一致）
+    prefix = (_assistant_stance(scenario) + '\n') if (role == 'assistant' and not answered) else ''
     if (scenario.get('fail_first') or {}).get(role) and _attempts(role) <= 1:
-        _stream(chunks[:1], on_delta, 0)  # 先出一段再失败：中途失败不留下半条正文
+        _stream(chunks[:1], on_delta, 0, prefix=prefix)  # 先出一段再失败：中途失败不留下半条正文
         time.sleep(0.3)
         raise RuntimeError('fixture: model unavailable')
+    if role == 'pet' and scenario.get('handoff') and not answered:
+        # 爱宠转交：先说一句陪伴话，再调用转交工具（服务端据此追加照料助手那条）
+        _stream(chunks, on_delta, scenario['delay'])
+        return {'text': ''.join(chunks), 'usage': {}, 'function_calls': [
+            {'name': 'handoff_to_assistant', 'call_id': 'fixture_call_handoff',
+             'arguments': json.dumps({'reason': '这题需要查证数据'}, ensure_ascii=False)}]}
     if role == 'assistant' and scenario.get('tool') and not answered:
         # 第一轮：一句开场后调用查询工具；工具结果回来后第二轮才给正文
-        _stream(chunks[:1], on_delta, 0)
-        return {'text': chunks[0], 'usage': {}, 'function_calls': [
+        _stream(chunks[:1], on_delta, 0, prefix=prefix)
+        return {'text': prefix + chunks[0], 'usage': {}, 'function_calls': [
             {'name': scenario['tool'], 'call_id': 'fixture_call_1',
              'arguments': json.dumps(_today_window(), ensure_ascii=False)}]}
-    result = {'text': ''.join(chunks), 'function_calls': [], 'usage': {}}
+    result = {'text': prefix + ''.join(chunks), 'function_calls': [], 'usage': {}}
     if role == 'assistant' and scenario.get('search'):
         # 联网进度提示先于正文出现（随后被正文覆盖），并带回夹具网页来源
         if on_delta:
@@ -365,7 +387,7 @@ def _drop_connections(user_id, turn_id, role):
 
 def install_hooks():
     """进程内替换模型入口，并给推帧函数套一层取证日志。返回还原函数（测试用）。"""
-    originals = (model.respond, router.model.respond, loop.model.respond, group.process_turn, group.accept,
+    originals = (model.respond, loop.model.respond, group.process_turn, group.accept,
                  ws.push_message_delta, ws.push_message, ws.push_message_status, ws.push_delta, ws.push_turn)
     process_turn, accept = group.process_turn, group.accept
     delta, snapshot, status = ws.push_message_delta, ws.push_message, ws.push_message_status
@@ -382,6 +404,10 @@ def install_hooks():
         with LOCK:  # 选剧本与登记回合在同一把锁里完成，覆盖的消耗才是原子的
             name = _pick(turn.text)
             STATE['turns'][turn.id] = name
+            # 剧本给这一轮定一个默认指向（W18：派发由主人的选择决定）。
+            # 主人/App 明确选过就以主人的为准——剧本只兜底「未指定」。
+            if turn.target == 'auto':
+                turn.target = SCENARIOS[name].get('target', 'auto')
         return accept(session, turn)
 
     def pushed_delta(user_id, pet_id, turn_id, message_id, role, text, version):
@@ -423,14 +449,14 @@ def install_hooks():
         turn_frame(user_id, pet_id, turn_public)
         _log({'type': 'turn', 'turnId': (turn_public or {}).get('id'), 'turn': turn_public})
 
-    for module in (model, router.model, loop.model):
+    for module in (model, loop.model):
         module.respond = fake_respond
     group.process_turn, group.accept = tagged_process, tagged_accept
     ws.push_message_delta, ws.push_message, ws.push_message_status = pushed_delta, pushed_snapshot, pushed_status
     ws.push_delta, ws.push_turn = pushed_legacy, pushed_turn
 
     def restore():
-        (model.respond, router.model.respond, loop.model.respond, group.process_turn, group.accept,
+        (model.respond, loop.model.respond, group.process_turn, group.accept,
          ws.push_message_delta, ws.push_message, ws.push_message_status, ws.push_delta, ws.push_turn) = originals
         with LOCK:
             STATE.update(override=None, sticky=False, turns={}, frames=[], counts={}, last={})

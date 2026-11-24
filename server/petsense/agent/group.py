@@ -1,13 +1,13 @@
-"""双 Agent 群聊：接收、路由持久化、逐条生成与消息协议（docs/agent-dual-agent-chat-design.md §3–§4）。
+"""双 Agent 群聊：接收、确定性派发、逐条生成与消息协议（docs/agent-w18-spec.md）。
 
 支持 group-v1 的客户端默认进入双 Agent 群聊。设置 PETSENSE_DUAL_AGENT_ENABLED=0 可全局回退。
 新协议由客户端声明 protocol=group-v1（POST 正文 / GET 与 WS 的查询参数）。总开关或调度线程关闭时
 （PETSENSE_SCHEDULER_DISABLED=1），即使客户端声明也走旧路径。未声明的客户端始终走旧协议。
 
-一个回合的流程：
+一个回合的流程（W18：不再有前置意图路由）：
   POST 只做校验、幂等去重与入队（202，立即返回）→ 调度线程把回合交给本模块的线程池 →
-  1. 路由：router.route 一次不带工具的模型调用，异常时走有限澄清的兜底路由；路由与发言计划落库，
-     重试沿用同一份分发结果；
+  1. 派发：按主人本轮的选择（auto/pet/assistant/both）确定发言计划并落库，无模型调用；
+     默认模式由爱宠先答，它判断自己答不了时调用 handoff_to_assistant 转交照料助手；
   2. 生成：按计划顺序逐条运行 loop.run_dialogue 的单角色模式（每位一条、各自独立轨迹）。
      首版串行：下一条开始前上一条已提交，所以后发的可以承接先发的；
   3. 收尾：全部终态后镜像成旧回合结构（reply/blocks/speaker/sources）并推 turn 帧。
@@ -29,7 +29,7 @@ from petsense.db import iso_z, session_scope, utc_now
 from petsense.db.models import Pet
 from petsense.db.models.agent import AgentMessage, AgentRoute, AgentTurn
 from petsense.db.models.memory import PetMemory
-from petsense.agent import jobs, loop, model, router, runs, snapshot, ws
+from petsense.agent import jobs, loop, model, runs, snapshot, ws
 from petsense.agent import settings as settings_service
 from petsense.agent.registry import ASSISTANT_ROLE, PET_ROLE
 
@@ -39,9 +39,9 @@ PROTOCOL = 'group-v1'
 ENABLED_ENV = 'PETSENSE_DUAL_AGENT_ENABLED'
 TURN_KIND = 'agent_group_turn'
 TARGETS = ('auto', 'pet', 'assistant', 'both')
-ROLE_NAMES = {PET_ROLE: '爱宠', ASSISTANT_ROLE: '照料助手'}
+ROLE_NAMES = {PET_ROLE: '爱宠', ASSISTANT_ROLE: '照料助手'}  # 群里的成员名（投影与镜像用）
 MARKS = {PET_ROLE: '【爱宠】', ASSISTANT_ROLE: '【照料助手】'}
-TURN_WALL_S = 240.0        # 整轮时限（路由 + 两位）：从主人发送算起，之后不再开始新的生成
+TURN_WALL_S = 240.0        # 整轮时限（派发 + 各位生成）：从主人发送算起，之后不再开始新的生成
 TURN_CALL_BUDGET = 20      # 整轮模型调用预算（两位合计），防失控循环
 STALE_PENDING_S = 360.0    # 等待超过即按中断收尾（旧路径为 5 分钟）
 POOL_SIZE = 4
@@ -59,24 +59,8 @@ TOOL_LABELS = {
     'forget_memory': '忘掉记忆', 'prepare_profile_update': '准备档案修改', 'prepare_role_settings': '修改助手设定',
     'draft_social_post': '保存社区草稿', 'create_diary': '生成运动日记', 'control_device': '发起远程录音',
     'propose_task_change': '生成委托候选', 'write_memory': '保存记忆',
+    'handoff_to_assistant': '转交照料助手',
 }
-_PET_TASKS = {
-    'respond': '回应主人对你说的话：用一两句陪伴表达接住主人的情绪或寒暄。',
-    'acknowledge': '主人点名了你，但这句话里需要查证、知识或操作的部分归照料助手。'
-                   '你只用一句话接住主人的话（例如把那部分交给照料助手），不回答专业内容，也不报任何数据。',
-    'clarify': '这句话还看不清主人想聊什么：用你的口吻问一个简短的必要澄清问题，不猜测主题，也不展开。',
-    'answer': '回应主人这句话：用一两句陪伴表达自然接话。',
-}
-_ASSISTANT_TASKS = {
-    'read': '回答主人关于本宠已观测数据的问题：需要数据时用观测工具现场查询，结论只来自本次工具结果。',
-    'knowledge': '回答主人的养宠知识问题，第一句先给结论。',
-    'search': '主人要求联网核实，或答案依赖会过期的信息：判断后决定是否搜索，搜索了就给出来源。',
-    'write': '处理主人的修改或保存请求：明确指令按规则直写，其余出确认卡。',
-    'observe': '主人希望你持续留意或到时回信：按委托协议生成待确认候选。',
-    'social': '回应主人对你说的话。',
-    'unknown': '回答主人这条消息。',
-}
-
 RECHECK_S = 5                 # 回合作业的复查间隔：回合在后台线程里生成，作业保持到期复查直到回合结束
 _pool = None
 _pool_lock = threading.Lock()
@@ -118,29 +102,49 @@ def job_key(turn_id):
     return f'group-turn:{turn_id}'
 
 
-def task_text(role, kind, intent, scope, together):
-    """服务端按路由生成的任务说明（确定性文本）：两位的分工在这里写死，不交给模型自行商量。
+def dispatch_plan(target):
+    """按主人的选择确定发言计划（W18：确定性，无模型调用）。
 
-    together 表示本轮两位都发言。
+    计划项：{'role','kind','follows','handoff'}。handoff=True 表示这一轮允许该角色转交照料助手
+    （转交工具挂不挂得上就是权威）。
+    """
+    if target == 'both':
+        return [{'role': PET_ROLE, 'kind': 'respond', 'follows': False, 'handoff': False},
+                {'role': ASSISTANT_ROLE, 'kind': 'answer', 'follows': False, 'handoff': False}]
+    if target == 'assistant':
+        return [{'role': ASSISTANT_ROLE, 'kind': 'answer', 'follows': False, 'handoff': False}]
+    if target == 'pet':
+        return [{'role': PET_ROLE, 'kind': 'respond', 'follows': False, 'handoff': False}]
+    return [{'role': PET_ROLE, 'kind': 'respond', 'follows': False, 'handoff': True}]
+
+
+def task_text(role, mode):
+    """服务端按「角色 × 本轮形态」生成的任务说明（确定性文本，不是模型输出）。
+
+    mode：auto（默认，爱宠先答）、pet（只点了爱宠）、assistant（只点了照料助手）、
+    both（两位都回）、handoff（爱宠转交后由照料助手接手）。
     """
     if role == PET_ROLE:
-        task = _PET_TASKS[kind]
-        if together:
-            task += '事实、查证或操作的部分由照料助手另发一条，你不展开。'
-        elif kind == 'respond':
-            task += '这句话里如果还有要查证或操作的部分，用一句话交给照料助手，自己不展开。'
-        return task
-    if kind == 'clarify':
-        return '这句话还看不清主人想要什么：只问一个简短的必要澄清问题，不猜测主题，不调用工具。'
-    if scope == 'out_of_scope':
-        task = '这句话不在服务范围内：简短说明不处理的原因；如果其中有与宠物相关的部分，只回应那一部分。'
-    else:
-        task = _ASSISTANT_TASKS.get(intent, _ASSISTANT_TASKS['unknown'])
-    if together:
-        task += ('爱宠负责陪伴表达：你不替它说话，也不复述或评价它的感受。'
-                 '只回答主人明确请求的专业部分；陪伴话语中的动作不是另一个求助。'
-                 '例如主人说想抱抱爱宠，再问今天的活动记录，只回答活动记录和必要的数据边界。')
-    return task
+        if mode == 'auto':
+            return ('主人没有点名谁，这一轮由你先回应。消息里需要查证数据、养宠知识、联网核实、'
+                    '修改保存或持续安排的部分你答不了：先用一句话告诉主人你把这件事交给照料助手'
+                    '（不要给任何数值），再调用 handoff_to_assistant 把那部分转交（一次就够，'
+                    'reason 里写清需要接手的是什么）。转交之后不要再回答专业内容。'
+                    '只是闲聊、情绪表达或你们之间的日常陪伴不要转交，直接回应就好。'
+                    '主人这句话看不出想聊什么时，只问一个简短的必要澄清问题，不要猜主题也不要展开。')
+        if mode == 'both':
+            return ('主人要两位都回。你只接陪伴部分（至多两句）；需要查证、知识或操作的部分由'
+                    '照料助手另发一条，你不展开，也不要调用转交。')
+        return ('主人点名了你。你只接陪伴部分；如果这条消息要查证数据、养宠知识或操作，'
+                '你不会也不编造：简短说明你不懂并建议主人去问照料助手。'
+                '本轮没有照料助手发言，不要调用转交。')
+    if mode == 'handoff':
+        return ('爱宠已经把这条消息里需要查证、知识或操作的部分交给你了：回答那部分。'
+                '结论只来自本次工具结果；不要重复爱宠的话，也不要替它表达感受。')
+    if mode == 'both':
+        return ('只回答主人明确请求的专业部分。爱宠负责陪伴表达，你不替它说话、'
+                '不复述或评价它的感受；陪伴话语里的动作不是另一个求助。')
+    return ('回答主人这条消息：需要数据时现场查询，结论只来自本次工具结果；第一句先给结论。')
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +254,7 @@ def view(user, session, turn):
 
 
 def routed_ids(session, turns):
-    """这些回合里已完成路由（有消息行）的回合 id。"""
+    """这些回合里已经派发出消息行（有消息行）的回合 id。"""
     ids = [turn.id for turn in turns if turn.status == 'pending']
     if not ids:
         return set()
@@ -259,7 +263,7 @@ def routed_ids(session, turns):
 
 
 def route_view(session, turn_id):
-    """路由与消息的只读视图（验收夹具与测试取证：路由 → 消息 → 运行轨迹）。"""
+    """派发记录与消息的只读视图（验收夹具与测试取证：派发 → 消息 → 运行轨迹）。"""
     route = session.execute(select(AgentRoute).where(AgentRoute.turn_id == turn_id)).scalar_one_or_none()
     view = None
     if route is not None:
@@ -298,22 +302,6 @@ def quoted_message(session, turn):
         if (item['text'] or '').strip():
             return {'id': item['id'], 'speaker': item['role'], 'text': item['text']}
     return None
-
-
-def topic_lines(session, turn):
-    """路由参考的近期话题：话题内最近几轮，由早到晚，每位发言人各一行（历史查询与旧路径同口径）。"""
-    from petsense.agent.routes import history_rows
-    lines = []
-    for row in reversed(history_rows(session, turn.pet_id, turn.id, turn.topic_id,
-                                     limit=router.TOPIC_TURNS)):
-        lines.append({'speaker': '主人', 'text': row.text or '（图片）'})
-        if not (row.reply or '').strip():
-            continue
-        # 回复带身份标记（群聊镜像与旧路径的双人回复）：按实际发言人拆开，不让一位的名字底下出现两位的话
-        default = row.speaker if row.speaker in (PET_ROLE, ASSISTANT_ROLE) else ASSISTANT_ROLE
-        for block in loop.split_blocks(row.reply, default)[0]:
-            lines.append({'speaker': ROLE_NAMES.get(block['speaker'], ASSISTANT_ROLE), 'text': block['text']})
-    return lines
 
 
 # ---------------------------------------------------------------------------
@@ -411,31 +399,36 @@ def _process(turn_id, now):
         elapsed = max(0.0, (utc_now() - (turn.pending_at or turn.created_at)).total_seconds())
         remaining = max(TURN_WALL_S - elapsed, loop.RUN_WALL_LIMIT_S)
     deadline = time.monotonic() + remaining
-    plan = _route_stage(turn_id, now)
+    plan = _dispatch_stage(turn_id, now)
     if not plan:
         return
     budget = {'calls_left': TURN_CALL_BUDGET}
-    for item in plan:
+    index = 0
+    while index < len(plan):
+        item = plan[index]
+        index += 1
         _run_one(turn_id, item, budget, deadline, now)
+        if item['role'] == PET_ROLE:
+            # 爱宠转交照料助手时追加一条助手消息（幂等：转交状态落库，重启后接着跑）
+            follow = _handoff_stage(turn_id, now)
+            if follow:
+                plan.append(follow)
     _finalize(turn_id, utc_now())
 
 
-def _route_stage(turn_id, now):
-    """阶段 1：路由并落库（路由记录 + 排队中的消息行）。返回发言计划；回合已不在等待时返回 None。"""
+def _dispatch_stage(turn_id, now):
+    """阶段 1：按主人的选择派发并落库（派发记录 + 排队中的消息行）。返回发言计划；回合已不在等待时返回 None。"""
     with session_scope() as s:
         existing = s.execute(select(AgentRoute).where(AgentRoute.turn_id == turn_id)).scalar_one_or_none()
         if existing is not None:
-            return _load(existing.plan_json, [])  # 重试沿用同一份分发结果，不重新路由
+            return _load(existing.plan_json, [])  # 重试沿用同一份派发结果，不重新派发
         turn = s.get(AgentTurn, turn_id)
         pet = s.get(Pet, turn.pet_id) if turn else None
         if turn is None or pet is None or turn.status != 'pending':
             return None
-        inputs = {'pet_name': pet.name, 'target': turn.target, 'text': turn.text,
-                  'quoted': quoted_message(s, turn), 'topic': topic_lines(s, turn),
-                  'image_count': len(_load(turn.images, []))}
+        plan = dispatch_plan(turn.target)
         pet_id = pet.id
-    route, trace, status = router.route(**inputs)
-    runs.save(pet_id, turn_id, trace, status)
+        target = turn.target
     with session_scope() as s:
         row = s.execute(select(AgentRoute).where(AgentRoute.turn_id == turn_id)).scalar_one_or_none()
         if row is not None:
@@ -444,13 +437,12 @@ def _route_stage(turn_id, now):
         pet = s.get(Pet, pet_id)
         if turn is None or pet is None or turn.status != 'pending':
             return None
-        plan = route['plan']
         s.add(AgentRoute(
-            turn_id=turn_id, pet_id=pet_id, scope=route['scope'], intent=route['intent'],
-            companion=int(route['companion']), professional=int(route['professional']),
-            follows=int(route['follows']), reason=route['reason'], source=route['source'],
+            turn_id=turn_id, pet_id=pet_id, scope='unknown', intent='unknown',
+            companion=0, professional=0, follows=0,
+            reason=f'按主人选择「{target}」派发', source='target',
             plan_json=json.dumps(plan, ensure_ascii=False),
-            raw_json=json.dumps(trace['messages'][-1], ensure_ascii=False), created_at=now))
+            raw_json=json.dumps({'target': target}, ensure_ascii=False), created_at=now))
         for position, item in enumerate(plan):
             s.add(AgentMessage(turn_id=turn_id, pet_id=pet_id, role=item['role'], position=position,
                                kind=item['kind'], follows=int(item['follows']), status='queued',
@@ -463,23 +455,55 @@ def _route_stage(turn_id, now):
     return plan
 
 
+def _handoff_stage(turn_id, now):
+    """转交阶段：爱宠已转交（消息 kind='handoff'）时确保照料助手那条存在，并返回它。
+
+    幂等，可重复进入：助手那条已建就沿用（重试或重启后接着跑那条），已终态则不再返回。
+    """
+    with session_scope() as s:
+        turn = s.get(AgentTurn, turn_id)
+        if turn is None or turn.status != 'pending':
+            return None
+        messages = message_rows(s, [turn_id]).get(turn_id) or []
+        pet_row = next((row for row in messages if row.role == PET_ROLE), None)
+        if pet_row is None or pet_row.kind != 'handoff' or pet_row.status != 'complete':
+            return None
+        assistant_row = next((row for row in messages if row.role == ASSISTANT_ROLE), None)
+        if assistant_row is not None:
+            if assistant_row.status in ('complete', 'failed'):
+                return None  # 已终态：不用再跑
+            return {'role': ASSISTANT_ROLE, 'kind': 'answer', 'follows': False, 'handoff': False}
+        pet = s.get(Pet, turn.pet_id)
+        if pet is None:
+            return None
+        row = AgentMessage(turn_id=turn_id, pet_id=turn.pet_id, role=ASSISTANT_ROLE, position=len(messages),
+                           kind='answer', follows=0, status='queued', text='', version=1,
+                           sources='[]', effect_json='[]', attempts=0, created_at=now)
+        s.add(row)
+        s.flush()
+        payload = turn_public(s, turn)
+        user_id = pet.user_id
+    ws.push_turn(user_id, turn.pet_id, payload)
+    return {'role': ASSISTANT_ROLE, 'kind': 'answer', 'follows': False, 'handoff': False}
+
+
 def _run_one(turn_id, item, budget, deadline, now):
     with session_scope() as s:
         row = s.execute(select(AgentMessage).where(
             AgentMessage.turn_id == turn_id, AgentMessage.role == item['role'])).scalar_one_or_none()
         if row is None:
-            return
+            return None
         message_id, status = row.id, row.status
     if status in ('complete', 'failed'):
-        return
+        return None
     if status == 'running':
         with _busy:
             live = message_id in _inflight
         if not live:
             # 上次进程在这里中断：没有结果可恢复，如实标记后继续后面的消息（主人可以只重试这一条）
             _mark_interrupted(message_id, now)
-        return
-    _generate(message_id, item, budget, deadline, now)
+        return None
+    return _generate(message_id, item, budget, deadline, now)
 
 
 def _mark_interrupted(message_id, now):
@@ -532,6 +556,20 @@ def _failed_trace(context, code):
             'role': context['role'], 'messageId': context['message_id'], 'routeId': context['route_id']}
 
 
+def _record_stance(turn_id, stance):
+    """照料助手自报的范围与意图回填到派发记录（W18）：此前为 unknown 时才写，不覆盖已有值。"""
+    if not isinstance(stance, dict):
+        return
+    scope, intent = stance.get('scope'), stance.get('intent')
+    if scope not in ('allowed', 'out_of_scope') or not intent:
+        return
+    with session_scope() as s:
+        row = s.execute(select(AgentRoute).where(AgentRoute.turn_id == turn_id)).scalar_one_or_none()
+        if row is None or row.scope != 'unknown':
+            return
+        row.scope, row.intent = scope, intent
+
+
 def _push_stale(user_id, pet_id, turn_id):
     """被替代的旧卡所在回合：提交后推帧让历史卡片翻「已有新候选」（与旧路径一致）。"""
     with session_scope() as s:
@@ -562,7 +600,8 @@ def _generate(message_id, item, budget, deadline, now):
             abandoned = pet is None or turn.pet_id != pet.id
             if not abandoned:
                 pet_id, user_id, turn_id = pet.id, pet.user_id, turn.id
-                context = _context(s, row, turn, pet, now, budget, deadline, item.get('request'))
+                context = _context(s, row, turn, pet, now, budget, deadline, item.get('request'),
+                                   handoff_allowed=bool(item.get('handoff')))
                 opened = message_public(row)
         if abandoned:
             _finalize_message(message_id, status='failed', error='model_error', now=utc_now())
@@ -580,21 +619,33 @@ def _generate(message_id, item, budget, deadline, now):
             return
         runs.save(pet_id, turn_id, outcome['trace'], 'degraded' if outcome['degraded'] else 'complete',
                   message_id=message_id)
+        if role == ASSISTANT_ROLE:
+            _record_stance(turn_id, outcome.get('stance'))
+        # W18：爱宠转交时把消息 kind 记成 handoff——转交状态落库，重启后仍能接着跑助手那条
         _finalize_message(message_id, status='complete', text=outcome['reply'],
-                          blocks=_outcome_blocks(outcome), sources=outcome['sources'], now=utc_now())
+                          blocks=_outcome_blocks(outcome), sources=outcome['sources'],
+                          kind='handoff' if outcome.get('handoff') else None, now=utc_now())
         for stale_turn_id in [tid for tid in outcome.get('refreshedTurnIds') or [] if tid != turn_id]:
             _push_stale(user_id, pet_id, stale_turn_id)
+        return outcome
     finally:
         with _busy:
             _inflight.discard(message_id)
 
 
-def _context(session, row, turn, pet, now, budget, deadline, assigned_request=None):
-    """单角色运行的输入：范围与任务取自已持久化的路由，承接与引用取自已提交的消息。"""
+def _context(session, row, turn, pet, now, budget, deadline, assigned_request=None, handoff_allowed=False):
+    """单角色运行的输入：范围由角色自报，任务与形态由服务端按派发结果给定。"""
     from petsense.agent.routes import history_rows
     siblings = message_rows(session, [turn.id])[turn.id]
     route = session.execute(select(AgentRoute).where(AgentRoute.turn_id == turn.id)).scalar_one_or_none()
     scope, intent = (route.scope, route.intent) if route is not None else ('unknown', 'unknown')
+    earlier = [old for old in siblings if old.position < row.position]
+    handoff_from = None
+    if row.role == ASSISTANT_ROLE:
+        # 被转交：爱宠刚发的那条是陪伴表达，助手只答专业部分
+        handoff_from = next((old.text for old in reversed(earlier)
+                             if old.role == PET_ROLE and old.kind == 'handoff'), None)
+    mode = 'handoff' if handoff_from else (turn.target or 'auto')
     context = {
         'pet_id': pet.id, 'user_id': pet.user_id, 'text': turn.text, 'target': turn.target,
         'history': [{'text': old.text, 'reply': old.reply, 'images': _load(old.images, [])}
@@ -602,13 +653,14 @@ def _context(session, row, turn, pet, now, budget, deadline, assigned_request=No
         'images': _load(turn.images, []), 'snapshot': snapshot.assemble(session, pet, now),
         'now_iso': iso_z(now), 'turn_id': turn.id, 'settings': settings_service.load(session, pet.user_id),
         'role': row.role, 'route': {'scope': scope, 'intent': intent},
-        'pet_handoff': row.role == PET_ROLE and row.kind == 'acknowledge',
+        'handoff_allowed': bool(handoff_allowed),
         'assigned_request': assigned_request or turn.text,
-        'task': task_text(row.role, row.kind, intent, scope, len(siblings) > 1),
+        'task': task_text(row.role, mode),
         'message_id': row.id, 'route_id': route.id if route is not None else None, 'pet_name': pet.name,
         'deadline': deadline, 'turn_budget': budget,
     }
-    earlier = [old for old in siblings if old.position < row.position]
+    if handoff_from:
+        context['handoff_from'] = handoff_from
     if row.follows and earlier and earlier[-1].status == 'complete' and (earlier[-1].text or '').strip():
         context['follows_text'] = earlier[-1].text
     quoted = quoted_message(session, turn)
@@ -760,10 +812,16 @@ def _replay_state(session, row):
                       + '；'.join(applied) + '。需要提到它们时按已有结果如实说明。')
 
 
-def _finalize_message(message_id, *, status, text='', blocks=None, sources=None, error=None, now=None):
-    """把生成中的消息落到终态（条件更新：已被收尾或不在生成中则不动），提交后推消息帧。"""
+def _finalize_message(message_id, *, status, text='', blocks=None, sources=None, error=None, kind=None,
+                      now=None):
+    """把生成中的消息落到终态（条件更新：已被收尾或不在生成中则不动），提交后推消息帧。
+
+    kind 给了就一并落库（W18：转交状态落消息行，重启后仍能接着跑助手那条）。
+    """
     now = now or utc_now()
     values = {'status': status, 'finished_at': now, 'version': AgentMessage.version + 1}
+    if kind is not None:
+        values['kind'] = kind
     if status == 'complete':
         values.update(text=text, error=None,
                       blocks=json.dumps(blocks, ensure_ascii=False) if blocks else None,

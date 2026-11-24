@@ -40,6 +40,8 @@ EXTERNAL_READ = 'external_read'  # W06：公网网页深读（联网知识组）
 DEVICE_CONTROL = 'device_control'  # W10：设备动作（仅录音），D3 开关关闭时不进 schemas
 ACTION = 'action'        # W10 动作组（日记/草稿）：日记生成走确认卡，草稿明确指令可直写（D6）
 TASK = 'task'            # W08 委托组：read_task 只读 / propose_task_change 只生成候选（P00 §5）
+HANDOFF = 'handoff'      # W18：爱宠转交照料助手（只在本轮允许转交时挂载）
+HANDOFF_TOOL = 'handoff_to_assistant'
 TOOL_TIMEOUT_S = 15.0
 
 # 双 Agent 群聊的角色门（docs/agent-dual-agent-chat-design.md §2.1/§3.4）：声明与执行都检查。
@@ -74,21 +76,38 @@ def register(spec):
     _TOOLS[spec.name] = spec
 
 
-def schemas_for(form, stance_scope, search_enabled=True, recording_enabled=None, role=None):
+def schemas_for(form, stance_scope, search_enabled=True, recording_enabled=None, role=None, handoff=False):
     """渲染该运行形态与范围下可用的工具 schema。out_of_scope 下业务与网络工具全部不可用（V11 §12.1）。
     search_enabled=False（PETSENSE_SEARCH_DISABLED 灰度开关）时 EXTERNAL_READ 组不进 schemas；
     recording_enabled 缺省解析 W10 D3 开关（PETSENSE_AGENT_RECORDING_ENABLED，默认关停），
     关闭时 DEVICE_CONTROL 组不进 schemas——能力描述与真实可用性保持一致
     （W06 spec §4.5、agent-w10-spec.md §3）。
-    role='pet'（双 Agent 群聊的爱宠角色）时只声明 PET_ROLE_TOOLS；None/assistant 不额外限制。"""
+    role='pet'（双 Agent 群聊的爱宠角色）时只声明 PET_ROLE_TOOLS；None/assistant 不额外限制。
+    handoff=True（默认模式下爱宠可以转交照料助手，W18）时额外声明转交工具；
+    转交工具只由爱宠发起，且「挂不挂得上」就是「本轮允不允许转交」的权威。"""
     if stance_scope == 'out_of_scope':
         return []
     if recording_enabled is None:
         recording_enabled = actions_service.recording_enabled()
+
+    def _role_ok(spec):
+        if role != PET_ROLE:
+            return spec.group != HANDOFF  # 转交只由爱宠发起，别的角色看不到这个工具
+        if spec.group == HANDOFF:
+            return bool(handoff)
+        return spec.name in PET_ROLE_TOOLS
+
     return [spec.schema() for spec in _TOOLS.values()
             if form in spec.forms and (search_enabled or spec.group != EXTERNAL_READ)
             and (recording_enabled or spec.group != DEVICE_CONTROL)
-            and (role != PET_ROLE or spec.name in PET_ROLE_TOOLS)]
+            and _role_ok(spec)]
+
+
+def _execute_handoff(args, context):
+    """爱宠转交：把专业部分交给照料助手。只做标记与记录，不代替照料助手回答。"""
+    reason = str(args.get('reason') or '').strip()[:60]
+    return {'handoff': True, 'assistant': '照料助手会在本轮接着回答这部分', 'reason': reason,
+            'note': '你只说陪伴话；专业部分由照料助手回答，不要自己补充，也不要给任何数值'}
 
 
 def _parse_time(value):
@@ -404,6 +423,18 @@ register(ToolSpec(
                 '最新体重与最近体重记录。档案未填写的字段返回 null，如实说明「档案里还没有」，不得猜测。',
     parameters={'type': 'object', 'properties': {}, 'additionalProperties': False},
     group=FACT_READ, forms=(DIALOGUE, REVIEW, EVENT), execute=_execute_read_pet_profile))
+
+
+register(ToolSpec(
+    name=HANDOFF_TOOL,
+    description='把主人这条消息里需要查证数据、养宠知识、联网核实、修改保存或持续安排的部分交给照料助手。'
+                '只在你答不了的时候调用一次：先用一句话告诉主人你把这件事交给照料助手（不要给任何数值），'
+                '再调用本工具，reason 里写清需要接手的是什么。调用之后你不再回答专业内容。'
+                '只是闲聊、情绪表达或你们之间的日常陪伴不要调用。',
+    parameters={'type': 'object', 'properties': {
+        'reason': {'type': 'string', 'description': '一句话说明需要照料助手接手哪部分（≤60 字）'}},
+        'required': ['reason'], 'additionalProperties': False},
+    group=HANDOFF, forms=(DIALOGUE,), execute=_execute_handoff))
 
 def _execute_read_care_topics(args, context):
     raw_status = args.get('status')
@@ -721,11 +752,19 @@ def execute_tool(name, arguments, form, stance_scope, context):
     if form not in spec.forms:
         return {'allowed': False, 'reason': 'form_not_allowed', 'duration_ms': 0,
                 'result': {'error': f'工具 {name} 不适用于当前运行形态。'}}
-    if context.get('role') == PET_ROLE and name not in PET_ROLE_TOOLS:
+    if context.get('role') == PET_ROLE:
         # 角色门先于范围与执行：即使模型在声明之外调用，爱宠身份也读不到观测、更不能写入或操作
+        allowed = set(PET_ROLE_TOOLS)
+        if context.get('handoff_allowed'):
+            allowed.add(HANDOFF_TOOL)   # W18：默认模式下爱宠可以转交照料助手
+        if name not in allowed:
+            return {'allowed': False, 'reason': 'role_not_allowed', 'duration_ms': 0,
+                    'result': {'error': '以爱宠身份只能读取基础档案和共享记忆；查证、写入与操作'
+                                         '由照料助手负责，本次调用没有执行。'}}
+    elif name == HANDOFF_TOOL:
+        # 转交只由爱宠发起：照料助手自己就是接手的人，不需要转交
         return {'allowed': False, 'reason': 'role_not_allowed', 'duration_ms': 0,
-                'result': {'error': '以爱宠身份只能读取基础档案和共享记忆；查证、写入与操作'
-                                     '由照料助手负责，本次调用没有执行。'}}
+                'result': {'error': '转交只由爱宠发起，本次调用没有执行。'}}
     if stance_scope == 'unknown':
         # 群聊单角色运行：路由没确认范围时只发有限澄清，任何工具都不执行
         return {'allowed': False, 'reason': 'scope_not_allowed', 'duration_ms': 0,
