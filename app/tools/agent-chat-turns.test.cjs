@@ -3,6 +3,7 @@ const { test } = require('node:test');
 
 const {
   applyDeltaToTurns,
+  dedupeTurns,
   compareTurns,
   isLocalTurn,
   mergeServerTurns,
@@ -144,4 +145,47 @@ test('本地回合 id 为负且互不相同', () => {
   assert.notEqual(a, b);
   // 更新的本地回合 id 更负，排序时排在后面（更靠下）
   assert.ok(compareTurns(localTurn('x', { id: a }), localTurn('y', { id: b })) < 0);
+});
+
+// --- 渲染键唯一性（2026-11-24 视觉走查 D-01）---
+// 列表渲染键取 requestId || id；同键条目并存会让 React 丢弃或复用错位的气泡。
+
+test('去重：同一 requestId 的两条回合收敛成一条，保留服务端那条', () => {
+  const turns = dedupeTurns([
+    serverTurn(44, { requestId: 'care:review:daily:1:2026-11-23', reply: '服务端正文' }),
+    serverTurn(45, { requestId: 'care:review:daily:1:2026-11-23', reply: '另一条' }),
+  ]);
+  assert.equal(turns.length, 1);
+  assert.equal(turns[0].id, 45);
+});
+
+test('去重：本地乐观回合与服务端同 requestId 时保留服务端那条', () => {
+  const local = localTurn('req-1');
+  const turns = dedupeTurns([local, serverTurn(9, { requestId: 'req-1' })]);
+  assert.equal(turns.length, 1);
+  assert.equal(turns[0].id, 9);
+  assert.ok(!isLocalTurn(turns[0]));
+});
+
+test('去重：requestId 不同但 id 相同也收敛成一条', () => {
+  const turns = dedupeTurns([serverTurn(7, { requestId: 'a' }), serverTurn(7, { requestId: 'b' })]);
+  assert.equal(turns.length, 1);
+});
+
+test('去重后渲染键（requestId || id）全局唯一', () => {
+  const turns = dedupeTurns([
+    serverTurn(44, { requestId: 'care:review:daily:1:2026-11-23' }),
+    serverTurn(45, { requestId: 'care:review:daily:1:2026-11-23' }),
+    serverTurn(46, { requestId: 'req-46' }),
+    localTurn('care:review:daily:1:2026-11-23'),
+  ]);
+  const keys = turns.map((turn) => turn.requestId || turn.id);
+  assert.equal(new Set(keys).size, keys.length);
+});
+
+test('拉齐服务端回合时脏快照带来的同 requestId 重复不会进列表', () => {
+  const dirty = serverTurn(44, { requestId: 'care:review:daily:1:2026-11-23' });
+  const turns = mergeServerTurns([dirty, dirty], [serverTurn(45, { requestId: 'req-45' })]);
+  const keys = turns.map((turn) => turn.requestId || turn.id);
+  assert.equal(new Set(keys).size, keys.length);
 });

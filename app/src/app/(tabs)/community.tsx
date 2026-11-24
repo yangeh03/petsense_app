@@ -252,7 +252,7 @@ export default function CommunityScreen() {
   const header = (
     <View style={styles.headerContent}>
       <View style={styles.headerRow}>
-        <ThemedText style={[styles.title, { fontFamily: Fonts.rounded }]}>社区</ThemedText>
+        <ThemedText style={styles.title}>社区</ThemedText>
         <View style={styles.headerActions}>
           <HeaderButton
             label="发布动态"
@@ -507,7 +507,7 @@ const styles = StyleSheet.create({
   },
   headerContent: { gap: Spacing.three, marginBottom: Spacing.three },
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  title: { fontSize: 30, fontWeight: '700', lineHeight: 38 },
+  title: { fontFamily: Fonts.rounded, fontSize: 26, lineHeight: 34, fontWeight: '700' },
   headerActions: { flexDirection: 'row', gap: Spacing.one },
   iconButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   badge: {

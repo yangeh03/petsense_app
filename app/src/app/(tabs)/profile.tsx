@@ -5,6 +5,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 
 import { DeviceCard } from '@/components/device-card';
+import StatusBarScrim from '@/components/status-bar-scrim';
 import { FollowListModal } from '@/components/social/follow-list-modal';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -103,234 +104,243 @@ export default function ProfileScreen() {
   }
 
   return (
-    <ScrollView
-      style={[styles.scrollView, { backgroundColor: theme.background }]}
-      contentContainerStyle={styles.contentContainer}
-    >
-      <ThemedView style={[styles.container, { paddingTop: insets.top + Spacing.four }]}>
-        {/* 用户卡 */}
-        <ThemedView type="backgroundElement" style={styles.userCard}>
-          <View style={[styles.userAvatar, { backgroundColor: theme.tintBackground }]}>
-            <ThemedText style={{ fontSize: 32 }}>
-              {profile?.avatarEmoji ?? user.avatarEmoji}
-            </ThemedText>
-          </View>
-          <View style={styles.userTexts}>
-            <ThemedText type="smallBold" style={styles.userName}>
-              {profile?.displayName ?? user.displayName}
-            </ThemedText>
-            <ThemedText type="small" themeColor="textSecondary">
-              @{user.username}
-            </ThemedText>
-          </View>
-          <Pressable onPress={() => router.push('/profile-edit')} accessibilityLabel="编辑公开资料">
-            <ThemedText type="small" style={{ color: theme.tintForeground }}>
-              编辑
-            </ThemedText>
-          </Pressable>
-          <Pressable
-            onPress={confirmLogout}
-            hitSlop={8}
-            accessibilityRole="button"
-            accessibilityLabel="退出登录"
-          >
-            <ThemedText type="small" style={{ color: theme.textSecondary }}>
-              退出
-            </ThemedText>
-          </Pressable>
-        </ThemedView>
-
-        {/* 三格统计 */}
-        <ThemedView type="backgroundElement" style={styles.statsRow}>
-          <StatCell
-            value={profile?.posts_count ?? 0}
-            label="帖子"
-            onPress={() => router.push(`/user?id=${user.id}`)}
-          />
-          <StatCell
-            value={profile?.followers ?? 0}
-            label="粉丝"
-            onPress={() => setFollowKind('followers')}
-          />
-          <StatCell
-            value={profile?.following ?? 0}
-            label="关注"
-            onPress={() => setFollowKind('following')}
-          />
-        </ThemedView>
-
-        {/* 新用户先看到宠物档案，再看到项圈和社区功能。 */}
-        <View style={styles.sectionHeader}>
-          <ThemedText type="smallBold">宠物档案</ThemedText>
-          {profile && profile.pets.length === 0 && (
-            <Pressable onPress={() => router.push('/setup')}>
+    <View style={{ flex: 1 }}>
+      <ScrollView
+        style={[styles.scrollView, { backgroundColor: theme.background }]}
+        contentContainerStyle={styles.contentContainer}
+      >
+        <ThemedView style={[styles.container, { paddingTop: insets.top + Spacing.four }]}>
+          {/* 用户卡 */}
+          <ThemedView type="backgroundElement" style={styles.userCard}>
+            <View style={[styles.userAvatar, { backgroundColor: theme.tintBackground }]}>
+              <ThemedText style={{ fontSize: 32 }}>
+                {profile?.avatarEmoji ?? user.avatarEmoji}
+              </ThemedText>
+            </View>
+            <View style={styles.userTexts}>
+              <ThemedText type="smallBold" style={styles.userName}>
+                {profile?.displayName ?? user.displayName}
+              </ThemedText>
+              <ThemedText type="small" themeColor="textSecondary">
+                @{user.username}
+              </ThemedText>
+            </View>
+            <Pressable
+              onPress={() => router.push('/profile-edit')}
+              accessibilityLabel="编辑公开资料"
+            >
               <ThemedText type="small" style={{ color: theme.tintForeground }}>
-                添加宠物
+                编辑
+              </ThemedText>
+            </Pressable>
+            <Pressable
+              onPress={confirmLogout}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel="退出登录"
+            >
+              <ThemedText type="small" style={{ color: theme.textSecondary }}>
+                退出
+              </ThemedText>
+            </Pressable>
+          </ThemedView>
+
+          {/* 三格统计 */}
+          <ThemedView type="backgroundElement" style={styles.statsRow}>
+            <StatCell
+              value={profile?.posts_count ?? 0}
+              label="帖子"
+              onPress={() => router.push(`/user?id=${user.id}`)}
+            />
+            <StatCell
+              value={profile?.followers ?? 0}
+              label="粉丝"
+              onPress={() => setFollowKind('followers')}
+            />
+            <StatCell
+              value={profile?.following ?? 0}
+              label="关注"
+              onPress={() => setFollowKind('following')}
+            />
+          </ThemedView>
+
+          {/* 新用户先看到宠物档案，再看到项圈和社区功能。 */}
+          <View style={styles.sectionHeader}>
+            <ThemedText type="smallBold">宠物档案</ThemedText>
+            {profile && profile.pets.length === 0 && (
+              <Pressable onPress={() => router.push('/setup')}>
+                <ThemedText type="small" style={{ color: theme.tintForeground }}>
+                  添加宠物
+                </ThemedText>
+              </Pressable>
+            )}
+          </View>
+          {!!profileError && (
+            <Pressable onPress={() => void load()}>
+              <ThemedText type="small" style={{ color: theme.danger }}>
+                {profileError}
               </ThemedText>
             </Pressable>
           )}
-        </View>
-        {!!profileError && (
-          <Pressable onPress={() => void load()}>
-            <ThemedText type="small" style={{ color: theme.danger }}>
-              {profileError}
-            </ThemedText>
-          </Pressable>
-        )}
-        {!profile && !profileError && <ActivityIndicator color={theme.tint} />}
-        {(profile?.pets ?? []).map((pet) => (
-          <Pressable
-            key={pet.id}
-            accessibilityRole="button"
-            accessibilityLabel={`管理 ${pet.name} 的宠物资料`}
-            onPress={() => router.push('/pet')}
-          >
-            <ThemedView type="backgroundElement" style={styles.petCard}>
-              <View style={[styles.petAvatar, { backgroundColor: theme.tintBackground }]}>
-                {pet.avatarImageUrl ? (
-                  <Image
-                    source={{ uri: absoluteUrl(pet.avatarImageUrl) }}
-                    style={styles.petAvatarImage}
-                    contentFit="cover"
-                  />
-                ) : (
-                  <ThemedText style={{ fontSize: 26 }}>{pet.avatar_emoji}</ThemedText>
-                )}
-              </View>
-              <View style={styles.petTexts}>
-                <ThemedText type="smallBold" style={styles.petName}>
-                  {pet.name}
-                </ThemedText>
-                <ThemedText type="small" themeColor="textSecondary">
-                  {speciesLabel(pet.species)} · {pet.breed || '品种未填写'}
-                </ThemedText>
-                <ThemedText type="small" style={{ color: theme.tintForeground }}>
-                  查看与编辑资料
-                </ThemedText>
-              </View>
-              {pet.batteryPercent != null ? (
-                <View style={styles.petBattery}>
-                  <View
-                    style={[
-                      styles.batteryDot,
-                      { backgroundColor: pet.online ? theme.online : theme.textSecondary },
-                    ]}
-                  />
+          {!profile && !profileError && <ActivityIndicator color={theme.tint} />}
+          {(profile?.pets ?? []).map((pet) => (
+            <Pressable
+              key={pet.id}
+              accessibilityRole="button"
+              accessibilityLabel={`管理 ${pet.name} 的宠物资料`}
+              onPress={() => router.push('/pet')}
+            >
+              <ThemedView type="backgroundElement" style={styles.petCard}>
+                <View style={[styles.petAvatar, { backgroundColor: theme.tintBackground }]}>
+                  {pet.avatarImageUrl ? (
+                    <Image
+                      source={{ uri: absoluteUrl(pet.avatarImageUrl) }}
+                      style={styles.petAvatarImage}
+                      contentFit="cover"
+                    />
+                  ) : (
+                    <ThemedText style={{ fontSize: 26 }}>{pet.avatar_emoji}</ThemedText>
+                  )}
+                </View>
+                <View style={styles.petTexts}>
+                  <ThemedText type="smallBold" style={styles.petName}>
+                    {pet.name}
+                  </ThemedText>
                   <ThemedText type="small" themeColor="textSecondary">
-                    {pet.batteryPercent}%
+                    {speciesLabel(pet.species)} · {pet.breed || '品种未填写'}
+                  </ThemedText>
+                  <ThemedText type="small" style={{ color: theme.tintForeground }}>
+                    查看与编辑资料
                   </ThemedText>
                 </View>
-              ) : null}
+                {pet.batteryPercent != null ? (
+                  <View style={styles.petBattery}>
+                    <View
+                      style={[
+                        styles.batteryDot,
+                        { backgroundColor: pet.online ? theme.online : theme.textSecondary },
+                      ]}
+                    />
+                    <ThemedText type="small" themeColor="textSecondary">
+                      {pet.batteryPercent}%
+                    </ThemedText>
+                  </View>
+                ) : null}
+                <SymbolView
+                  name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }}
+                  size={16}
+                  tintColor={theme.textSecondary}
+                />
+              </ThemedView>
+            </Pressable>
+          ))}
+
+          <View style={styles.sectionHeader}>
+            <ThemedText type="smallBold">项圈与连接</ThemedText>
+          </View>
+          <DeviceCard />
+
+          <View style={styles.sectionHeader}>
+            <ThemedText type="smallBold">伙伴</ThemedText>
+          </View>
+          <Pressable onPress={() => router.push('/assistant-settings')} accessibilityRole="button">
+            <ThemedView type="backgroundElement" style={styles.menuRow}>
               <SymbolView
-                name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }}
-                size={16}
-                tintColor={theme.textSecondary}
+                name={{ ios: 'sparkles', android: 'auto_awesome', web: 'auto_awesome' }}
+                size={20}
+                tintColor={theme.tint}
               />
+              <ThemedText type="default" style={styles.menuLabel}>
+                助手设定
+              </ThemedText>
+              <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
             </ThemedView>
           </Pressable>
-        ))}
+          <Pressable
+            onPress={() => router.push('/notification-settings')}
+            accessibilityRole="button"
+          >
+            <ThemedView type="backgroundElement" style={styles.menuRow}>
+              <SymbolView
+                name={{
+                  ios: 'bell.badge',
+                  android: 'notifications_active',
+                  web: 'notifications_active',
+                }}
+                size={20}
+                tintColor={theme.tint}
+              />
+              <ThemedText type="default" style={styles.menuLabel}>
+                通知推送
+              </ThemedText>
+              <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
+            </ThemedView>
+          </Pressable>
 
-        <View style={styles.sectionHeader}>
-          <ThemedText type="smallBold">项圈与连接</ThemedText>
-        </View>
-        <DeviceCard />
+          <View style={styles.sectionHeader}>
+            <ThemedText type="smallBold">社区与内容</ThemedText>
+          </View>
+          <Pressable onPress={() => router.push('/social-inbox')} accessibilityRole="button">
+            <ThemedView type="backgroundElement" style={styles.menuRow}>
+              <SymbolView
+                name={{ ios: 'bell', android: 'notifications_none', web: 'notifications_none' }}
+                size={20}
+                tintColor={theme.tint}
+              />
+              <ThemedText type="default" style={styles.menuLabel}>
+                互动通知
+              </ThemedText>
+              <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
+            </ThemedView>
+          </Pressable>
+          <Pressable onPress={() => router.push('/bookmarks')} accessibilityRole="button">
+            <ThemedView type="backgroundElement" style={styles.menuRow}>
+              <SymbolView
+                name={{ ios: 'bookmark', android: 'bookmark_border', web: 'bookmark_border' }}
+                size={20}
+                tintColor={theme.tint}
+              />
+              <ThemedText type="default" style={styles.menuLabel}>
+                我的收藏
+              </ThemedText>
+              <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
+            </ThemedView>
+          </Pressable>
 
-        <View style={styles.sectionHeader}>
-          <ThemedText type="smallBold">伙伴</ThemedText>
-        </View>
-        <Pressable onPress={() => router.push('/assistant-settings')} accessibilityRole="button">
-          <ThemedView type="backgroundElement" style={styles.menuRow}>
-            <SymbolView
-              name={{ ios: 'sparkles', android: 'auto_awesome', web: 'auto_awesome' }}
-              size={20}
-              tintColor={theme.tint}
-            />
-            <ThemedText type="default" style={styles.menuLabel}>
-              助手设定
-            </ThemedText>
-            <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
-          </ThemedView>
-        </Pressable>
-        <Pressable onPress={() => router.push('/notification-settings')} accessibilityRole="button">
-          <ThemedView type="backgroundElement" style={styles.menuRow}>
-            <SymbolView
-              name={{
-                ios: 'bell.badge',
-                android: 'notifications_active',
-                web: 'notifications_active',
-              }}
-              size={20}
-              tintColor={theme.tint}
-            />
-            <ThemedText type="default" style={styles.menuLabel}>
-              通知推送
-            </ThemedText>
-            <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
-          </ThemedView>
-        </Pressable>
+          <View style={styles.sectionHeader}>
+            <ThemedText type="smallBold">实验与高级</ThemedText>
+          </View>
+          <Pressable onPress={() => router.push('/collect')} accessibilityRole="button">
+            <ThemedView type="backgroundElement" style={styles.menuRow}>
+              <AppIcon name="video-outline" size={20} color={theme.tint} />
+              <ThemedText type="default" style={styles.menuLabel}>
+                录像标注与校准
+              </ThemedText>
+              <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
+            </ThemedView>
+          </Pressable>
 
-        <View style={styles.sectionHeader}>
-          <ThemedText type="smallBold">社区与内容</ThemedText>
-        </View>
-        <Pressable onPress={() => router.push('/social-inbox')} accessibilityRole="button">
-          <ThemedView type="backgroundElement" style={styles.menuRow}>
-            <SymbolView
-              name={{ ios: 'bell', android: 'notifications_none', web: 'notifications_none' }}
-              size={20}
-              tintColor={theme.tint}
-            />
-            <ThemedText type="default" style={styles.menuLabel}>
-              互动通知
-            </ThemedText>
-            <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
-          </ThemedView>
-        </Pressable>
-        <Pressable onPress={() => router.push('/bookmarks')} accessibilityRole="button">
-          <ThemedView type="backgroundElement" style={styles.menuRow}>
-            <SymbolView
-              name={{ ios: 'bookmark', android: 'bookmark_border', web: 'bookmark_border' }}
-              size={20}
-              tintColor={theme.tint}
-            />
-            <ThemedText type="default" style={styles.menuLabel}>
-              我的收藏
-            </ThemedText>
-            <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
-          </ThemedView>
-        </Pressable>
+          <FollowListModal
+            visible={followKind !== null && profile !== null}
+            userId={user.id}
+            kind={followKind ?? 'followers'}
+            onClose={() => setFollowKind(null)}
+          />
 
-        <View style={styles.sectionHeader}>
-          <ThemedText type="smallBold">实验与高级</ThemedText>
-        </View>
-        <Pressable onPress={() => router.push('/collect')} accessibilityRole="button">
-          <ThemedView type="backgroundElement" style={styles.menuRow}>
-            <AppIcon name="video-outline" size={20} color={theme.tint} />
-            <ThemedText type="default" style={styles.menuLabel}>
-              录像标注与校准
-            </ThemedText>
-            <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
-          </ThemedView>
-        </Pressable>
-
-        <FollowListModal
-          visible={followKind !== null && profile !== null}
-          userId={user.id}
-          kind={followKind ?? 'followers'}
-          onClose={() => setFollowKind(null)}
-        />
-
-        {/* 工程诊断保留，但不作为日常健康管理的主入口。 */}
-        <Pressable onPress={() => router.push('/monitor')}>
-          <ThemedView type="backgroundElement" style={styles.menuRow}>
-            <AppIcon name="heart-pulse" size={20} color={theme.tint} />
-            <ThemedText type="default" style={styles.menuLabel}>
-              设备诊断（高级）
-            </ThemedText>
-            <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
-          </ThemedView>
-        </Pressable>
-      </ThemedView>
-    </ScrollView>
+          {/* 工程诊断保留，但不作为日常健康管理的主入口。 */}
+          <Pressable onPress={() => router.push('/monitor')}>
+            <ThemedView type="backgroundElement" style={styles.menuRow}>
+              <AppIcon name="heart-pulse" size={20} color={theme.tint} />
+              <ThemedText type="default" style={styles.menuLabel}>
+                设备诊断（高级）
+              </ThemedText>
+              <AppIcon name="chevron-right" size={14} color={theme.textSecondary} />
+            </ThemedView>
+          </Pressable>
+        </ThemedView>
+      </ScrollView>
+      <StatusBarScrim />
+    </View>
   );
 }
 

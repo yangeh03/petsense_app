@@ -721,7 +721,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   heading: { flex: 1 },
-  title: { fontFamily: Fonts.rounded, fontSize: 22, lineHeight: 28, fontWeight: '700' },
+  title: { fontFamily: Fonts.rounded, fontSize: 26, lineHeight: 34, fontWeight: '700' },
   avatar: {
     width: 34,
     height: 34,
