@@ -15,6 +15,7 @@
 - 实时链路：设备 → MQTT（腾讯云）→ server（按设备归属过滤）→ WebSocket `/ws?token=`（需登录，服务端只推当前用户名下设备的帧；未登录返回 `unauthenticated` 状态）→ `telemetry-service.ts`（自动重连）→ `useTelemetry()`；连接地址在 `app/src/config.ts`，可用 `EXPO_PUBLIC_TELEMETRY_URL` 覆盖；设备归属在 devices 表（一人一设备，认领即绑定宠物，`/api/app/device/*`）
 - 遥测双模式：`EXPO_PUBLIC_TELEMETRY_MODE=replay npm run start:replay` 离线循环回放真实实验数据集（由 `app/tools/gen-replay-dataset.cjs` 从云端 cloud_data 生成）
 - 伙伴会话发送走乐观 UI：点发送后本地立即落一条 pending 回合（负 id + 稳定 requestId，逻辑在 `app/src/services/agent-chat-turns.ts`），与服务端回合按 requestId 对账（POST 响应或 WS turn 帧先到者先用）。服务端 `POST /agent/pets/<id>/turns` 会阻塞到整轮模型生成结束才返回，**不要等响应才上屏**；流式增量归到本地回合上，不另建占位气泡。发送失败撤下本地回合，原话与图片回填输入区（失败保留原话可重试）
+- 伙伴回复的 WS 累计正文与数据库快照分别限频，终态回合提供完整正文。客户端保留同一回合的渲染键，在左侧气泡内渐进补显追加文字。浏览历史时暂停跟随，「回到最新消息」回当前会话或话题末尾并恢复跟随。交互细节见 `docs/agent-product-integration-design.md` §18.2–18.3
 - 社区写入走乐观 UI：评论/回复点发送即本地插入（负 id +「发送中…」），服务端确认后按 id 就地替换，失败撤下本地评论并把原话与回复对象回填输入区、评论数回退；发帖/发故事点发布即上屏并返回列表（占位只在内存：`app/src/stores/social-pending.ts` + `app/src/services/social-publish.ts`），上传在后台跑，失败显示「发布失败，点此重试」并**复用同一 `clientMutationId` 重试**（服务端按 `(作者, 幂等键)` 去重），确认后用服务端 id 替换占位
 - 路径别名：`@/*` → `app/src/*`，`@/assets/*` → `app/assets/*`
 - 品牌色：珊瑚橙（light `#E8835C` / dark `#F0987A`），绿色仅作在线/正常语义色（light `#31A66D` / dark `#4CC38A`）；全部颜色定义在 `app/src/constants/theme.ts`，不要在页面里写死颜色

@@ -3,7 +3,9 @@
  * 样式沿用 ThemedText 字阶：正文 16/24，加粗 700，代码等宽，引用块左侧色条 + 次要色文字。
  */
 
+import { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { useReducedMotion } from 'react-native-reanimated';
 
 import { ThemedText } from '@/components/themed-text';
 import { Fonts } from '@/constants/theme';
@@ -29,9 +31,15 @@ function Spans({ spans }: { spans: MarkdownSpan[] }) {
   );
 }
 
-export function AgentMarkdownText({ text }: { text: string }) {
+export function AgentMarkdownText({
+  text,
+  streaming = false,
+}: {
+  text: string;
+  streaming?: boolean;
+}) {
   const theme = useTheme();
-  const blocks = parseAgentMarkdown(text);
+  const blocks = parseAgentMarkdown(text, streaming);
   return (
     <View style={styles.column}>
       {blocks.map((block, index) => {
@@ -58,6 +66,33 @@ export function AgentMarkdownText({ text }: { text: string }) {
         );
       })}
     </View>
+  );
+}
+
+/** 仅补显新增的正文。历史消息首帧全量展示，模型改写时直接采用新正文。 */
+export function AgentReplyText({ text, pending }: { text: string; pending: boolean }) {
+  const reducedMotion = useReducedMotion();
+  const [shown, setShown] = useState(text);
+  const visible = !reducedMotion && text.startsWith(shown) ? shown : text;
+
+  useEffect(() => {
+    if (shown === text) return;
+    if (visible === text) {
+      const timer = setTimeout(() => setShown(text), 0);
+      return () => clearTimeout(timer);
+    }
+    const remaining = Array.from(text.slice(shown.length));
+    // 大块帧可以追赶，避免生成结束后文字还长时间排队。
+    const count = Math.max(2, Math.ceil(remaining.length / 6));
+    const timer = setTimeout(() => setShown(shown + remaining.slice(0, count).join('')), 24);
+    return () => clearTimeout(timer);
+  }, [shown, text, visible]);
+
+  return (
+    <AgentMarkdownText
+      text={visible || (pending ? '正在接话…' : '')}
+      streaming={pending || visible !== text}
+    />
   );
 }
 

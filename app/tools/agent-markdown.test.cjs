@@ -1,7 +1,11 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 
-const { parseInline, parseAgentMarkdown } = require('../src/components/agent/markdown.ts');
+const {
+  parseInline,
+  parseAgentMarkdown,
+  visibleReplyText,
+} = require('../src/components/agent/markdown.ts');
 
 test('paired bold and code spans parse, unpaired markers stay literal', () => {
   assert.deepEqual(parseInline('a **b** `c` ** d'), [
@@ -17,6 +21,17 @@ test('bold does not pair across lines', () => {
   const spans = parseInline('**a\nb**');
   assert.equal(spans.length, 1);
   assert.equal(spans[0].text, '**a\nb**');
+});
+
+test('streaming styles the incomplete tail and preserves literal syntax in the final reply', () => {
+  assert.deepEqual(parseAgentMarkdown('- 正在 **准备*', true)[0].spans, [
+    { text: '正在 ' },
+    { text: '准备', bold: true },
+  ]);
+  assert.deepEqual(parseAgentMarkdown('> `npm *', true)[0].spans, [{ text: 'npm *', code: true }]);
+  assert.deepEqual(parseAgentMarkdown('> `npm *')[0].spans, [{ text: '`npm *' }]);
+  assert.equal(visibleReplyText('【照料助', true), '');
+  assert.equal(visibleReplyText('【照料助手】第一段。', true), '第一段。');
 });
 
 test('code inside bold drops both delimiters and keeps both styles', () => {

@@ -255,24 +255,31 @@ class DeltaFilter:
         self.last_cumulative = ''
 
     def feed(self, cumulative):
+        if cumulative == model.SEARCH_PROGRESS_HINT:
+            # 搜索提示独立于模型的累计正文，不参与首行识别。
+            if self.sink and (not self.header_done or not self.last_cumulative[self.header_len:].strip()):
+                self.sink(cumulative)
+            return
         self.last_cumulative = cumulative
         if not self.header_done:
             newline = cumulative.find('\n')
             if newline == -1:
-                if cumulative.startswith('{') and len(cumulative) <= 512:
+                first_line = cumulative.lstrip()
+                if not first_line or (first_line.startswith('{') and len(cumulative) <= 512):
                     return  # 可能是 stance 首行，等换行再判定
                 self.header_done = True  # 不以 { 开头或过长，直接放行
             else:
                 self.header_done = True
-                if _looks_like_stance(cumulative[:newline]):
+                if _looks_like_stance(cumulative[:newline].strip()):
                     self.header_len = newline + 1
         self._forward()
 
     def close(self):
-        """响应结束时兜底放行未判定的缓冲（如整段输出就是 stance 行）。"""
+        """响应结束时放行普通正文，工具轮只有 stance 时保持无正文。"""
         if not self.header_done:
             self.header_done = True
-            self._forward()
+            if not _looks_like_stance(self.last_cumulative.strip()):
+                self._forward()
 
     def _forward(self):
         if self.sink:

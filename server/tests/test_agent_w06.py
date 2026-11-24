@@ -523,8 +523,18 @@ class LoopMountTests(unittest.TestCase):
         stream = loop.DeltaFilter(seen.append)
         stream.feed(model.SEARCH_PROGRESS_HINT)
         self.assertEqual(seen, [model.SEARCH_PROGRESS_HINT])
-        stream.feed('上海今天空气优良。')
-        self.assertEqual(seen[-1], '上海今天空气优良。', '真实正文覆盖提示')
+        header = '{"scope":"allowed","intent":"read","speaker":"assistant"}'
+        stream.feed(header[:18])
+        self.assertEqual(seen, [model.SEARCH_PROGRESS_HINT])
+        stream.feed(header + '\n上海今天空气优良。')
+        self.assertEqual(seen, [model.SEARCH_PROGRESS_HINT, '上海今天空气优良。'])
+
+    def test_stance_only_tool_round_has_no_visible_text(self):
+        seen = []
+        stream = loop.DeltaFilter(seen.append)
+        stream.feed('{"scope":"allowed","intent":"read","speaker":"assistant"}')
+        stream.close()
+        self.assertEqual(seen, [])
 
 
 class RegistryGateTests(unittest.TestCase):

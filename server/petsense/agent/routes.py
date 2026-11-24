@@ -240,19 +240,30 @@ def turns(pet_id):
                'target': target, 'history': history, 'images': images_meta, 'snapshot': snap, 'now_iso': iso_z(now),
                'turn_id': turn_id, 'settings': companion}
     speaker = ['assistant']
-    last_write = [0.0]
+    last_write = None
+    last_push = None
+    pushed = None
 
     def progress(current_speaker, content):
+        nonlocal last_write, last_push, pushed
         speaker[0] = current_speaker
-        if time.monotonic() - last_write[0] < .5:
+        # 不让空白首帧占用发送窗口，工具调用之间的空文本也不清空当前提示。
+        if not content.strip():
             return
-        with session_scope() as session:
-            current_turn = session.get(AgentTurn, turn_id)
-            if current_turn is not None and current_turn.status == 'pending':
-                current_turn.reply = content
-                current_turn.speaker = current_speaker
-        ws.push_delta(user['id'], pet_id, turn_id, content, current_speaker)
-        last_write[0] = time.monotonic()
+        now = time.monotonic()
+        snapshot = (current_speaker, content)
+        # 终态单独推送，始终包含完整正文。
+        if snapshot != pushed and (last_push is None or now - last_push >= .08):
+            ws.push_delta(user['id'], pet_id, turn_id, content, current_speaker)
+            last_push, pushed = now, snapshot
+        # 轮询恢复需要中间快照，落库频率无需随 WS 提高。
+        if last_write is None or now - last_write >= .5:
+            with session_scope() as session:
+                current_turn = session.get(AgentTurn, turn_id)
+                if current_turn is not None and current_turn.status == 'pending':
+                    current_turn.reply = content
+                    current_turn.speaker = current_speaker
+            last_write = now
 
     status = 'complete'
     refreshed_turn_ids = []

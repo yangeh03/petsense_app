@@ -200,6 +200,7 @@ export function useAgentChat(user: { id: number } | null) {
     store.turns,
     store.pending,
     store.attachments,
+    store.scrollY,
   ]);
 
   /** WS：状态 + 帧 + 重连拉齐（以服务端已保存结果为准） */

@@ -33,6 +33,8 @@ import { fetchInboxItem, fetchInboxTurn, markInboxRead } from '@/services/agent-
 import { careStatusLabel } from '@/services/care-labels';
 import { anchorKey, findAnchorTurnId, parseAnchorParams } from '@/services/inbox-anchor';
 
+const LATEST_MESSAGE_DISTANCE = 48;
+
 export default function CompanionScreen() {
   const { user } = useAuth();
   return <CompanionContent key={user?.id ?? 'guest'} ownerId={user?.id ?? 0} />;
@@ -98,6 +100,8 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
   const [keyboardOpen, setKeyboardOpen] = useState(() => Keyboard.isVisible());
   const scroll = useRef<ScrollViewInstance>(null);
   const restored = useRef(false);
+  const scrollMetrics = useRef({ contentHeight: 0, viewportHeight: 0, y: 0, following: false });
+  const [showLatest, setShowLatest] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -224,13 +228,31 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
     anchorTarget.inboxId,
   ]);
 
-  // 本地命中时滚动到那条消息（偏移来自 onLayout 的 state，布局变化会重跑）。
+  const localAnchorY = localAnchorId === null ? undefined : anchorOffsets[localAnchorId];
+  // 本地命中时滚动到那条消息。新回合增高时无需再次定位旧锚点。
   useEffect(() => {
-    if (localAnchorId === null) return;
-    const y = anchorOffsets[localAnchorId];
-    if (y == null) return;
-    scroll.current?.scrollTo({ y: Math.max(0, y - 96), animated: true });
-  }, [localAnchorId, anchorOffsets]);
+    if (localAnchorY == null || !anchorIdentity) return;
+    scrollMetrics.current.following = false;
+    setFollowReply(false);
+    scroll.current?.scrollTo({ y: Math.max(0, localAnchorY - 96), animated: false });
+  }, [anchorIdentity, localAnchorY, setFollowReply]);
+
+  const updateLatestButton = () => {
+    const { contentHeight, viewportHeight, y } = scrollMetrics.current;
+    setShowLatest(
+      viewportHeight > 0 && contentHeight - viewportHeight - y > LATEST_MESSAGE_DISTANCE,
+    );
+  };
+
+  const goToLatest = () => {
+    const metrics = scrollMetrics.current;
+    metrics.following = true;
+    metrics.y = Math.max(0, metrics.contentHeight - metrics.viewportHeight);
+    restored.current = true;
+    scroll.current?.scrollToEnd({ animated: false });
+    if (useAgentChatStore.getState().scrollY !== metrics.y) setScrollY(metrics.y);
+    setShowLatest(false);
+  };
 
   // 目标已展示 → 标已读（展示失败不标）。
   useEffect(() => {
@@ -252,22 +274,27 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
     }, [markRead]),
   );
 
-  const onContinueTopic = (turn: AgentTurn) => {
-    setTopic(turn.topicId ?? turn.id);
-    setReplyTo(turn.id);
-  };
+  const onContinueTopic = useCallback(
+    (turn: AgentTurn) => {
+      setTopic(turn.topicId ?? turn.id);
+      setReplyTo(turn.id);
+    },
+    [setTopic, setReplyTo],
+  );
   /** W09：主动关怀卡追问入口——定位该主题并预填问题（照料助手用 read_care_topics 引用依据回答） */
-  const onAskWhy = (turn: AgentTurn) => {
-    setTopic(turn.topicId ?? turn.id);
-    setReplyTo(turn.id);
-    setTarget('assistant');
-    setDraft('为什么提醒我？');
-  };
-  const onRetry = (turn: AgentTurn) => {
-    setDraft(turn.text);
-    setTarget(turn.target);
+  const onAskWhy = useCallback(
+    (turn: AgentTurn) => {
+      onContinueTopic(turn);
+      setTarget('assistant');
+      setDraft('为什么提醒我？');
+    },
+    [onContinueTopic, setTarget, setDraft],
+  );
+  const onRetry = useCallback((turn: AgentTurn) => {
     // 失败回合的图片已在服务端，按完成态放回输入区（失败不丢图，重试免重传）
     const chat = useAgentChatStore.getState();
+    chat.setDraft(turn.text);
+    chat.setTarget(turn.target);
     chat.clearAttachments();
     if (turn.images?.length) {
       chat.addAttachments(
@@ -281,7 +308,7 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
         })),
       );
     }
-  };
+  }, []);
 
   return (
     <KeyboardAvoidingView
@@ -372,169 +399,213 @@ function CompanionContent({ ownerId }: { ownerId: number }) {
           />
         </Pressable>
       ) : null}
-      <ScrollView
-        ref={scroll}
-        keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="interactive"
-        scrollEventThrottle={100}
-        onContentSizeChange={() => {
-          if (!restored.current && loadedFor === ownerId && turns.length && !followReply) {
-            scroll.current?.scrollTo({ y: useAgentChatStore.getState().scrollY, animated: false });
-            restored.current = true;
-          } else if (followReply) {
-            scroll.current?.scrollToEnd({ animated: false });
-            restored.current = true;
-            if (!busy) setFollowReply(false);
-          }
-        }}
-        onScrollBeginDrag={() => setFollowReply(false)}
-        onScroll={(event) => {
-          if (restored.current) setScrollY(event.nativeEvent.contentOffset.y);
-        }}
-        contentContainerStyle={[styles.feed, !visible.length && styles.emptyFeed]}
-      >
-        {petId && turns.length >= 40 ? (
-          <Pressable
-            style={styles.center}
-            accessibilityRole="button"
-            onPress={() => void loadOlder()}
-          >
-            <ThemedText type="smallBold" themeColor="textSecondary">
-              更早的聊天
-            </ThemedText>
-          </Pressable>
-        ) : null}
-        {!visible.length && !busy && (!user || petId) ? (
-          <View style={styles.welcome}>
-            <View
-              style={[
-                styles.avatar,
-                styles.welcomeAvatar,
-                { backgroundColor: theme.tintBackground },
-              ]}
+      <View style={styles.conversation}>
+        <ScrollView
+          ref={scroll}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
+          scrollEventThrottle={32}
+          onLayout={(event) => {
+            const metrics = scrollMetrics.current;
+            metrics.viewportHeight = event.nativeEvent.layout.height;
+            if (restored.current && metrics.following) goToLatest();
+            else updateLatestButton();
+          }}
+          onContentSizeChange={(_, height) => {
+            const metrics = scrollMetrics.current;
+            metrics.contentHeight = height;
+            if (!restored.current && loadedFor === ownerId && turns.length && !followReply) {
+              metrics.y = useAgentChatStore.getState().scrollY;
+              scroll.current?.scrollTo({ y: metrics.y, animated: false });
+              restored.current = true;
+              updateLatestButton();
+            } else if (followReply || metrics.following) {
+              goToLatest();
+              if (followReply) setFollowReply(false);
+            } else {
+              updateLatestButton();
+            }
+          }}
+          onScrollBeginDrag={() => {
+            scrollMetrics.current.following = false;
+            setFollowReply(false);
+          }}
+          onScroll={(event) => {
+            if (!restored.current) return;
+            const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+            const metrics = scrollMetrics.current;
+            metrics.y = contentOffset.y;
+            metrics.contentHeight = contentSize.height;
+            metrics.viewportHeight = layoutMeasurement.height;
+            metrics.following =
+              metrics.contentHeight - metrics.viewportHeight - metrics.y <= LATEST_MESSAGE_DISTANCE;
+            setScrollY(metrics.y);
+            updateLatestButton();
+          }}
+          contentContainerStyle={[styles.feed, !visible.length && styles.emptyFeed]}
+        >
+          {petId && turns.length >= 40 ? (
+            <Pressable
+              style={styles.center}
+              accessibilityRole="button"
+              onPress={() => void loadOlder()}
             >
-              <SymbolView
-                name={{ ios: 'pawprint.fill', android: 'pets', web: 'pets' }}
-                tintColor={theme.tint}
-                size={36}
-              />
-            </View>
-            <ThemedText style={styles.welcomeTitle}>
-              {petId ? '今天想聊聊它的什么？' : '和它聊聊今天'}
-            </ThemedText>
-            <ThemedText type="small" themeColor="textSecondary">
-              {petId
-                ? '和它打个招呼，或请照料助手看看最近的记录。'
-                : '登录后，就能和爱宠及照料助手聊天。'}
-            </ThemedText>
-            {petId ? (
-              <View style={styles.suggestions}>
-                {['它昨天走动多吗？', '打个招呼'].map((idea, index) => (
-                  <Pressable
-                    key={idea}
-                    accessibilityRole="button"
-                    style={[
-                      styles.idea,
-                      {
-                        backgroundColor: theme.backgroundElement,
-                        borderColor: theme.backgroundSelected,
-                      },
-                    ]}
-                    onPress={() => {
-                      setTarget(index === 0 ? 'assistant' : 'pet');
-                      setDraft(index === 0 ? idea : '你好呀！');
-                    }}
-                  >
-                    <ThemedText type="smallBold">{idea}</ThemedText>
-                  </Pressable>
-                ))}
-              </View>
-            ) : (
-              <Pressable
-                accessibilityRole="button"
-                style={[styles.pill, { backgroundColor: theme.tintBackground }]}
-                onPress={() => router.push('/login')}
-              >
-                <ThemedText type="smallBold">登录 / 注册</ThemedText>
-              </Pressable>
-            )}
-          </View>
-        ) : null}
-        {anchorTurn || anchorTopic || anchorError ? (
-          <View style={[styles.anchorCard, { backgroundColor: theme.backgroundElement }]}>
-            <View style={styles.anchorHead}>
-              <ThemedText type="smallBold">来自收件箱</ThemedText>
-              <Pressable
-                onPress={() => router.push('/agent-inbox')}
-                hitSlop={10}
-                accessibilityLabel="返回收件箱"
-              >
-                <ThemedText type="small" themeColor="textSecondary">
-                  返回收件箱
-                </ThemedText>
-              </Pressable>
-            </View>
-            {anchorError ? (
-              <ThemedText type="small" themeColor="textSecondary">
-                {anchorError}
+              <ThemedText type="smallBold" themeColor="textSecondary">
+                更早的聊天
               </ThemedText>
-            ) : null}
-            {anchorTurn ? (
+            </Pressable>
+          ) : null}
+          {!visible.length && !busy && (!user || petId) ? (
+            <View style={styles.welcome}>
+              <View
+                style={[
+                  styles.avatar,
+                  styles.welcomeAvatar,
+                  { backgroundColor: theme.tintBackground },
+                ]}
+              >
+                <SymbolView
+                  name={{ ios: 'pawprint.fill', android: 'pets', web: 'pets' }}
+                  tintColor={theme.tint}
+                  size={36}
+                />
+              </View>
+              <ThemedText style={styles.welcomeTitle}>
+                {petId ? '今天想聊聊它的什么？' : '和它聊聊今天'}
+              </ThemedText>
+              <ThemedText type="small" themeColor="textSecondary">
+                {petId
+                  ? '和它打个招呼，或请照料助手看看最近的记录。'
+                  : '登录后，就能和爱宠及照料助手聊天。'}
+              </ThemedText>
+              {petId ? (
+                <View style={styles.suggestions}>
+                  {['它昨天走动多吗？', '打个招呼'].map((idea, index) => (
+                    <Pressable
+                      key={idea}
+                      accessibilityRole="button"
+                      style={[
+                        styles.idea,
+                        {
+                          backgroundColor: theme.backgroundElement,
+                          borderColor: theme.backgroundSelected,
+                        },
+                      ]}
+                      onPress={() => {
+                        setTarget(index === 0 ? 'assistant' : 'pet');
+                        setDraft(index === 0 ? idea : '你好呀！');
+                      }}
+                    >
+                      <ThemedText type="smallBold">{idea}</ThemedText>
+                    </Pressable>
+                  ))}
+                </View>
+              ) : (
+                <Pressable
+                  accessibilityRole="button"
+                  style={[styles.pill, { backgroundColor: theme.tintBackground }]}
+                  onPress={() => router.push('/login')}
+                >
+                  <ThemedText type="smallBold">登录 / 注册</ThemedText>
+                </Pressable>
+              )}
+            </View>
+          ) : null}
+          {anchorTurn || anchorTopic || anchorError ? (
+            <View style={[styles.anchorCard, { backgroundColor: theme.backgroundElement }]}>
+              <View style={styles.anchorHead}>
+                <ThemedText type="smallBold">来自收件箱</ThemedText>
+                <Pressable
+                  onPress={() => router.push('/agent-inbox')}
+                  hitSlop={10}
+                  accessibilityLabel="返回收件箱"
+                >
+                  <ThemedText type="small" themeColor="textSecondary">
+                    返回收件箱
+                  </ThemedText>
+                </Pressable>
+              </View>
+              {anchorError ? (
+                <ThemedText type="small" themeColor="textSecondary">
+                  {anchorError}
+                </ThemedText>
+              ) : null}
+              {anchorTurn ? (
+                <AgentMessage
+                  turn={anchorTurn}
+                  petId={petId}
+                  petName={petName}
+                  onContinueTopic={onContinueTopic}
+                  onRetry={onRetry}
+                  onAskWhy={onAskWhy}
+                />
+              ) : null}
+              {anchorTopic ? (
+                <View style={styles.anchorTopic}>
+                  <ThemedText type="smallBold">{anchorTopic.title}</ThemedText>
+                  {anchorTopic.detail ? (
+                    <ThemedText type="small" themeColor="textSecondary">
+                      {anchorTopic.detail}
+                    </ThemedText>
+                  ) : null}
+                  {careStatusLabel(anchorTopic.status) ? (
+                    <ThemedText type="small" themeColor="textSecondary">
+                      {careStatusLabel(anchorTopic.status)}
+                    </ThemedText>
+                  ) : null}
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+          {visible.map((turn) => (
+            <View
+              key={turn.requestId || turn.id}
+              onLayout={(event) => {
+                const y = event.nativeEvent.layout.y;
+                setAnchorOffsets((current) =>
+                  current[turn.id] === y ? current : { ...current, [turn.id]: y },
+                );
+              }}
+            >
               <AgentMessage
-                turn={anchorTurn}
+                turn={turn}
                 petId={petId}
                 petName={petName}
                 onContinueTopic={onContinueTopic}
                 onRetry={onRetry}
                 onAskWhy={onAskWhy}
               />
-            ) : null}
-            {anchorTopic ? (
-              <View style={styles.anchorTopic}>
-                <ThemedText type="smallBold">{anchorTopic.title}</ThemedText>
-                {anchorTopic.detail ? (
-                  <ThemedText type="small" themeColor="textSecondary">
-                    {anchorTopic.detail}
-                  </ThemedText>
-                ) : null}
-                {careStatusLabel(anchorTopic.status) ? (
-                  <ThemedText type="small" themeColor="textSecondary">
-                    {careStatusLabel(anchorTopic.status)}
-                  </ThemedText>
-                ) : null}
-              </View>
-            ) : null}
-          </View>
-        ) : null}
-        {visible.map((turn) => (
-          <View
-            key={turn.id}
-            onLayout={(event) => {
-              const y = event.nativeEvent.layout.y;
-              setAnchorOffsets((current) =>
-                current[turn.id] === y ? current : { ...current, [turn.id]: y },
-              );
-            }}
+            </View>
+          ))}
+          {busy && !visible.some((turn) => turn.status === 'pending') ? (
+            <View style={styles.waiting}>
+              <ActivityIndicator size="small" color={theme.tint} />
+              <ThemedText type="small" themeColor="textSecondary">
+                伙伴正在接话…
+              </ThemedText>
+            </View>
+          ) : null}
+        </ScrollView>
+        {showLatest && visible.length > 0 ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="回到最新消息"
+            onPress={goToLatest}
+            style={({ pressed }) => [
+              styles.latestButton,
+              { backgroundColor: theme.backgroundElement, borderColor: theme.backgroundSelected },
+              pressed && styles.latestPressed,
+            ]}
           >
-            <AgentMessage
-              turn={turn}
-              petId={petId}
-              petName={petName}
-              onContinueTopic={onContinueTopic}
-              onRetry={onRetry}
-              onAskWhy={onAskWhy}
+            <SymbolView
+              name={{ ios: 'arrow.down', android: 'arrow_downward', web: 'arrow_downward' }}
+              tintColor={theme.tintForeground}
+              size={16}
             />
-          </View>
-        ))}
-        {busy && !visible.some((turn) => turn.status === 'pending') ? (
-          <View style={styles.waiting}>
-            <ActivityIndicator size="small" color={theme.tint} />
-            <ThemedText type="small" themeColor="textSecondary">
-              伙伴正在接话…
-            </ThemedText>
-          </View>
+            <ThemedText type="smallBold">回到最新消息</ThemedText>
+          </Pressable>
         ) : null}
-      </ScrollView>
+      </View>
       {error ? (
         <Pressable style={styles.error} accessibilityRole="button" onPress={() => void reload()}>
           <ThemedText type="small" themeColor="danger">
@@ -615,6 +686,7 @@ const styles = StyleSheet.create({
     gap: 22,
   },
   emptyFeed: { justifyContent: 'center' },
+  conversation: { flex: 1, minHeight: 0 },
   welcome: { alignItems: 'center', gap: 10, paddingBottom: 24 },
   welcomeTitle: {
     fontFamily: Fonts.rounded,
@@ -632,6 +704,21 @@ const styles = StyleSheet.create({
   },
   idea: { borderWidth: 1, borderRadius: 18, paddingHorizontal: 13, paddingVertical: 9 },
   center: { alignSelf: 'center', padding: 8 },
+  latestButton: {
+    position: 'absolute',
+    alignSelf: 'center',
+    bottom: 8,
+    zIndex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minHeight: 44,
+    paddingHorizontal: 14,
+    borderRadius: 22,
+    borderWidth: StyleSheet.hairlineWidth,
+    boxShadow: Shadows.chip,
+  },
+  latestPressed: { opacity: 0.8 },
   waiting: { flexDirection: 'row', gap: 9, alignItems: 'center' },
   error: { alignSelf: 'center', paddingHorizontal: 16, paddingVertical: 4 },
   footerWrap: {

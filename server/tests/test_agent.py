@@ -7,7 +7,7 @@ from helpers import fresh_db
 from test_pets import seed_user_with_pet
 from petsense import db
 from petsense.agent.routes import bp
-from petsense.db.models import Pet, TelemetryMinute
+from petsense.db.models import AgentTurn, Pet, TelemetryMinute
 from petsense.agent.observations import query
 from sqlalchemy import select
 
@@ -48,6 +48,31 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(turn['speaker'], 'pet')
         self.assertEqual(turn['blocks'], [{'type': 'text', 'speaker': 'pet', 'text': '汪！'}])
         self.assertEqual(len(self.client.get(self.path).json['turns']), 1)
+
+    def test_stream_pushes_before_next_database_checkpoint(self):
+        with patch('petsense.agent.routes.time') as clock, \
+                patch('petsense.agent.routes.ws.push_delta') as push_delta, \
+                patch('petsense.agent.routes.ws.push_turn') as push_turn, \
+                patch('petsense.agent.model.respond') as respond:
+            def stream(*args, on_delta, **kwargs):
+                header = allowed_stance()
+                for timestamp, text in [(10.00, ''), (10.01, '你'), (10.03, '你好'),
+                                        (10.12, '你好呀'), (10.22, '你好呀！欢迎。')]:
+                    clock.monotonic.return_value = timestamp
+                    on_delta(header + text)
+                with db.session_scope() as s:
+                    pending = s.execute(select(AgentTurn)).scalar_one()
+                    self.assertEqual(pending.reply, '你')
+                    self.assertEqual(pending.status, 'pending')
+                return model_turn(header + '你好呀！欢迎。')
+
+            respond.side_effect = stream
+            result = self.client.post(self.path, json={'text': '你好', 'requestId': 'stream'})
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual([call.args[3] for call in push_delta.call_args_list],
+                         ['你', '你好呀', '你好呀！欢迎。'])
+        self.assertEqual(result.json['turn']['status'], 'complete')
+        push_turn.assert_called_once_with(self.uid, self.pet, result.json['turn'])
 
     def test_owner_scope_and_invalid_input(self):
         with patch('petsense.agent.routes.require_app_user', return_value=({'id': self.uid + 1}, None)):

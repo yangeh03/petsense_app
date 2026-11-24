@@ -8,7 +8,7 @@
  * 附依据摘要与「为什么提醒我」追问入口（下钻走对话与主题依据）。
  */
 
-import { useCallback, useState } from 'react';
+import { memo, useCallback, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import { Image } from 'expo-image';
 import { SymbolView } from 'expo-symbols';
@@ -16,7 +16,7 @@ import { useRouter } from 'expo-router';
 import AgentImageViewer from '@/components/agent/agent-image-viewer';
 import { ActionCard } from '@/components/agent/action-card';
 import { ChangeCard } from '@/components/agent/change-card';
-import { AgentMarkdownText } from '@/components/agent/markdown-text';
+import { AgentReplyText } from '@/components/agent/markdown-text';
 import { visibleReplyText } from '@/components/agent/markdown';
 import { ProposalCard } from '@/components/agent/proposal-card';
 import { TaskProposalCard } from '@/components/agent/task-proposal-card';
@@ -438,7 +438,14 @@ function OwnerImages({
   );
 }
 
-export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry, onAskWhy }: Props) {
+export const AgentMessage = memo(function AgentMessage({
+  turn,
+  petId,
+  petName,
+  onContinueTopic,
+  onRetry,
+  onAskWhy,
+}: Props) {
   const theme = useTheme();
   const router = useRouter();
   const settings = useCompanionSettingsStore((state) => state.settings);
@@ -456,7 +463,7 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry, o
         {
           type: 'text' as const,
           speaker: turn.speaker,
-          text: visibleReplyText(turn.reply),
+          text: turn.reply,
         },
       ];
   const textSegments = blocks.filter((block) => block.type === 'text');
@@ -546,7 +553,20 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry, o
                   {segment.speaker === 'pet' ? (petName ?? '爱宠') : assistantName}
                 </ThemedText>
               </Pressable>
-              <AgentMarkdownText text={visibleReplyText(segment.text) || '正在接话…'} />
+              <View
+                style={[
+                  styles.replyBubble,
+                  {
+                    backgroundColor: theme.backgroundElement,
+                    borderColor: theme.backgroundSelected,
+                  },
+                ]}
+              >
+                <AgentReplyText
+                  text={visibleReplyText(segment.text, turn.status === 'pending')}
+                  pending={turn.status === 'pending'}
+                />
+              </View>
             </View>
           </View>
         ))}
@@ -620,7 +640,7 @@ export function AgentMessage({ turn, petId, petName, onContinueTopic, onRetry, o
       </View>
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   exchange: { gap: 16 },
@@ -639,6 +659,15 @@ const styles = StyleSheet.create({
   replyColumn: { gap: 10 },
   replyRow: { flexDirection: 'row', gap: 9, alignItems: 'flex-start' },
   replyBody: { flex: 1, gap: 6, paddingTop: 2 },
+  replyBubble: {
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 20,
+    borderBottomLeftRadius: 6,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
   replyFootnote: { paddingLeft: 43, gap: 4 },
   avatar: {
     width: 34,
