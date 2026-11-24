@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemedText } from '@/components/themed-text';
 import { MapViewport } from '@/components/location/map-viewport';
 import { GpsMap } from '@/components/location/gps-map';
-import { BottomTabInset, MaxContentWidth, Shadows, Spacing } from '@/constants/theme';
+import { BottomTabInset, Fonts, MaxContentWidth, Shadows, Spacing } from '@/constants/theme';
 import { useLocationMode } from '@/hooks/use-location-mode';
 import { useObservations } from '@/hooks/use-observations';
 import { usePositionMap } from '@/hooks/use-position-map';
@@ -413,7 +413,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.four,
     gap: Spacing.four,
   },
-  title: { fontSize: 28, lineHeight: 36, fontWeight: '700' },
+  title: { fontFamily: Fonts.rounded, fontSize: 26, lineHeight: 34, fontWeight: '700' },
   segment: {
     flexDirection: 'row',
     borderRadius: 13,
@@ -437,7 +437,7 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
   },
   sectionHeadText: { flex: 1, gap: 2 },
-  sectionTitle: { fontSize: 20, lineHeight: 28, fontWeight: '700' },
+  sectionTitle: { fontSize: 18, lineHeight: 24, fontWeight: '700' },
   chip: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -62,6 +62,10 @@
 - 判定界面状态用 `xcrun simctl io booted screenshot`（直接截设备屏，不受窗口位置/遮挡影响）；定位按钮可用 PIL 按品牌色扫描像素再除以 3 换算逻辑 pt
 - **功能与视觉是两条验收通道，互不替代**：AX 树/接口只能证功能通，布局层级、对齐、间距、状态色语义只有对截图做视觉判断才能验。截图若只用来确认「内容出现了」，等同 AX 文本读数，不构成视觉验证。验收记录要写清走的是哪条通道，只做了功能验收时如实标注「未做视觉走查」。
 - 新增页面或明显改版既有页面时，视觉走查除自身布局外，必须对照同类既有页面的设计语言（卡片容器与投影、间距节奏、状态色语义、theme token 使用）逐项检查；不一致处要么改齐、要么在记录里说明理由。
+- **全量页面走查（2026-11-24，30 页 × 浅深双主题）**：记录与截图索引见 `docs/reviews/2026-11-24-app-visual-acceptance/`（`README.md` 索引 + `defects.md` 清单，18 条缺陷）。四条可复用的经验：
+  ① **无固定顶栏的滚动页必须盖状态栏遮挡层**（`components/status-bar-scrim.tsx`）：今日页与「我的」页的内容会滚进状态栏区，与系统时钟、灵动岛重叠；有顶栏的伙伴/社区页无此问题。② **状态色一律走 theme token**：连接状态点曾写死 7 个色值（两种绿、两种灰且不随深浅色），已改为 `online/warning/info/textSecondary`。③ **列表渲染键要保证唯一**：伙伴会话 `key={turn.requestId || turn.id}` 要求客户端列表按 id **和** requestId 双重去重（`dedupeTurns()`），服务端只有 `(pet_id, request_id)` 唯一约束，重复只可能出在客户端（快照恢复路径尤其）。④ **页面标题字号字族要收进 token**：5 个主 Tab 曾有 22/26/28/30 四种字号与两套字族，已统一 `26/34 w700 + Fonts.rounded`，分区标题 `18/24`。
+- **排版专项结论（2026-11-24）**：`app/src` 全量统计字号 21 种、86 处 `fontSize` 中 54% 无配套 `lineHeight`、`fontWeight` 只用 700/600/400、`letterSpacing` 零使用——排版体系需专项收敛成六档字号 token（页面标题/分区标题/卡片标题/正文/辅助文字/数字），数字类一律 `tabular-nums`。
+- **验收环境的两个坑**：① 模拟器上常有多台设备同时 booted，命令一律用 UDID，禁用 `booted`；② Expo Go 有个蓝色开发浮标（齿轮）会浮在页面上，**可拖动**（长按拖到空白处）避免压住标题与截图证据；原生 dev client 的 dev server 地址固化在 `localhost:8081`（NSUserDefaults 的 `RCT_jsLocation`），无法重定向到别的端口，缓存过期时会直接红盒——验收走 Expo Go。
 - 判定请求是否真正到达服务端：`cloud-ssh tencent 'sudo journalctl -u petsense.service --since "2 min ago"'` 看每条请求的状态码，这是"客户端没发出去"还是"服务端报错"的铁证
 - 生产测试账号关联真实宠物资料，不要修改；凭据通过安全渠道获取，不写入仓库。纯接口测试在 `server/` 下用 `PETSENSE_ROOT=/tmp/xxx PETSENSE_MQTT_DISABLED=1 .venv/bin/python wsgi.py` 起隔离实例（临时 root 会自动 alembic 建库），测完清理
 - 模拟器验收统一使用指定账号 `petsense`，密码 `123456`（2026-11-22 负责人确认写入仓库，是「不得写入密码」约定的唯一例外，仅限此测试账号；模型 API key 等真实凭据仍不入库）。可直接在生产 `petsense` 的伙伴会话发送 Agent 验收消息，无需逐条或逐轮批准。需要创建宠物、改动真实资料、绑定设备或验证其他写入时，使用隔离后端的同名账号。

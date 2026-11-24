@@ -16,6 +16,7 @@ import { NotificationBell } from '@/components/alerts/notification-bell';
 import { InboxPreviewCard } from '@/components/alerts/inbox-preview-card';
 import { PetHero } from '@/components/dashboard/pet-hero';
 import { PetStatusStrip } from '@/components/dashboard/pet-status-strip';
+import StatusBarScrim from '@/components/status-bar-scrim';
 import { VitalsCard } from '@/components/dashboard/vitals-card';
 import { ThemedText } from '@/components/themed-text';
 import { BottomTabInset, Fonts, MaxContentWidth, Shadows, Spacing } from '@/constants/theme';
@@ -75,169 +76,176 @@ export default function DashboardScreen() {
     value !== undefined && Number.isFinite(value) && value > 0 ? value.toFixed(decimals) : '—';
 
   return (
-    <ScrollView
-      style={{ backgroundColor: theme.background }}
-      contentContainerStyle={styles.scroll}
-      refreshControl={
-        <RefreshControl
-          refreshing={pullRefreshing}
-          onRefresh={() => {
-            setPullRefreshing(true);
-            setMediaRefresh((version) => version + 1);
-            void reload().finally(() => setPullRefreshing(false));
-          }}
-          tintColor={theme.tint}
-        />
-      }
-    >
-      <View
-        style={[
-          styles.container,
-          { paddingTop: insets.top + 16, paddingBottom: insets.bottom + BottomTabInset + 110 },
-        ]}
+    <>
+      <ScrollView
+        style={{ backgroundColor: theme.background }}
+        contentContainerStyle={styles.scroll}
+        refreshControl={
+          <RefreshControl
+            refreshing={pullRefreshing}
+            onRefresh={() => {
+              setPullRefreshing(true);
+              setMediaRefresh((version) => version + 1);
+              void reload().finally(() => setPullRefreshing(false));
+            }}
+            tintColor={theme.tint}
+          />
+        }
       >
-        <View style={styles.heading}>
-          <ThemedText type="small" themeColor="textSecondary">
-            {new Date(now).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })}
-          </ThemedText>
-          <NotificationBell />
-        </View>
-        <InboxPreviewCard petId={pet?.id} />
-        <View style={styles.welcome}>
-          <ThemedText style={[styles.pageTitle, { fontFamily: Fonts.rounded }]}>
-            {replay
-              ? '实验数据回放'
-              : pet
-                ? `${greeting(now)}，${pet.name}！`
-                : '和它一起，好好生活'}
-          </ThemedText>
-        </View>
-        {error ? (
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => void reload()}
-            style={[styles.notice, { backgroundColor: theme.tintBackground }]}
-          >
-            <ThemedText type="small">{error}</ThemedText>
-            <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
-              重新加载
+        <View
+          style={[
+            styles.container,
+            { paddingTop: insets.top + 16, paddingBottom: insets.bottom + BottomTabInset + 110 },
+          ]}
+        >
+          <View style={styles.heading}>
+            <ThemedText type="small" themeColor="textSecondary">
+              {new Date(now).toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })}
             </ThemedText>
-          </Pressable>
-        ) : null}
-        {replay ? (
-          <>
-            <View style={[styles.card, { backgroundColor: theme.tintBackground }]}>
-              <ThemedText style={styles.sectionTitle}>真实实验数据 · 循环回放</ThemedText>
-              <ThemedText type="small" themeColor="textSecondary">
-                录制数据，不计入今日记录。
+            <NotificationBell />
+          </View>
+          <InboxPreviewCard petId={pet?.id} />
+          <View style={styles.welcome}>
+            <ThemedText style={[styles.pageTitle, { fontFamily: Fonts.rounded }]}>
+              {replay
+                ? '实验数据回放'
+                : pet
+                  ? `${greeting(now)}，${pet.name}！`
+                  : '和它一起，好好生活'}
+            </ThemedText>
+          </View>
+          {error ? (
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => void reload()}
+              style={[styles.notice, { backgroundColor: theme.tintBackground }]}
+            >
+              <ThemedText type="small">{error}</ThemedText>
+              <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
+                重新加载
               </ThemedText>
-            </View>
-            <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
-              <ThemedText style={styles.sectionTitle}>实验中的读数</ThemedText>
-              <View style={styles.metrics}>
-                <Metric
-                  label="心率"
-                  value={format(live?.health?.valid ? live.health.heartRate : undefined)}
-                  unit="bpm"
-                />
-                <Metric
-                  label="血氧"
-                  value={format(live?.health?.valid ? live.health.spo2 : undefined)}
-                  unit="%"
-                />
-                <Metric
-                  label="传感器温度"
-                  value={format(live?.health?.valid ? live.health.bodyTemp : undefined, 1)}
-                  unit="℃"
-                />
+            </Pressable>
+          ) : null}
+          {replay ? (
+            <>
+              <View style={[styles.card, { backgroundColor: theme.tintBackground }]}>
+                <ThemedText style={styles.sectionTitle}>真实实验数据 · 循环回放</ThemedText>
+                <ThemedText type="small" themeColor="textSecondary">
+                  录制数据，不计入今日记录。
+                </ThemedText>
               </View>
+              <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
+                <ThemedText style={styles.sectionTitle}>实验中的读数</ThemedText>
+                <View style={styles.metrics}>
+                  <Metric
+                    label="心率"
+                    value={format(live?.health?.valid ? live.health.heartRate : undefined)}
+                    unit="bpm"
+                  />
+                  <Metric
+                    label="血氧"
+                    value={format(live?.health?.valid ? live.health.spo2 : undefined)}
+                    unit="%"
+                  />
+                  <Metric
+                    label="传感器温度"
+                    value={format(live?.health?.valid ? live.health.bodyTemp : undefined, 1)}
+                    unit="℃"
+                  />
+                </View>
+              </View>
+            </>
+          ) : authLoading || (user && !dashboard && busy) ? (
+            <ActivityIndicator color={theme.tint} />
+          ) : !user ? (
+            <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
+              <ThemedText style={styles.sectionTitle}>从认识你的宠物开始</ThemedText>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => router.push('/login')}
+                style={[styles.button, { backgroundColor: theme.tintBackground }]}
+              >
+                <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
+                  登录 / 注册
+                </ThemedText>
+              </Pressable>
             </View>
-          </>
-        ) : authLoading || (user && !dashboard && busy) ? (
-          <ActivityIndicator color={theme.tint} />
-        ) : !user ? (
-          <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
-            <ThemedText style={styles.sectionTitle}>从认识你的宠物开始</ThemedText>
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => router.push('/login')}
-              style={[styles.button, { backgroundColor: theme.tintBackground }]}
-            >
-              <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
-                登录 / 注册
-              </ThemedText>
-            </Pressable>
-          </View>
-        ) : dashboard && !pet ? (
-          <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
-            <ThemedText style={styles.sectionTitle}>先建立一份宠物档案</ThemedText>
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => router.push('/setup')}
-              style={[styles.button, { backgroundColor: theme.tintBackground }]}
-            >
-              <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
-                建立档案与连接项圈
-              </ThemedText>
-            </Pressable>
-          </View>
-        ) : pet ? (
-          <>
-            <PetHero
-              key={`${pet.id}:${pet.petgif_id ?? ''}:${pet.avatar_template_id ?? ''}`}
-              pet={pet}
-              petgif={dashboard?.petgif}
-              avatarTemplate={dashboard?.avatarTemplate}
-              frame={frame}
-              current={current}
-              statusLabel={
-                !pet.device_id ? '等待绑定项圈' : frame ? '项圈暂未在线' : '等待首次观测'
-              }
-              refreshVersion={mediaRefresh}
-              onEdit={() => router.push('/pet')}
-            />
-            <PetStatusStrip
-              frame={frame}
-              current={current}
-              bound={!!pet.device_id}
-              online={online}
-              statusLabel={statusLabel}
-              battery={battery}
-              onPressCollar={() => router.push(pet.device_id ? '/profile' : '/setup')}
-              onPressSound={() => router.push('/records')}
-            />
-            <VitalsCard
-              health={health}
-              current={current}
-              daily={data?.metrics ?? null}
-              series={series}
-              buckets={data?.buckets ?? []}
-              updatedAt={frame?.receivedAt ?? null}
-              onOpenCollar={() => router.push('/profile')}
-            />
-            <ActivityCard
-              summary={summary ?? null}
-              timeline={data?.timeline}
-              hasCoverage={hasCoverage}
-              onPress={() => router.push('/records')}
-            />
-            {user && (
-              <ExerciseDiaryEntry
-                key={`${user.id}:${pet.id}`}
-                petId={pet.id}
-                hasPhoto={!!pet.avatarImageUrl}
+          ) : dashboard && !pet ? (
+            <View style={[styles.card, { backgroundColor: theme.backgroundElement }]}>
+              <ThemedText style={styles.sectionTitle}>先建立一份宠物档案</ThemedText>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => router.push('/setup')}
+                style={[styles.button, { backgroundColor: theme.tintBackground }]}
+              >
+                <ThemedText type="smallBold" style={{ color: theme.tintForeground }}>
+                  建立档案与连接项圈
+                </ThemedText>
+              </Pressable>
+            </View>
+          ) : pet ? (
+            <>
+              <PetHero
+                key={`${pet.id}:${pet.petgif_id ?? ''}:${pet.avatar_template_id ?? ''}`}
+                pet={pet}
+                petgif={dashboard?.petgif}
+                avatarTemplate={dashboard?.avatarTemplate}
+                frame={frame}
+                current={current}
+                statusLabel={
+                  !pet.device_id ? '等待绑定项圈' : frame ? '项圈暂未在线' : '等待首次观测'
+                }
+                refreshVersion={mediaRefresh}
+                onEdit={() => router.push('/pet')}
               />
-            )}
-          </>
-        ) : (
-          !busy && (
-            <Pressable accessibilityRole="button" onPress={() => void reload()} style={styles.card}>
-              <ThemedText>暂时无法加载宠物档案，点击重试。</ThemedText>
-            </Pressable>
-          )
-        )}
-      </View>
-    </ScrollView>
+              <PetStatusStrip
+                frame={frame}
+                current={current}
+                bound={!!pet.device_id}
+                online={online}
+                statusLabel={statusLabel}
+                battery={battery}
+                onPressCollar={() => router.push(pet.device_id ? '/profile' : '/setup')}
+                onPressSound={() => router.push('/records')}
+              />
+              <VitalsCard
+                health={health}
+                current={current}
+                daily={data?.metrics ?? null}
+                series={series}
+                buckets={data?.buckets ?? []}
+                updatedAt={frame?.receivedAt ?? null}
+                onOpenCollar={() => router.push('/profile')}
+              />
+              <ActivityCard
+                summary={summary ?? null}
+                timeline={data?.timeline}
+                hasCoverage={hasCoverage}
+                onPress={() => router.push('/records')}
+              />
+              {user && (
+                <ExerciseDiaryEntry
+                  key={`${user.id}:${pet.id}`}
+                  petId={pet.id}
+                  hasPhoto={!!pet.avatarImageUrl}
+                />
+              )}
+            </>
+          ) : (
+            !busy && (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => void reload()}
+                style={styles.card}
+              >
+                <ThemedText>暂时无法加载宠物档案，点击重试。</ThemedText>
+              </Pressable>
+            )
+          )}
+        </View>
+      </ScrollView>
+      <StatusBarScrim />
+    </>
   );
 }
 

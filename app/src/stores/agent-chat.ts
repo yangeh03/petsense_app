@@ -11,6 +11,7 @@ import {
   applyMessageDeltaToTurns,
   applyMessageStatusToTurns,
   applyMessageToTurns,
+  dedupeTurns,
   isLocalTurn,
   mergeServerTurns,
   orderTurns,
@@ -134,18 +135,20 @@ export const useAgentChatStore = create<AgentChatState>((set) => ({
   dualAgent: false,
   setPet: (pet) => set({ petId: pet ? pet.id : null, petName: pet ? pet.name : null }),
   setLoadedFor: (userId) => set({ loadedFor: userId }),
-  setTurns: (turns) => set({ turns: orderTurns(turns) }),
+  setTurns: (turns) => set({ turns: orderTurns(dedupeTurns(turns)) }),
   syncTurns: (turns) => set((state) => ({ turns: mergeServerTurns(state.turns, turns) })),
   prependOlder: (older) =>
     set((state) => ({
       turns: orderTurns(
-        older.length
-          ? [
-              ...older,
-              // 本地乐观回合不在服务端分页结果里，保留（它一定比这一页更晚）
-              ...state.turns.filter((turn) => isLocalTurn(turn) || turn.id < older[0].id),
-            ]
-          : state.turns,
+        dedupeTurns(
+          older.length
+            ? [
+                ...older,
+                // 本地乐观回合不在服务端分页结果里，保留（它一定比这一页更晚）
+                ...state.turns.filter((turn) => isLocalTurn(turn) || turn.id < older[0].id),
+              ]
+            : state.turns,
+        ),
       ),
     })),
   applyTurn: (turn) => set((state) => ({ turns: reconcileTurn(state.turns, turn) })),

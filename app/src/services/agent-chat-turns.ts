@@ -55,10 +55,60 @@ export function reconcileTurn(turns: AgentTurn[], incoming: AgentTurn): AgentTur
     ? turns.filter((turn) => !(isLocalTurn(turn) && turn.requestId === incoming.requestId))
     : turns.slice();
   const index = kept.findIndex((turn) => turn.id === incoming.id);
-  if (index === -1) return orderTurns([...kept, incoming]);
+  if (index === -1) return dedupeTurns(orderTurns([...kept, incoming]));
   const next = kept.slice();
   next[index] = mergeTurn(kept[index], incoming);
-  return orderTurns(next);
+  return dedupeTurns(orderTurns(next));
+}
+
+/**
+ * 回合列表去重：同一 id 或同一 requestId 只保留一条。
+ *
+ * 服务端对 (pet_id, request_id) 有唯一约束，正常不会同时存在两条；但客户端的本地
+ * 快照是**上一版客户端**写下的，可能带着旧格式的 requestId 或重复条目，快照恢复与
+ * 历史合并都直接把它塞进列表。列表渲染键取 `requestId || id`，一旦出现两条同键
+ * 条目，React 会丢弃或复用错位的气泡（并刷「Encountered two children with the same
+ * key」告警）。这里按「服务端回合优先、本地乐观回合被替换、同类取较新」收敛。
+ */
+export function dedupeTurns(turns: AgentTurn[]): AgentTurn[] {
+  const picked = new Map<string, AgentTurn>();
+  const merged: AgentTurn[] = [];
+  for (const turn of turns) {
+    const key = turn.requestId || `id:${turn.id}`;
+    const previous = picked.get(key);
+    if (!previous) {
+      picked.set(key, turn);
+      merged.push(turn);
+      continue;
+    }
+    const next = pickTurn(previous, turn);
+    picked.set(key, next);
+    merged[merged.indexOf(previous)] = next;
+  }
+  // requestId 不同但 id 相同（老快照缺 requestId）也要收敛
+  const byId = new Map<number, number>();
+  const result: AgentTurn[] = [];
+  for (const turn of merged) {
+    const at = byId.get(turn.id);
+    if (at === undefined) {
+      byId.set(turn.id, result.length);
+      result.push(turn);
+      continue;
+    }
+    result[at] = pickTurn(result[at], turn);
+  }
+  return result;
+}
+
+/** 同一条逻辑回合的两份快照：服务端回合优先，本地乐观回合被服务端结果替换。 */
+function pickTurn(current: AgentTurn, incoming: AgentTurn): AgentTurn {
+  const currentLocal = isLocalTurn(current);
+  const incomingLocal = isLocalTurn(incoming);
+  if (currentLocal !== incomingLocal) return currentLocal ? incoming : current;
+  // 同类时保留较新的一条（compareTurns 升序，排在后面的是更新的）
+  const newer = compareTurns(current, incoming) < 0 ? incoming : current;
+  const older = newer === incoming ? current : incoming;
+  return mergeTurn(older, newer);
 }
 
 /** 插入/更新本地乐观回合（按 requestId 去重，同键重试复用同一条） */
@@ -85,10 +135,11 @@ export function mergeServerTurns(existing: AgentTurn[], latest: AgentTurn[]): Ag
   // HTTP 响应可能晚于同一回合的 WS 帧：已加载过的回合按消息逐条合并，不让旧快照盖掉新状态
   const known = new Map(existing.map((turn) => [turn.id, turn]));
   const kept = existing.filter((turn) => isLocalTurn(turn) || turn.id < first);
-  return orderTurns([
+  const merged = orderTurns([
     ...kept,
     ...latest.map((turn) => (known.has(turn.id) ? mergeTurn(known.get(turn.id), turn) : turn)),
   ]);
+  return dedupeTurns(merged);
 }
 
 // ---------------------------------------------------------------------------

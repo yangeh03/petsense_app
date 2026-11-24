@@ -7,22 +7,19 @@ import Animated, {
 } from 'react-native-reanimated';
 import { StyleSheet, View } from 'react-native';
 
+import { useTheme } from '@/hooks/use-theme';
 import type { TelemetryDisplayState } from '@/types/telemetry';
 
-const COLORS: Record<TelemetryDisplayState, string> = {
-  streaming: '#34C77B',
-  waiting_device: '#8E9AAF',
-  connecting: '#E8A13A',
-  reconnecting: '#E8A13A',
-  offline: '#9AA0A6',
-  replaying: '#5B8DEF',
-  unauthenticated: '#9AA0A6',
-};
-
-/** 连接状态圆点：有数据流时（streaming / replaying）带呼吸光晕动画。 */
+/**
+ * 连接状态圆点：有数据流时（streaming / replaying）带呼吸光晕动画。
+ *
+ * 颜色一律取主题语义色（AGENTS.md：颜色不要在页面里写死）：
+ * 绿色=在线/正常，橙=等待中，蓝=回放，灰=离线/未登录。
+ */
 export function ConnectionDot({ displayState }: { displayState: TelemetryDisplayState }) {
+  const theme = useTheme();
   const glow = useSharedValue(0);
-  const color = COLORS[displayState];
+  const color = dotColor(displayState, theme);
 
   useEffect(() => {
     glow.value =
@@ -44,6 +41,25 @@ export function ConnectionDot({ displayState }: { displayState: TelemetryDisplay
       <View style={[styles.dot, { backgroundColor: color }]} />
     </View>
   );
+}
+
+type ThemeColors = ReturnType<typeof useTheme>;
+
+function dotColor(state: TelemetryDisplayState, theme: ThemeColors): string {
+  switch (state) {
+    case 'streaming':
+      return theme.online;
+    case 'connecting':
+    case 'reconnecting':
+      return theme.warning;
+    case 'replaying':
+      return theme.info;
+    case 'waiting_device':
+    case 'offline':
+    case 'unauthenticated':
+    default:
+      return theme.textSecondary;
+  }
 }
 
 const styles = StyleSheet.create({
