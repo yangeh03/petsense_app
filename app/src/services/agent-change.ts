@@ -114,3 +114,18 @@ export function evidenceWindow(evidence: AgentChangeEvidence): {
 } {
   return { startAt: evidence.slotStartAt ?? null, endAt: evidence.slotEndAt ?? null };
 }
+
+/** 降级回信卡的标题：带核对结果时说「说明未完成」，而不是「未完成评估」。 */
+export function degradedLetterLabel(hasEvidence: boolean): string {
+  return hasEvidence ? '委托回信（说明未完成）' : '委托回信（未完成评估）';
+}
+
+/**
+ * 降级回信卡片的说明。带核对结果时与正文一致：完整说明没写成，但下面的时段结果是
+ * 按个人基线核对出的事实；没有核对结果时才是「只包含覆盖与缺口说明」。
+ */
+export function degradedLetterNotice(hasEvidence: boolean): string {
+  return hasEvidence
+    ? '下面的时段结果是按它的个人基线核对出的事实，只针对已观测时段，不代表它的整体状态正常或异常。'
+    : '这封回信未完成评估，只包含覆盖与缺口说明，不代表它的状态正常或异常。';
+}

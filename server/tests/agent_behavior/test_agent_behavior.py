@@ -73,7 +73,9 @@ def _asserts_claim(text, phrase):
 _CLAUSE_BOUNDARIES = '，。；;、！？!?,:\n'
 _NEGATION_CLAUSE_MARKERS = ('不能', '无法', '没法', '不会', '没有', '尚未', '还没', '不可',
                              '不足以', '不应', '不要', '别', '不宜', '不至于', '不代表',
-                             '不等于', '并非', '不能说', '暂不能', '无从', '避免')
+                             '不等于', '并非', '不能说', '暂不能', '无从', '避免',
+                             # 「所以不做异常判断」是否定式说明，不是断言（真实模型轮次 E51）
+                             '不做', '不下', '不推断', '不判断', '不臆测', '不是')
 
 
 # 数据类问题允许调用的只读事实工具。后续工作包会新增只读工具（W08 read_task、W09 read_care_topics），
@@ -1354,22 +1356,36 @@ class CareBehaviorTests(unittest.TestCase):
                              .order_by(AgentTurn.id)).scalars().all()
         return [r for r in rows if r.request_id.startswith(prefix)]
 
-    def _seed_yesterday(self, walk_minutes=45):
+    def _seed_yesterday(self, walk_minutes=45, observed_minutes=120):
+        """给昨天 10 点起种一段连续观测；默认 120 分钟（数据稀疏的一天），可指定更长时段。"""
         now_sh = datetime.now(SHANGHAI)
         start = (now_sh - timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0) \
             .astimezone(ZoneInfo('UTC'))
+        per_minute = walk_minutes * 60 // observed_minutes
         with db.session_scope() as s:
-            for i in range(120):
+            for i in range(observed_minutes):
                 s.add(TelemetryMinute(owner_id=self.uid, device_id='care-collar',
                                       minute=start + timedelta(minutes=i), metrics='{}',
-                                      actions=json.dumps({'走动': walk_minutes * 60 // 120}),
+                                      actions=json.dumps({'走动': per_minute}),
                                       observed_seconds=60, frames=60))
+
+    def _set_proactivity(self, level):
+        from petsense.db.models.agent import CompanionSettings
+        with db.session_scope() as s:
+            s.add(CompanionSettings(user_id=self.uid, proactivity=level, updated_at=utc_now()))
 
     # ── 场景 ──
 
     def test_E51_daily_review_honest_recap(self):
-        """有数据日回顾：真实统计入文案，不推导异常、不做个人基线比较。"""
-        self._seed_yesterday(walk_minutes=45)
+        """有数据日回顾（多提醒档）：真实统计入文案，不推导异常、不做个人基线比较。
+
+        在多提醒档跑：标准档只交付模型标为 high 的回顾（W09 D2），一条平淡的数据日
+        回顾被标成 normal 就不发——发不发取决于模型的相关性判断，不是本场景要检验的
+        内容。多提醒档下一般发现也会发出，才能稳定检验回顾内容是否诚实。标准档下
+        数据稀疏的一天允许不发，见 E73。
+        """
+        self._set_proactivity(2)
+        self._seed_yesterday(walk_minutes=150, observed_minutes=600)
         self._scan(self._at(0, 8, 0))
         self._scan(self._at(0, 9, 30))
         from petsense.agent import jobs as agent_jobs
@@ -1382,7 +1398,31 @@ class CareBehaviorTests(unittest.TestCase):
         self.assertFalse(_asserts_claim(reply, '异常'), f'不得断言异常：{reply}')
         self.assertFalse(_asserts_claim(reply, '活动减少'), f'不得断言活动减少：{reply}')
         conclusion = json.loads(_latest_run(self.pet).conclusion)
-        self.assertNotIn('degraded:', conclusion['reason_code'])
+        # 只防守卫介入（正文被替换或被纠正）；「工具轮次用满」这类预算标签是运行记录的噪声，
+        # 不代表回顾内容有问题（真实模型轮次里出现过，E73）
+        for guard in ('personal_change_without_evidence', 'personal_change_narrative_corrected'):
+            self.assertNotIn(guard, conclusion['reason_code'])
+
+    def test_E73_sparse_day_review_may_stay_silent(self):
+        """标准档 + 数据稀疏的一天：回顾可以不发；只要发了就必须诚实，且不得靠守卫兜底。"""
+        self._seed_yesterday(walk_minutes=45)          # 昨天只有两小时观测
+        self._scan(self._at(0, 8, 0))
+        self._scan(self._at(0, 9, 30))
+        from petsense.agent import jobs as agent_jobs
+        agent_jobs.tick(now=self._at(0, 9, 30, 10), limit=5)
+        # 模型把这条回顾标成 normal（或零发现）时不发，是 W09 D2 的设计；
+        # 但正文不能是靠服务端替换成事实摘要才合格的
+        conclusion = json.loads(_latest_run(self.pet).conclusion)
+        # 只防守卫介入（正文被替换或被纠正）；「工具轮次用满」这类预算标签是运行记录的噪声，
+        # 不代表回顾内容有问题（真实模型轮次里出现过，E73）
+        for guard in ('personal_change_without_evidence', 'personal_change_narrative_corrected'):
+            self.assertNotIn(guard, conclusion['reason_code'])
+        for turn in self._care_turns('care:review:daily:'):
+            reply = turn.reply
+            self.assertIn('走', reply, f'应提到走动统计：{reply}')
+            self.assertNotIn('比平时', reply)
+            self.assertFalse(_asserts_claim(reply, '异常'), f'不得断言异常：{reply}')
+            self.assertFalse(_asserts_claim(reply, '活动减少'), f'不得断言活动减少：{reply}')
 
     def test_E52_no_data_review_zero_findings_honest(self):
         """无数据回顾：可零发现；如实说明没有记录，不推断活动减少。"""
