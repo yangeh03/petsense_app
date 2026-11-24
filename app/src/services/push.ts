@@ -78,6 +78,8 @@ export type PushServerStatus = {
     state: string;
     permissionStatus: string;
     hasToken: boolean;
+    /** 这台设备此刻能否接收（在用、有 token、系统已授权）。旧版服务端可能不带。 */
+    eligible?: boolean;
     tokenRotated: boolean;
     lastSeenAt: string | null;
     updatedAt: string;
@@ -379,7 +381,7 @@ export async function disablePush(): Promise<PushStatus> {
   };
 }
 
-/** 读取当前推送状态（服务端开关 + 本机权限 + 最近投递记录）。 */
+/** 读取当前推送状态（服务端开关 + 本机权限 + 本机绑定 + 最近投递记录）。 */
 export async function readPushStatus(): Promise<PushStatus> {
   const platform = platformName();
   if (!pushSupported()) {
@@ -395,15 +397,19 @@ export async function readPushStatus(): Promise<PushStatus> {
   const permission = await readPermissionStatus();
   try {
     const server = await pushApi.status();
-    // 开关已开但系统权限没了 → 对外显示为未开启（服务端同样会复核权限）
-    const enabled = Boolean(server.enabled) && permission === 'granted';
-    const registered = server.installations.some((item) => item.hasToken);
+    // 只看**本机**这一个安装实例：别的设备是否注册与本机能否收到无关
+    const installationId = await getInstallationId();
+    const own = server.installations.find((item) => item.installationId === installationId);
+    const receivable = Boolean(own && (own.eligible ?? own.hasToken));
+    // 开关已开但系统权限没了，或本机绑定已停用（退出登录、token 失效）→ 如实显示为
+    // 未开启；服务端同样不会向不可接收的设备发送
+    const enabled = Boolean(server.enabled) && permission === 'granted' && receivable;
     return {
       supported: true,
       platform,
       enabled,
       permission,
-      registration: registered ? 'registered' : 'none',
+      registration: receivable ? 'registered' : 'none',
       message: enabled
         ? '已开启。关键设备提醒和委托回信会推送到这台设备。'
         : '未开启。站内收件箱仍然照常。',
@@ -462,6 +468,41 @@ export async function syncPermissionToServer(): Promise<void> {
   const permission = await readPermissionStatus();
   const installationId = await getInstallationId();
   await reportPermissionToServer(installationId, permission);
+}
+
+/**
+ * 登录后恢复本机的推送绑定：已登录、权限允许且用户已开启时注册。
+ *
+ * 退出登录会停用本机安装实例，而服务端的开关保持开着。重新登录后如果只是读状态，
+ * 设置页会显示「已开启」，实际却收不到。所以登录（含带会话的冷启动）时核对一次：
+ * 本机安装实例不再可接收就重新注册。从不申请系统权限，也不改动用户的开关。
+ */
+export async function restoreRegistration(): Promise<void> {
+  if (!pushSupported()) return;
+  const permission = await readPermissionStatus();
+  if (permission !== 'granted') return;
+  let server: PushServerStatus | null = null;
+  try {
+    server = await pushApi.status();
+  } catch {
+    return; // 读不到状态就不动：下次登录或打开设置页时再核对
+  }
+  if (!server.enabled || !server.gates?.ios) return;
+  const installationId = await getInstallationId();
+  const own = server.installations.find((item) => item.installationId === installationId);
+  if (own && (own.eligible ?? own.hasToken)) return; // 本机仍可接收
+  const token = await fetchExpoPushToken();
+  if (!token) return;
+  try {
+    await pushApi.register({
+      installationId,
+      platform: platformName(),
+      expoToken: token,
+      permissionStatus: permission,
+    });
+  } catch {
+    // 恢复失败不影响登录：服务端不会向不可接收的设备发送，设置页会如实显示未开启
+  }
 }
 
 /**

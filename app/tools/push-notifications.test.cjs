@@ -66,15 +66,17 @@ function loadPush(options = {}) {
     projectId = 'b390999e-ff9a-44f8-9028-05691e764f80',
     apiCalls = [],
     gates = { ios: true },
+    enabled = true,
+    installations = [],
   } = options;
   const api = {
     request: async (url, init) => {
       apiCalls.push({ url, init });
       if (url === '/push/status') {
         return {
-          enabled: true,
+          enabled,
           gates: { ios: gates.ios, android: false, web: false },
-          installations: [],
+          installations,
           deliveries: [],
         };
       }
@@ -337,6 +339,154 @@ test('退出：解除本机安装实例绑定', async () => {
   const call = apiCalls.find((item) => item.url.startsWith('/push/installations/'));
   assert.ok(call, '退出时调用解除绑定');
   assert.equal(call.init.method, 'DELETE');
+});
+
+// ── 登录后恢复绑定 / 状态只看本机 ──────────────────────────────────────────
+
+const GRANTED = {
+  getPermissionsAsync: async () => ({ granted: true, status: 'granted', ios: { status: 2 } }),
+};
+
+const MINE = { installationId: 'inst-mine00000001' };
+const OTHER = { installationId: 'inst-other0000001' };
+
+function installation(overrides) {
+  return {
+    platform: 'ios',
+    state: 'active',
+    permissionStatus: 'granted',
+    hasToken: true,
+    eligible: true,
+    tokenRotated: false,
+    tokenVersion: 1,
+    lastSeenAt: null,
+    updatedAt: '2026-11-24T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+test('登录后恢复绑定：本机安装实例被停用时重新注册，不申请权限也不改开关', async () => {
+  let permissionRequested = false;
+  const { push, apiCalls } = loadPush({
+    storage: fakeStorage({ 'petsense.push.installationId': MINE.installationId }),
+    notifications: fakeNotifications({
+      ...GRANTED,
+      requestPermissionsAsync: async () => {
+        permissionRequested = true;
+        return { granted: true, status: 'granted', ios: { status: 2 } };
+      },
+    }),
+    // 退出登录后服务端把本机实例停用，用户的开关仍是开着的
+    installations: [installation({ ...MINE, state: 'revoked', eligible: false })],
+  });
+  await push.restoreRegistration();
+  assert.equal(permissionRequested, false, '恢复绑定不弹系统权限框');
+  const register = apiCalls.find((call) => call.url === '/push/installations');
+  assert.ok(register, '重新注册本机安装实例');
+  assert.equal(
+    register.init.body.installationId,
+    MINE.installationId,
+    '沿用原安装实例 ID，去重键不变',
+  );
+  assert.equal(register.init.body.permissionStatus, 'granted');
+  assert.equal(
+    apiCalls.some((call) => call.url === '/push/preferences'),
+    false,
+    '不改用户的开关',
+  );
+});
+
+test('登录后恢复绑定：本机仍可接收时不重复注册', async () => {
+  const { push, apiCalls } = loadPush({
+    storage: fakeStorage({ 'petsense.push.installationId': MINE.installationId }),
+    notifications: fakeNotifications(GRANTED),
+    installations: [installation(OTHER), installation(MINE)],
+  });
+  await push.restoreRegistration();
+  assert.equal(apiCalls.filter((call) => call.url === '/push/installations').length, 0);
+});
+
+test('登录后恢复绑定：用户没开启、闸门关闭或系统权限不在时不注册', async () => {
+  const cases = [
+    { name: '用户没开启', enabled: false },
+    { name: '服务端闸门关闭', gates: { ios: false } },
+    { name: '系统权限不在', notifications: fakeNotifications() },
+  ];
+  for (const item of cases) {
+    const { push, apiCalls } = loadPush({
+      storage: fakeStorage({ 'petsense.push.installationId': MINE.installationId }),
+      notifications: item.notifications ?? fakeNotifications(GRANTED),
+      enabled: item.enabled ?? true,
+      gates: item.gates ?? { ios: true },
+      installations: [],
+    });
+    await push.restoreRegistration();
+    assert.equal(
+      apiCalls.filter((call) => call.url === '/push/installations').length,
+      0,
+      item.name,
+    );
+  }
+});
+
+test('登录后恢复绑定：旧版服务端不带 eligible 时按是否还有 token 判定', async () => {
+  const { push, apiCalls } = loadPush({
+    storage: fakeStorage({ 'petsense.push.installationId': MINE.installationId }),
+    notifications: fakeNotifications(GRANTED),
+    installations: [installation({ ...MINE, eligible: undefined, hasToken: false })],
+  });
+  await push.restoreRegistration();
+  assert.ok(
+    apiCalls.some((call) => call.url === '/push/installations'),
+    'token 没了就重新注册',
+  );
+});
+
+test('登录后恢复绑定：iOS 之外什么都不做', async () => {
+  for (const platform of ['android', 'web']) {
+    const { push, apiCalls } = loadPush({ platform });
+    await push.restoreRegistration();
+    assert.deepEqual(apiCalls, [], `${platform} 不向服务端发任何推送请求`);
+  }
+});
+
+test('状态：只看本机绑定——别的设备已注册、本机已停用时如实显示未开启', async () => {
+  const { push } = loadPush({
+    storage: fakeStorage({ 'petsense.push.installationId': MINE.installationId }),
+    notifications: fakeNotifications(GRANTED),
+    installations: [
+      installation(OTHER),
+      installation({ ...MINE, state: 'revoked', eligible: false }),
+    ],
+  });
+  const status = await push.readPushStatus();
+  assert.equal(status.enabled, false, '本机收不到就不显示已开启');
+  assert.equal(status.registration, 'none');
+  assert.match(status.message, /站内收件箱/);
+});
+
+test('状态：本机可接收且用户已开启时显示已开启', async () => {
+  const { push } = loadPush({
+    storage: fakeStorage({ 'petsense.push.installationId': MINE.installationId }),
+    notifications: fakeNotifications(GRANTED),
+    installations: [installation(MINE)],
+  });
+  const status = await push.readPushStatus();
+  assert.equal(status.enabled, true);
+  assert.equal(status.registration, 'registered');
+});
+
+test('状态：开关开着但系统权限已被收回时显示未开启', async () => {
+  const { push } = loadPush({
+    storage: fakeStorage({ 'petsense.push.installationId': MINE.installationId }),
+    notifications: fakeNotifications({
+      getPermissionsAsync: async () => ({ granted: false, status: 'denied', ios: { status: 1 } }),
+    }),
+    installations: [installation(MINE)],
+  });
+  const status = await push.readPushStatus();
+  assert.equal(status.enabled, false);
+  assert.equal(status.permission, 'denied');
 });
 
 // ── 通知响应 → 路由 ─────────────────────────────────────────────────────────

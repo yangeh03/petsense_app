@@ -14,6 +14,7 @@ import {
   readLastNotificationRoute,
   releaseNavigation,
   rememberPendingInboxItem,
+  restoreRegistration,
   startPermissionSync,
   subscribeNotificationResponses,
   takePendingInboxItem,
@@ -29,11 +30,18 @@ SplashScreen.preventAutoHideAsync();
  */
 function useNotificationNavigation() {
   const { user, loading } = useAuth();
+  const signedInUserId = user?.id ?? null;
 
   useEffect(() => {
     installForegroundHandler();
     return startPermissionSync();
   }, []);
+
+  // 登录（含带会话的冷启动）后恢复本机推送绑定：退出登录会停用它，这里核对并重新注册
+  useEffect(() => {
+    if (loading || !signedInUserId) return;
+    void restoreRegistration();
+  }, [signedInUserId, loading]);
 
   useEffect(() => {
     if (loading) return; // 认证未就绪：先不处理冷启动响应，等登录状态确定
