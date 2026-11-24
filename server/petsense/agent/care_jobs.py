@@ -54,8 +54,10 @@ _REVIEW_SYSTEM = (
     '"value": "仅 personal_change 需要：候选的实际值（数字，原样照抄）"}]}。'
     '个人变化（category=personal_change）只能在 personalChange.eligible 里列出的时段上成立，'
     '并且必须原样带上该候选的 evidenceId、direction、value 三个字段；'
-    '候选 status 为 within 时只能说在平时范围内，不能说比平时多或少；没有合格候选时'
-    '只能陈述绝对事实，不要提「比平时」。是否值得说由你判断：没有值得说的就少说或不说。'
+    '候选 status 为 within 时只能说实际值落在它的个人参照范围内，不能说多了或少了；'
+    '维度仍在认识中、或没有合格候选时，只陈述绝对事实（时长、次数、覆盖与缺口），'
+    '不做任何个人比较，也不必向主人解释为什么不能比较——需要提及时只说'
+    '「个人参照范围还在建立中」。是否值得说由你判断：没有值得说的就少说或不说。'
     'say 中不要罗列全部数字，挑值得说的说。'
     'level=high 表示值得现在打扰主人（异常、里程碑、主人关心的事）；'
     'level=normal 是一般发现，只有多提醒档才会主动发出。'
@@ -220,7 +222,8 @@ def _change_facts(change):
     return {'dates': change.get('dates') or [], 'counts': change.get('counts') or {},
             'candidates': items, 'eligible': eligible,
             'note': '只有 eligible 里的时段可作为个人变化主题；引用时把 evidenceId、'
-                    'direction、value 三个字段原样照抄；status 为 within 时不得说比平时多或少。'}
+                    'direction、value 三个字段原样照抄；status 为 within 时只说实际值落在'
+                    '它的个人参照范围内。'}
 
 
 def _active_task_facts(session, pet):

@@ -483,6 +483,20 @@ class ReviewChangeTests(ChangeTestBase):
         self.assertFalse(any('比平时' in t.reply for t in agent_turns), [t.reply for t in agent_turns])
         self.assertTrue(any('观察小结' in t.reply for t in agent_turns))
 
+    def test_review_inputs_do_not_repeat_the_forbidden_phrase(self):
+        """给模型的回顾输入里不出现「比平时」：说明书和候选说明里反复写它，模型就会照着说。
+
+        真实模型轮次里，提示写着「不要提『比平时』」、每条候选说明写着「不能说『比平时』」，
+        模型约半数反过来写出「还不能说比平时多或少」，被守卫替换并判降级。
+        """
+        self.assertNotIn('比平时', care_jobs._REVIEW_SYSTEM)
+        with db.session_scope() as s:
+            pet = s.get(Pet, self.pet_id)
+            facts = care_jobs.review_facts(s, pet, _at(-1, 0), _at(0, 0))
+        rendered = json.dumps(facts.get('personalChange'), ensure_ascii=False)
+        self.assertNotIn('比平时', rendered)
+        self.assertIn('个人参照范围还在建立中', rendered)
+
     def test_checkpoint_letter_with_negated_disclaimer_is_kept(self):
         """到期回信如实说明「无法判断是否比平时少」（无合格证据）不得被拒。
 

@@ -220,7 +220,7 @@ def compare_day(session, pet, date, now=None, features=None, targets=None, refer
                                 'sampleStartDay': None, 'sampleEndDay': None, 'range': None,
                                 'evidenceId': f'{feature}:{date}:{slot}',
                                 'note': f"认识中（{base['validDays']}/{base['requiredDays']} 个有效日），"
-                                        '还没有个人参照范围，不能说「比平时」'})
+                                        '个人参照范围还在建立中，只陈述绝对事实'})
             continue
         row = session.get(PetBaseline, (pet.id, feature, version))
         revision = row.revision if row is not None else None

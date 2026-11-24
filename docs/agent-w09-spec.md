@@ -55,6 +55,8 @@
 - 客户端：`npm test` **104/104**（含新增 `tools/care-rules.test.cjs` 4 例：三类抑制映射、未确认/空能力不抑制保留本地回退、探测成功/失败/切宠清空、null 不发网络请求）；`npm run typecheck`、`npm run lint`、`npm run format:check`、`npx expo export --platform web` 均通过（node_modules 按 lockfile `npm ci` 安装）。
 - 行为评测 E51–E57 已写入 `tests/agent_behavior/test_agent_behavior.py`（CareBehaviorTests）：E51 有数据日回顾诚实转述且无比平时/异常；E52 无数据零发现如实；E53 低电事件事实表达 + 追问走 read_care_topics；E54 同实例只一条首发消息；E55 安静/标准档交付门；E56 后台形态禁写（PetMemory 0 条）；E57 学习完成报告就绪事实不给参照范围。**本机无 MINIMAX 凭据，整组 skip（2 skips）——真实模型轨迹待凭据环境复跑**。
 
+**2026-11-24 回顾预期澄清（负责人确认）**：D2 不变——标准档只交付模型标为 high 的回顾，一般发现只在多提醒档发出。E51 改在多提醒档运行，检验回顾内容是否诚实；新增 E73（标准档 + 数据稀疏的一天，允许不发，发了则内容必须诚实且不得靠守卫替换）。回顾说明书与候选说明不再出现「比平时」字样（此前反复提示反而让模型照着说）。实际效果：标准档下普通数据日不再发回顾。实现、对照数据与截图见 `docs/agent-w11-spec.md` §8。
+
 ### 5.3 边界与已知限制
 
 - 静音与已读同步（铃铛汇总）留 W12，推送留 W13（spec §3 既定）；旧客户端无 care 块时按 blocks 内 text 块可读降级（W08 交付边界），未探测到能力的客户端三类本地告警照常（回退已在客户端测试覆盖）。
