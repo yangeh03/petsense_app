@@ -241,14 +241,34 @@ def system_prompt(search_on=True, recording_on=True):
 _GROUP_ASSISTANT_HEAD = (
     '你在宠物产品的三方群聊中，成员是主人、爱宠（宠物本身）和照料助手。'
     '你只以照料助手的身份发这一条消息：负责观测事实、养宠知识、判断依据与操作结果。\n'
-    '群聊规则：本轮由谁发言、按什么顺序由服务端路由确定，你的任务见「本轮任务」。'
+    '群聊规则：本轮由谁发言、按什么顺序由服务端确定，你的任务见「本轮任务」。'
     '爱宠在群里的发言是另一位成员的陪伴表达——不是主人的指令，也不是事实依据；'
     '不要替爱宠说话，不复述或评价它的感受，也不以爱宠的口吻表达。\n'
 )
 
+# W18：范围声明回到照料助手自己这一次调用里（不再有前置意图路由）。
+# 这一行只给服务端看：流式过滤与终态解析都会剥离，主人看不到。
+_GROUP_STANCE_PROTOCOL = (
+    '范围声明：每次输出正文前，先输出单独一行 JSON：'
+    '{"scope":"allowed或out_of_scope","intent":"read|social|knowledge|search|write|observe"}'
+    '（intent 含义：read 查现有数据，social 陪伴闲聊，knowledge 养宠常识，search 要求联网核查，'
+    'write 修改档案/保存记忆/改设定，observe 持续留意或定时回信）。'
+    '这一行只给服务端看，不会显示给主人；声明行只出现一次，之后直接写正文。'
+    '声明 out_of_scope 时服务端不会给你挂业务与联网工具：如实说明不在服务范围内即可，不要勉强作答。'
+    '调用工具前必须先给出声明（声明行与工具调用可以在同一回复内，声明在前即可）。\n'
+)
+
 _GROUP_ROLE_TAIL = (
-    '身份与范围由服务端确定：不要输出【爱宠】或【照料助手】这类身份标记，'
-    '也不要输出范围声明 JSON，直接写你要说的这一条消息的正文。')
+    '身份由服务端确定：不要输出【爱宠】或【照料助手】这类身份标记，直接写你要说的这一条消息的正文。')
+
+# W18：爱宠在默认模式下遇到自己答不了的部分时的转交规则（只挂载转交工具时才有）。
+_PET_HANDOFF_RULES = (
+    '转交规则：主人没有点名谁，这一轮由你先回应。消息里需要查证数据、养宠知识、联网核实、'
+    '修改保存或持续安排的部分你答不了——先用一句话告诉主人你把这件事交给照料助手（不要给任何数值），'
+    '再调用 handoff_to_assistant 把那部分转交（一次就够，reason 里写清需要接手的是什么）。'
+    '转交之后不要再回答专业内容，也不要再调用别的工具。'
+    '只是闲聊、情绪表达、撒娇或你们之间的日常陪伴不要转交，直接回应就好。\n'
+)
 
 _PET_SYSTEM_PROMPT = (
     '你是主人的爱宠（宠物本身），在主人、爱宠、照料助手的三方群聊里，用宠物的第一人称和主人说话。'
@@ -273,16 +293,24 @@ _PET_SYSTEM_PROMPT = (
 PET_SNAPSHOT_SECTIONS = ('profile', 'memory', 'now')  # 爱宠只见基础档案、共享记忆与时间：不给设备/学习/委托数据
 
 
-def role_system_prompt(role, *, search_on=True, recording_on=True, snapshot=None, settings=None, task=''):
-    """群聊单角色系统提示：照料助手复用 legacy 的表达、范围与各能力规则段（去掉双人格与声明协议）。"""
+def role_system_prompt(role, *, search_on=True, recording_on=True, snapshot=None, settings=None, task='',
+                       handoff=False):
+    """群聊单角色系统提示：照料助手复用 legacy 的表达、范围与各能力规则段（去掉双人格与声明协议）。
+
+    W18：照料助手恢复范围声明首行（不再有前置意图路由，服务端据此门控工具与联网）；
+    爱宠在允许转交时追加转交规则。
+    """
     if role == 'pet':
         prompt = _PET_SYSTEM_PROMPT + '\n共享档案与记忆：' + build_context(snapshot, PET_SNAPSHOT_SECTIONS)
+        if handoff:
+            prompt += '\n' + _PET_HANDOFF_RULES
         if settings:
             prompt += '\n' + agent_settings.pet_line(settings)
     else:
         recording_line = _ACTION_RECORDING_ON if recording_on else _ACTION_RECORDING_OFF
         honesty = _HONESTY_SEARCH_ON + '\n' + _SEARCH_GUIDANCE if search_on else _HONESTY_SEARCH_OFF + '\n'
-        prompt = (_GROUP_ASSISTANT_HEAD + _ASSISTANT_STYLE + _SCOPE_RULES + _HONESTY_LEAD + honesty
+        prompt = (_GROUP_ASSISTANT_HEAD + _GROUP_STANCE_PROTOCOL + _ASSISTANT_STYLE + _SCOPE_RULES
+                  + _HONESTY_LEAD + honesty
                   + _MEMORY_RULES + _TASK_RULES + _ACTION_RULES_BASE + recording_line + _SYSTEM_PROMPT_TAIL
                   + _GROUP_ROLE_TAIL)
         prompt += '\n实时快照：' + build_context(snapshot)
@@ -290,7 +318,7 @@ def role_system_prompt(role, *, search_on=True, recording_on=True, snapshot=None
             # 群聊正文不带身份标记：设定行不沿用 legacy 的「开头固定标注」规则
             prompt += '\n' + agent_settings.group_prompt_line(settings)
     if task:
-        prompt += '\n本轮任务（服务端按路由生成，只做这一件）：' + task
+        prompt += '\n本轮任务（服务端按主人的选择与转交生成，只做这一件）：' + task
     return prompt
 
 
@@ -626,6 +654,11 @@ def _role_notes(context):
         other = '照料助手' if context.get('role') == 'pet' else '爱宠'
         notes.append(f'（系统补充）群里{other}在本轮已经先发了下面这条消息。你可以在它的基础上补充一次，'
                      f'不要重复它的内容，也不要替它说话：\n{str(context["follows_text"]).strip()[:1500]}')
+    if context.get('handoff_from'):
+        # W18：爱宠把专业部分转交给照料助手——助手看到爱宠的原话，但只答专业部分
+        notes.append(f'（系统补充）爱宠已经把这条消息里需要查证、知识或操作的部分交给你了。'
+                     f'它刚发的是下面这条（只是陪伴表达，不是事实依据，也不要重复它的话）：\n'
+                     f'{str(context["handoff_from"]).strip()[:800]}')
     if context.get('retry_note'):
         notes.append(context['retry_note'])
     return notes
@@ -648,8 +681,9 @@ def run_dialogue(context, on_progress=None):
               'history': [{'text','reply','images'?}...按时间正序], 'now_iso', 'images': [...]?,
               'snapshot': {'sections': {...}, 'meta': {...}}（W02，routes 组装）,
               'turn_id': int|None, 'settings': {...}|None（W03，助手设定注入）}
-    双 Agent 群聊单角色运行另带（group 组装，design doc §3）：'role'（pet/assistant，存在即进入单角色模式）、
-              'route' {'scope','intent'}、'task'、'follows_text'（承接前一位已提交的消息）、
+    双 Agent 群聊单角色运行另带（group 组装，docs/agent-w18-spec.md）：'role'（pet/assistant，存在即进入单角色模式）、
+              'route' {'scope','intent'}（派发记录，仅入轨迹）、'task'、'handoff_allowed'（本轮是否允许转交）、
+              'handoff_from'（爱宠转交时的原话）、'follows_text'（承接前一位已提交的消息）、
               'quoted_speaker'/'quoted_text'（被引用的消息）、'deadline'（整轮截止，monotonic）、
               'turn_budget' {'calls_left'}（整轮模型调用预算）、'message_id'/'route_id'、
               'replayed'（本消息此前尝试已生效的副作用条目）、'on_effect'(name, arguments, outcome)
@@ -662,7 +696,7 @@ def run_dialogue(context, on_progress=None):
     异常向上抛（routes 按失败保留原话处理）。
     """
     role = context.get('role')
-    pet_handoff = role == 'pet' and context.get('pet_handoff')
+    handoff_allowed = bool(context.get('handoff_allowed'))
     budget = ROLE_BUDGETS.get(role) or {}
     max_rounds = budget.get('rounds', MAX_TOOL_ROUNDS)
     base_tokens = budget.get('tokens', 1800)
@@ -675,10 +709,9 @@ def run_dialogue(context, on_progress=None):
         deadline = min(deadline, context['deadline'])
     search_on = search_enabled()
     recording_on = actions_service.recording_enabled()  # W10 D3：默认关停，开启才挂录音工具
-    # 单角色模式：范围与意图来自已持久化的路由，发言身份即角色（不从模型正文识别）
-    route = context.get('route') or {}
-    stance = ({'scope': route.get('scope', 'unknown'), 'intent': route.get('intent', 'unknown'),
-               'speaker': role} if role else None)
+    # W18：不再有前置意图路由。范围来源改为角色自身——爱宠固定 allowed（它的边界由角色门在代码里执行），
+    # 照料助手由它在这次调用的首行自报（服务端剥离该行），自报 out_of_scope 时不挂工具与联网。
+    stance = ({'scope': 'allowed', 'intent': 'social', 'speaker': role} if role == 'pet' else None)
     sources, tool_summary, messages_trace, proposals = [], [], [], []
     action_results = []      # W10 直写动作回执（明确保存草稿等），routes 追加 action 块
     refreshed_turn_ids = []
@@ -690,7 +723,7 @@ def run_dialogue(context, on_progress=None):
     snap = context.get('snapshot')
     user_id = context.get('user_id')
     image_notes = []
-    history = [] if pet_handoff else context['history'][-HISTORY_TURNS:]
+    history = context['history'][-HISTORY_TURNS:]
     inline_history_index = None  # W07 D1：最近 1 条带图历史内联，更早降级占位
     for index, old in enumerate(history):
         if old.get('images'):
@@ -698,9 +731,8 @@ def run_dialogue(context, on_progress=None):
     if role:
         system_content = role_system_prompt(
             role, search_on=search_on, recording_on=recording_on, snapshot=snap,
-            settings=context.get('settings'), task=context.get('task') or '')
-        if pet_handoff:
-            system_content += '\n只承接一句，从以下选一句原样发出：\n' + '\n'.join(_PET_HANDOFF_LINES)
+            settings=context.get('settings'), task=context.get('task') or '',
+            handoff=handoff_allowed)
     else:
         system_content = system_prompt(search_on, recording_on) + '\n实时快照：' + build_context(snap) \
             + f"\n本轮指向：{context['target']}。"
@@ -712,15 +744,14 @@ def run_dialogue(context, on_progress=None):
             old['text'], old.get('images') or [], index == inline_history_index, user_id, image_notes)})
         if old['reply']:
             input_items.append({'role': 'assistant', 'content': old['reply']})
-    owner_content = ('主人点名了你，陪伴一句并把专业部分交给照料助手。' if pet_handoff else
-                     _owner_content(context.get('assigned_request', context['text']),
-                                    context.get('images') or [], True, user_id, image_notes))
-    if role and not pet_handoff:
+    owner_content = _owner_content(context.get('assigned_request', context['text']),
+                                   context.get('images') or [], True, user_id, image_notes)
+    if role:
         # 群聊补充说明是服务端确定性生成的（引用、承接与重试核对），不是主人原话，也不是模型输出
         for note in _role_notes(context):
             owner_content = _append_note(owner_content, note)
     input_items.append({'role': 'user', 'content': owner_content})
-    images_trace = [] if pet_handoff else _image_summary(context.get('images') or [], 'current', True)
+    images_trace = _image_summary(context.get('images') or [], 'current', True)
     for index, old in enumerate(history):
         if old.get('images'):
             images_trace.extend(_image_summary(old['images'], 'history', index == inline_history_index))
@@ -729,6 +760,7 @@ def run_dialogue(context, on_progress=None):
 
     rounds = 0
     degraded = []
+    handoff_requested = False
     visible_speaker = role or 'assistant'
     empty_retries = 0
     stance_retry_reminded = False
@@ -766,22 +798,22 @@ def run_dialogue(context, on_progress=None):
             degraded.append('tool_rounds_exhausted')
         elif not allow_tools:
             degraded.append('wall_clock_exceeded')
-        # 单角色模式下范围未确认（unknown）或范围外时不给任何工具：路由没放行就不挂
-        schemas = registry.schemas_for(registry.DIALOGUE, stance['scope'] if stance else None,
+        # 工具挂载：范围未知（首轮还没自报）或 allowed 时挂载；自报 out_of_scope 后不再挂。
+        # W18：范围由角色自报（爱宠固定 allowed，照料助手自报），不再有前置路由放行。
+        scope_now = stance['scope'] if stance else None
+        schemas = registry.schemas_for(registry.DIALOGUE, scope_now,
                                        search_enabled=search_on, recording_enabled=recording_on,
-                                       role=role) \
-            if allow_tools and not pet_handoff and not (role and stance['scope'] != 'allowed') else []
+                                       role=role, handoff=handoff_allowed) \
+            if allow_tools and scope_now != 'out_of_scope' else []
         # W06 挂载策略：开关开启 + stance 非 out_of_scope（首轮 None 也挂，§2.1）
         # + 累计 < 2 次 + 该轮仍允许工具（§4.2）。执行在供应商侧，无法先于执行拦截（P00 §3 例外）。
-        # 群聊里只有照料助手能联网：路由判定允许后才挂载（design doc §3.4）
+        # 群聊里只有照料助手能联网；爱宠任何时候都不联网。
         mount_search = (search_on and allow_tools
-                        and (stance or {}).get('scope') != 'out_of_scope'
-                        and (not role or (role == 'assistant' and stance['scope'] == 'allowed'))
+                        and scope_now != 'out_of_scope'
+                        and (not role or role == 'assistant')
                         and len(web_search_calls) < SEARCH_CALL_LIMIT)
         on_text = (lambda text: on_progress(visible_speaker, text)) if on_progress else None
-        if pet_handoff:
-            on_text = None  # 先验收承接句，再交付，候选正文不会直接出现在气泡里
-        elif role == 'pet' and on_progress:
+        if role == 'pet' and on_progress:
             on_text = lambda text: on_progress('pet', _short_pet_reply(text))
         stream = RoleDeltaFilter(on_text, role_names) if role else DeltaFilter(on_text)
         if turn_budget is not None:
@@ -799,8 +831,14 @@ def run_dialogue(context, on_progress=None):
             before, stripped = stripped, _strip_role_prefix(stripped, role_names)
             marks_stripped += before != stripped
             if round_stance is not None:
-                # 单角色模式不采信模型自报的范围与身份（以持久化路由为准），只留痕
-                messages_trace.append({'role': role, 'ignored_stance': round_stance})
+                if role == 'assistant':
+                    # W18：范围由照料助手自报（不再有前置路由），服务端据此门控工具与联网；
+                    # 发言身份仍由服务端固定，不采信模型自报的身份。
+                    stance = {'scope': round_stance['scope'], 'intent': round_stance['intent'],
+                              'speaker': role}
+                    messages_trace.append({'role': role, 'stance': round_stance})
+                else:
+                    messages_trace.append({'role': role, 'ignored_stance': round_stance})
         elif round_stance is not None:
             if stance is None:
                 stance = round_stance
@@ -808,14 +846,6 @@ def run_dialogue(context, on_progress=None):
             messages_trace.append({'role': 'assistant', 'stance': round_stance, 'text': stripped[:2000]})
         elif stripped:
             messages_trace.append({'role': role or 'assistant', 'text': stripped[:2000]})
-        if pet_handoff:
-            candidate = stripped.strip()
-            if candidate not in _PET_HANDOFF_LINES or turn['function_calls']:
-                degraded.append('pet_handoff_constrained')
-                candidate = _PET_HANDOFF_LINES[0]
-            messages_trace.append({'role': role, 'text': candidate, 'kind': 'handoff'})
-            stripped = candidate
-            break
         round_search = turn.get('web_search_calls') or []
         # citations 每轮都收（不再限于有 web_search_call 的轮）：annotations 可能出现在
         # 任何后续轮的 message 上（2026-11-23 E35 归因）
@@ -937,7 +967,14 @@ def run_dialogue(context, on_progress=None):
                 for turn_id in gate['result'].get('refreshedTurnIds') or []:
                     if isinstance(turn_id, int) and turn_id not in refreshed_turn_ids:
                         refreshed_turn_ids.append(turn_id)
+            if name == registry.HANDOFF_TOOL and gate['allowed']:
+                # W18：爱宠转交照料助手。转交已执行，专业部分不再由爱宠回答。
+                handoff_requested = True
         messages_trace.append({'tool_round': rounds, 'calls': tool_summary[-len(calls):]})
+        if handoff_requested:
+            # 转交后本轮立即收尾：不再追问模型（省一次调用），照料助手在同一回合接着回答专业部分
+            messages_trace.append({'handoff': True})
+            break
         if round_search:
             # 搜索结果不跨轮保留：本轮搜索记录与 citations 在下一轮前显式带回（确定性注入）
             messages_trace.append({'search_carryover': True})
@@ -990,11 +1027,15 @@ def run_dialogue(context, on_progress=None):
                        for entry in list(merged.values())[:MAX_WEB_SOURCES])
     default_speaker = stance['speaker'] if stance else 'assistant'
     if role:
-        if role == 'pet' and not pet_handoff:
+        if role == 'pet':
             limited = _short_pet_reply(stripped)
             if limited != stripped.strip():
                 degraded.append('pet_reply_shortened')
             stripped = limited
+            if handoff_requested and not stripped.strip():
+                # 转交时爱宠没留下陪伴话：用服务端兜底承接句，避免出现空消息
+                degraded.append('pet_handoff_default_line')
+                stripped = _PET_HANDOFF_LINES[0]
         if SPEAKER_RE.search(stripped):
             # 单角色消息里不能再出现发言标记（旧客户端据此划分发言）：换括号并留标记
             degraded.append('stray_speaker_mark')
@@ -1022,14 +1063,18 @@ def run_dialogue(context, on_progress=None):
         trace['snapshot'] = {'chars': len(build_context(snap, None if role != 'pet' else PET_SNAPSHOT_SECTIONS)),
                              'trimmed': snap['meta'].get('trimmed'), 'sections': shown}
     if role:
-        # 群聊轨迹：共享回合 ID，另带角色与它产出的消息、所依据的路由（谁被选中、谁调了工具可追溯）
+        # 群聊轨迹：共享回合 ID，另带角色与它产出的消息、所依据的派发记录（谁被选中、谁调了工具可追溯）
         trace.update({'role': role, 'messageId': context.get('message_id'),
                       'routeId': context.get('route_id')})
         trace['budget']['speakerMarksStripped'] = marks_stripped
+        if handoff_requested:
+            trace['conclusion']['reason_code'] = (
+                'handoff+degraded:' + ','.join(degraded) if degraded else 'handoff')
     return {'reply': stripped.strip(), 'blocks': blocks, 'speaker': blocks[0]['speaker'] if blocks else default_speaker,
             'sources': sources, 'stance': stance or {'scope': 'unknown', 'intent': 'unknown', 'speaker': 'assistant'},
             'degraded': bool(degraded), 'trace': trace, 'proposals': proposals,
-            'actions': action_results, 'refreshedTurnIds': refreshed_turn_ids}
+            'actions': action_results, 'refreshedTurnIds': refreshed_turn_ids,
+            'handoff': handoff_requested}
 
 
 _BACKGROUND_SYSTEM_BASE = (

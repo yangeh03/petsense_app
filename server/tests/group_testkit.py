@@ -1,8 +1,11 @@
 """双 Agent 群聊测试公共件：脚本化模型桩、假 WS 连接与隔离的测试基类。
 
-模型一律不打真实接口：Script 按调用种类（路由 / 爱宠 / 照料助手 / 旧路径）与轮次返回脚本里的内容，
+模型一律不打真实接口：Script 按调用种类（爱宠 / 照料助手 / 旧路径）与轮次返回脚本里的内容，
 并记录每次调用的输入，供断言「谁拿到了什么提示、什么工具」。
+
+W18 起没有前置意图路由：派发由主人的选择决定，模型桩只按角色分种类。
 """
+
 import json
 import os
 import time
@@ -15,7 +18,7 @@ from helpers import fresh_db
 from sqlalchemy import select
 from test_pets import seed_user_with_pet
 
-from petsense.agent import group, jobs, loop, model, router, runs, ws
+from petsense.agent import group, jobs, loop, model, runs, ws
 from petsense.agent import routes as agent_routes
 from petsense.agent.inbox_routes import bp as inbox_bp
 from petsense.db import session_scope, utc_now
@@ -36,8 +39,6 @@ def classify(input_items):
     """识别这次模型调用的种类：看系统提示（与验收夹具同一判据）。"""
     system = input_items[0].get('content') if input_items else ''
     system = system if isinstance(system, str) else ''
-    if system == router.SYSTEM_PROMPT:
-        return 'router'
     if system.startswith(loop._PET_SYSTEM_PROMPT[:24]):
         return 'pet'
     if system.startswith(loop._GROUP_ASSISTANT_HEAD[:24]):
@@ -103,13 +104,19 @@ class Script:
                 calls.append({'name': name, 'call_id': f'call_{kind}_{index}_{number}',
                               'arguments': json.dumps(arguments, ensure_ascii=False)})
         if text:
-            emit = on_delta or (lambda _text: None)  # 路由调用不带流式回调：只返回完整正文
+            emit = on_delta or (lambda _text: None)  # 旧路径的调用不带流式回调：只返回完整正文
             pieces = step.get('chunks') if isinstance(step, dict) and on_delta else None
+            head, sep, body = text.partition('\n')
             if pieces:
                 size = max(1, -(-len(text) // pieces))
                 for offset in range(0, len(text), size):
                     emit(text[:offset + size])
                     time.sleep(0.08)  # 段间隔超过 WS 节流窗口、小于落库间隔：多段共享同一落库版本
+            elif sep and head.startswith('{'):
+                # 范围声明行先出（主人看不到），正文再分两段：与服务端的流式行为一致
+                emit(head + sep + body[:len(body) // 2])
+                time.sleep(0.08)
+                emit(text)
             else:
                 emit(text[:len(text) // 2] or text)
                 gate = step.get('gate') if isinstance(step, dict) else None
@@ -125,12 +132,21 @@ class Script:
         return result
 
 
-def route_json(**overrides):
-    """路由模型的原始输出。"""
-    raw = {'scope': 'allowed', 'intent': 'read', 'companion': True, 'professional': True,
-           'order': ['pet', 'assistant'], 'follows': False, 'reason': '测试路由'}
-    raw.update(overrides)
-    return json.dumps(raw, ensure_ascii=False)
+def stance_json(scope='allowed', intent='read'):
+    """照料助手的范围声明行（W18：范围由它自己这一次调用给出，服务端剥离、不上屏）。"""
+    return json.dumps({'scope': scope, 'intent': intent, 'speaker': 'assistant'}, ensure_ascii=False)
+
+
+def say(text='', scope='allowed', intent='read', **extra):
+    """照料助手的一轮回复：首行范围声明 + 正文（服务端把声明行剥离，主人只看到正文）。"""
+    step = {'text': stance_json(scope, intent) + ('\n' + text if text else '')}
+    step.update(extra)
+    return step
+
+
+def pet_says(text='', reason='这题需要查证数据'):
+    """爱宠的一轮：先说一句陪伴话，再调用转交工具把专业部分交给照料助手。"""
+    return {'text': text, 'calls': [('handoff_to_assistant', {'reason': reason})]}
 
 
 class FakeSocket:

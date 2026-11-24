@@ -1,4 +1,4 @@
-"""双 Agent 群聊：分帧与轮询、部分失败与重试、中断恢复、副作用不重复（design doc §4、§5）。"""
+"""双 Agent 群聊：分帧与轮询、部分失败与重试、中断恢复、副作用不重复（docs/agent-w18-spec.md）。"""
 import json
 import os
 import threading
@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from sqlalchemy import select
 
-from group_testkit import MEMORY_ARGS, PROTOCOL, GroupBase, legacy_turn, other_user_pet, route_json, user_texts
+from group_testkit import MEMORY_ARGS, PROTOCOL, GroupBase, legacy_turn, other_user_pet, say, user_texts
 from petsense.agent import group, jobs, loop, model
 from petsense.db import session_scope, utc_now
 from petsense.db.models.agent import AgentMessage, AgentTurn
@@ -32,8 +32,8 @@ def snapshots(sock, status=None):
 class StreamingTests(GroupBase):
     def test_partial_text_is_persisted_for_polling(self):
         gate = threading.Event()
-        self.use(router=route_json(), pet={'text': '今天也想你！', 'gate': gate}, assistant='还没有数据。')
-        turn_id = self.accepted('陪我聊聊，也看看今天')
+        self.use(pet={'text': '今天也想你！', 'gate': gate}, assistant=say('还没有数据。'))
+        turn_id = self.accepted('陪我聊聊，也看看今天', target='both')
         jobs.tick()
         self.assertTrue(self.wait_until(lambda: len(self.rows(turn_id)) == 2
                                         and self.rows(turn_id)[0]['text'] == '今天也'), '首段落库后轮询才看得到')
@@ -56,8 +56,7 @@ class StreamingTests(GroupBase):
     def test_frames_between_two_snapshots_share_a_version_with_growing_text(self):
         """落库有节流：两次落库之间的多段增量共享同一版本，正文是累计的、只会变长。"""
         text = '今天也在陪着你呀。'
-        self.use(router=route_json(companion=True, professional=False, order=['pet']),
-                 pet={'text': text, 'chunks': 3})
+        self.use(pet={'text': text, 'chunks': 3})
         sock = self.connect()
         self.accepted('想我了吗')
         self.settle()
@@ -72,11 +71,10 @@ class StreamingTests(GroupBase):
     def test_text_replaced_after_a_tool_round_carries_a_higher_version(self):
         """「累计正文」只在一次模型调用内只增不减：工具轮之后模型重新起头时，这段增量必须带更高的
         版本——客户端只接受「版本更高，或同版本且正文更长」，否则会把替换当成乱序的旧帧扔掉。"""
-        self.use(router=route_json(companion=False, order=['assistant']),
-                 assistant=[{'text': '我先查一下记录。', 'calls': [('query_observations', WINDOW)]},
-                            '今天没有走动数据。'])
+        self.use(assistant=[say('我先查一下记录。', calls=[('query_observations', WINDOW)]),
+                            say('今天没有走动数据。')])
         sock = self.connect()
-        self.accepted('今天走了多久')
+        self.accepted('今天走了多久', target='assistant')
         self.settle()
         frames = deltas(sock, 'assistant')
         self.assertEqual([frame['text'] for frame in frames],
@@ -93,10 +91,10 @@ class StreamingTests(GroupBase):
 
     def test_search_hint_is_a_status_and_web_sources_belong_to_the_assistant_message(self):
         text = '查到了：睡够十二小时也正常。'
-        script = self.use(router=route_json(intent='search'), pet='我在呢～',
-                          assistant={'hint': True, 'web': True, 'text': text})
+        script = self.use(pet='我在呢～',
+                          assistant=say(text, hint=True, web=True))
         sock = self.connect()
-        turn_id = self.accepted('小白，帮我联网核实一下它睡这么久正常吗')
+        turn_id = self.accepted('小白，帮我联网核实一下它睡这么久正常吗', target='both')
         self.settle()
         pet_msg, assistant_msg = self.rows(turn_id)
         self.assertEqual([frame for frame in sock.frames if frame['type'] == 'message_status'],
@@ -113,12 +111,12 @@ class StreamingTests(GroupBase):
                          ['https://example.com/source'], '回合级 sources 仍镜像给旧客户端')
 
     def test_tool_sources_belong_to_the_message_that_queried(self):
-        self.use(router=route_json(intent='read'), pet=[
+        self.use(pet=[
             {'calls': [('query_observations', WINDOW)]}, '我陪着你。'],
-            assistant=[{'calls': [('query_observations', WINDOW)]}, '那天没有走动记录。'])
-        turn_id = self.accepted('陪我聊聊，也查查那天走了多久')
+            assistant=[say('', intent='read', calls=[('query_observations', WINDOW)]), say('那天没有走动记录。')])
+        turn_id = self.accepted('陪我聊聊，也查查那天走了多久', target='both')
         self.settle()
-        pet_run, assistant_run = self.runs_of(turn_id)[1:]
+        pet_run, assistant_run = self.runs_of(turn_id)
         self.assertEqual((pet_run['toolSummary'][0]['allowed'], pet_run['toolSummary'][0]['reason']),
                          (False, 'role_not_allowed'))
         self.assertEqual((assistant_run['toolSummary'][0]['allowed'], assistant_run['toolSummary'][0]['reason']),
@@ -129,10 +127,9 @@ class StreamingTests(GroupBase):
                          [('observations', '2025-12-31T16:00:00.000Z', '2026-01-01T16:00:00.000Z')])
 
     def test_second_message_failure_and_retry_reruns_only_the_failed_message(self):
-        script = self.use(router=route_json(), pet='我在呢～',
-                          assistant=[{'raise': True}, '我查了：还没有数据。'])
+        script = self.use(pet='我在呢～', assistant=[{'raise': True}, say('我查了：还没有数据。')])
         sock = self.connect()
-        turn_id = self.accepted('陪我聊聊，也看看走了多久')
+        turn_id = self.accepted('陪我聊聊，也看看走了多久', target='both')
         self.settle()
         pet_msg, assistant_msg = self.rows(turn_id)
         self.assertEqual((pet_msg['status'], pet_msg['text']), ('complete', '我在呢～'), '一位失败不影响另一位')
@@ -151,7 +148,7 @@ class StreamingTests(GroupBase):
         self.assertEqual(response.status_code, 202, response.get_data(as_text=True))
         self.assertEqual([(item['role'], item['status']) for item in response.json['messages']],
                          [('pet', 'complete'), ('assistant', 'queued')])
-        self.assertEqual([run['status'] for run in self.runs_of(turn_id)], ['complete', 'complete', 'failed'])
+        self.assertEqual([run['status'] for run in self.runs_of(turn_id)], ['complete', 'failed'])
         self.settle()
 
         pet_msg, assistant_msg = self.rows(turn_id)
@@ -160,10 +157,11 @@ class StreamingTests(GroupBase):
         self.assertIsNone(assistant_msg['errorNote'])
         self.assertEqual(assistant_msg['id'], snapshots(sock)[2]['id'], '重试沿用同一个消息 ID，不新增消息')
         self.assertGreater(assistant_msg['version'], failed_version, '版本只增不减，晚到的旧帧不会覆盖')
-        self.assertEqual((len(script.of('router')), len(script.of('pet')), len(script.of('assistant'))), (1, 1, 2))
-        self.assertEqual([run['status'] for run in self.runs_of(turn_id)], ['complete', 'complete', 'failed', 'complete'])
-        self.assertEqual([run['messageId'] for run in self.runs_of(turn_id)[1:]],
-                         [int(pet_msg['id'][1:])] + [int(assistant_msg['id'][1:])] * 2,
+        self.assertEqual((len(script.of('pet')), len(script.of('assistant'))), (1, 2))
+        self.assertEqual([run['status'] for run in self.runs_of(turn_id)],
+                         ['complete', 'failed', 'complete'])
+        self.assertEqual([run['messageId'] for run in self.runs_of(turn_id)],
+                         [int(pet_msg['id'][1:]), int(assistant_msg['id'][1:]), int(assistant_msg['id'][1:])],
                          '成功的那条只有一条轨迹；失败与重试两次运行都挂在重试的那条消息上')
         self.assertEqual(self.turn_row(turn_id).reply, '【爱宠】我在呢～\n【照料助手】我查了：还没有数据。')
         self.assertEqual(sock.frames[-1]['turn']['status'], 'complete')
@@ -171,8 +169,8 @@ class StreamingTests(GroupBase):
 
     def test_retry_conflicts(self):
         gate = threading.Event()
-        script = self.use(router=route_json(), pet={'text': '我在呢～', 'gate': gate}, assistant='还没有数据。')
-        turn_id = self.accepted('陪我聊聊')
+        script = self.use(pet={'text': '我在呢～', 'gate': gate}, assistant=say('还没有数据。'))
+        turn_id = self.accepted('陪我聊聊', target='both')
         jobs.tick()
         self.assertTrue(self.wait_until(lambda: script.counts.get('pet') == 1))
         response = self.retry(turn_id)
@@ -194,9 +192,9 @@ class StreamingTests(GroupBase):
         self.assertEqual(response.status_code, 404)
 
     def test_turn_call_budget_is_enforced(self):
-        self.use(router=route_json(), pet='我在呢～', assistant='我查了：还没有数据。')
+        self.use(pet='我在呢～', assistant=say('我查了：还没有数据。'))
         with patch.object(group, 'TURN_CALL_BUDGET', 1):
-            turn_id = self.accepted('陪我聊聊，也看看走了多久')
+            turn_id = self.accepted('陪我聊聊，也看看走了多久', target='both')
             self.settle()
         pet_msg, assistant_msg = self.rows(turn_id)
         self.assertEqual(pet_msg['status'], 'complete')
@@ -220,19 +218,20 @@ class StreamingTests(GroupBase):
         self.assertEqual(group.ERROR_NOTES['timeout'], BUDGET_NOTE)
 
     def test_side_effect_is_journaled_and_not_repeated_on_retry(self):
-        script = self.use(router=route_json(intent='write'), pet='我记住啦。',
-                          assistant=[{'calls': [('write_memory', MEMORY_ARGS)]}, {'raise': True},
-                                     {'calls': [('write_memory', MEMORY_ARGS)]}, '记下了，今天去了公园。'])
-        turn_id = self.accepted('我今天带它去公园跑了两圈，帮我记下来')
+        script = self.use(pet='我记住啦。',
+                          assistant=[say('', intent='write', calls=[('write_memory', MEMORY_ARGS)]), {'raise': True},
+                                     say('', intent='write', calls=[('write_memory', MEMORY_ARGS)]),
+                                     say('记下了，今天去了公园。')])
+        turn_id = self.accepted('我今天带它去公园跑了两圈，帮我记下来', target='assistant')
         self.settle()
-        self.assertEqual([item['status'] for item in self.rows(turn_id)], ['complete', 'failed'])
+        self.assertEqual([item['status'] for item in self.rows(turn_id)], ['failed'])
         self.assertEqual(self.memory_count(), 1, '第一次尝试里写入已经生效')
         self.assertEqual([(entry['name'], entry['status']) for entry in self.journal(turn_id, 'assistant')],
                          [('write_memory', 'done')])
 
         self.assertEqual(self.retry(turn_id).status_code, 202)
         self.settle()
-        pet_msg, assistant_msg = self.rows(turn_id)
+        assistant_msg = self.rows(turn_id)[0]
         self.assertEqual((assistant_msg['status'], assistant_msg['text']),
                          ('complete', '记下了，今天去了公园。'))
         self.assertEqual(self.memory_count(), 1, '同一句话不写第二遍')
@@ -243,27 +242,26 @@ class StreamingTests(GroupBase):
         self.assertIn('其中有些操作已经生效，不要重复执行', notes)
         self.assertIn('已保存一条记忆（主人今天带我去公园跑了两圈）', notes)
         self.assertNotIn('其中有些操作已经生效', '\n'.join(user_texts(script.of('assistant')[0]['items'])))
-        self.assertEqual(len(script.of('pet')), 1, '成功的那条不重新生成')
         self.assertEqual([(entry['name'], entry['status']) for entry in self.journal(turn_id, 'assistant')],
                          [('write_memory', 'done')], '回放的是已持久化的结果，不再执行一次')
 
     def test_failed_journal_blocks_the_effect(self):
-        self.use(router=route_json(intent='write'), pet='我记住啦。',
-                 assistant=[{'calls': [('write_memory', MEMORY_ARGS)]}, '这次没能记下来。'])
+        self.use(assistant=[say('', intent='write', calls=[('write_memory', MEMORY_ARGS)]),
+                            say('这次没能记下来。')])
         with patch.object(group, '_effect_journal', return_value=lambda *_args: False):
-            turn_id = self.accepted('我今天带它去公园跑了两圈，帮我记下来')
+            turn_id = self.accepted('我今天带它去公园跑了两圈，帮我记下来', target='assistant')
             self.settle()
         self.assertEqual(self.memory_count(), 0, '写前意图落不了库就不执行，宁可少做不可重复')
         assistant_run = self.runs_of(turn_id)[-1]
         self.assertEqual((assistant_run['toolSummary'][0]['allowed'], assistant_run['toolSummary'][0]['reason']),
                          (False, 'effect_journal_failed'))
-        self.assertEqual([item['status'] for item in self.rows(turn_id)], ['complete', 'complete'])
+        self.assertEqual([item['status'] for item in self.rows(turn_id)], ['complete'])
 
     def test_interrupted_message_is_marked_failed_and_the_rest_continues(self):
-        """进程在生成中途重启：路由已落库、那条消息停在生成中；调度重新领取后如实标记并继续其余消息。"""
-        script = self.use(router=route_json(), pet='我在呢～', assistant='还没有数据。')
-        turn_id = self.accepted('陪我聊聊')
-        group._route_stage(turn_id, utc_now())
+        """进程在生成中途重启：派发已落库、那条消息停在生成中；调度重新领取后如实标记并继续其余消息。"""
+        script = self.use(pet='我在呢～', assistant=say('还没有数据。'))
+        turn_id = self.accepted('陪我聊聊', target='both')
+        group._dispatch_stage(turn_id, utc_now())
         with session_scope() as s:
             row = s.execute(select(AgentMessage).where(AgentMessage.turn_id == turn_id,
                                                        AgentMessage.role == 'pet')).scalar_one()
@@ -277,10 +275,10 @@ class StreamingTests(GroupBase):
         self.assertEqual(self.turn_row(turn_id).reply,
                          f'【爱宠】（{INTERRUPTED_NOTE}）\n【照料助手】还没有数据。')
         runs = self.runs_of(turn_id)
-        self.assertEqual([run['status'] for run in runs], ['complete', 'failed', 'complete'],
+        self.assertEqual([run['status'] for run in runs], ['failed', 'complete'],
                          '中断的那条此前没有轨迹：恢复时补一条失败运行')
-        self.assertEqual((runs[1]['conclusion']['speaker'], runs[1]['conclusion']['reason_code'],
-                          runs[1]['error'], runs[1]['messageId']),
+        self.assertEqual((runs[0]['conclusion']['speaker'], runs[0]['conclusion']['reason_code'],
+                          runs[0]['error'], runs[0]['messageId']),
                          ('pet', 'interrupted', 'interrupted', int(pet_msg['id'][1:])))
 
         self.assertEqual(self.retry(turn_id).status_code, 202)
@@ -288,12 +286,12 @@ class StreamingTests(GroupBase):
         pet_msg, assistant_msg = self.rows(turn_id)
         self.assertEqual([(item['status'], item['text'], item['error']) for item in (pet_msg, assistant_msg)],
                          [('complete', '我在呢～', None), ('complete', '还没有数据。', None)])
-        self.assertEqual((len(script.of('router')), len(script.of('pet')), len(script.of('assistant'))), (1, 1, 1))
+        self.assertEqual((len(script.of('pet')), len(script.of('assistant'))), (1, 1))
 
     def test_stale_pending_turn_expires_on_read_and_retry_is_not_stale(self):
-        self.use(router=route_json(), pet='我在呢～', assistant='还没有数据。')
-        turn_id = self.accepted('陪我聊聊')
-        group._route_stage(turn_id, utc_now())
+        self.use(pet='我在呢～', assistant=say('还没有数据。'))
+        turn_id = self.accepted('陪我聊聊', target='both')
+        group._dispatch_stage(turn_id, utc_now())
         with session_scope() as s:
             s.get(AgentTurn, turn_id).created_at = utc_now() - timedelta(seconds=group.STALE_PENDING_S + 10)
             row = s.execute(select(AgentMessage).where(AgentMessage.turn_id == turn_id,
@@ -316,7 +314,7 @@ class StreamingTests(GroupBase):
             self.assertGreaterEqual(s.get(AgentMessage, pet_row_id).version, 5)
 
     def test_crash_while_generating_fails_the_unfinished_message(self):
-        self.use(router=route_json(), pet='我在呢～', assistant='还没有数据。')
+        self.use(pet='我在呢～', assistant=say('还没有数据。'))
         real = group._run_one
 
         def crash_on_assistant(turn_id, item, *args):
@@ -325,7 +323,7 @@ class StreamingTests(GroupBase):
             return real(turn_id, item, *args)
 
         sock = self.connect()
-        turn_id = self.accepted('陪我聊聊')
+        turn_id = self.accepted('陪我聊聊', target='both')
         with patch.object(group, '_run_one', side_effect=crash_on_assistant):
             self.settle()
         pet_msg, assistant_msg = self.rows(turn_id)
@@ -338,10 +336,10 @@ class StreamingTests(GroupBase):
         self.settle()
         self.assertEqual([item['status'] for item in self.rows(turn_id)], ['complete', 'complete'])
 
-    def test_crash_before_routing_fails_the_turn_once(self):
-        self.use(router=route_json(), pet='我在呢～')
+    def test_crash_before_dispatch_fails_the_turn_once(self):
+        self.use(pet='我在呢～')
         turn_id = self.accepted('陪我聊聊')
-        with patch.object(group, '_route_stage', side_effect=RuntimeError('router storage down')):
+        with patch.object(group, '_dispatch_stage', side_effect=RuntimeError('dispatch storage down')):
             self.settle()
         turn = self.turn_row(turn_id)
         self.assertEqual((turn.status, turn.reply), ('failed', group.FAILED_TURN_NOTE))
@@ -353,8 +351,7 @@ class StreamingTests(GroupBase):
         self.assertEqual([run['status'] for run in self.runs_of(turn_id)], [])
 
     def test_next_turn_sees_the_settled_reply_as_history(self):
-        script = self.use(router=[route_json(companion=True, professional=False, order=['pet'])] * 2,
-                          pet=['我在呢～'] * 2)
+        script = self.use(pet=['我在呢～'] * 2)
         self.accepted('在吗')
         self.settle()
         turn_id = self.accepted('今天呢')

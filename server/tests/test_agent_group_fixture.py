@@ -157,7 +157,7 @@ class FixtureTests(unittest.TestCase):
             'text': '你好', 'requestId': 'legacy-2', 'target': 'both'})
         self.assertEqual((refused.status_code, refused.json.get('code')), (400, 'dual_agent_unavailable'))
 
-    # -- 关键路径：路由 → 记录 → WS → 逐帧取证 ------------------------------
+    # -- 关键路径：派发 → 记录 → WS → 逐帧取证 ------------------------------
     def test_turn_runs_through_the_real_stack_and_leaves_a_trace(self):
         sock = self.connect()
         trace = self.run_turn('陪我聊两句', target='both')  # App 里选「两位」时发送的指向
@@ -166,11 +166,11 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(complete(trace), [
             ('pet', 'complete', '想你啦！今天有乖乖等你回家，走动的事让照料助手告诉你。'),
             ('assistant', 'complete', '我查了今天的记录：这项圈还没有上传走动数据，所以暂时给不出今天走了多久。')])
-        # 每位一条独立轨迹：路由一次，爱宠与照料助手各一次，分别挂在自己的消息上
+        # 每位一条独立轨迹（不再有路由运行），分别挂在自己的消息上
         runs = trace['runs']
-        self.assertEqual([run['form'] for run in runs], ['route', 'dialogue', 'dialogue'])
-        self.assertEqual([run['status'] for run in runs], ['complete'] * 3)
-        self.assertEqual([run['messageId'] for run in runs[1:]],
+        self.assertEqual([run['form'] for run in runs], ['dialogue', 'dialogue'])
+        self.assertEqual([run['status'] for run in runs], ['complete'] * 2)
+        self.assertEqual([run['messageId'] for run in runs],
                          [int(message['id'][1:]) for message in trace['messages']])
         self.assertEqual((trace['turn']['status'], trace['turn']['target']), ('complete', 'both'))
         # 逐帧：先是路由后的排队快照，再是领取、增量、终态，最后是整轮完成
@@ -213,7 +213,7 @@ class FixtureTests(unittest.TestCase):
         self.settle()
         trace = self.trace(trace['turnId'])
         self.assertEqual([message['id'] for message in trace['messages']], [pet_id, assistant_id])
-        self.assertEqual([(run['messageId'], run['status']) for run in trace['runs'][2:]],
+        self.assertEqual([(run['messageId'], run['status']) for run in trace['runs'][1:]],
                          [(int(assistant_id[1:]), 'failed'), (int(assistant_id[1:]), 'complete')])
         self.assertEqual((trace['messages'][1]['status'], trace['messages'][1]['error']), ('complete', None))
         again = self.client.post(f'{self.path}/{trace["turnId"]}/retry', headers=self.auth, json={})
@@ -244,22 +244,40 @@ class FixtureTests(unittest.TestCase):
     def test_single_speaker_scenarios(self):
         self.assertEqual(complete(self.run_turn('想我了吗')),
                          [('pet', 'complete', '想啦！一直趴在门口等你。')])
-        trace = self.run_turn('今天走了多久')
+        trace = self.run_turn('只问照料助手')
         self.assertEqual([message['role'] for message in trace['messages']], ['assistant'])
-        self.assertEqual(trace['turn']['target'], 'auto')  # 没选指向时由路由决定谁发言，回合如实保留 auto
-        # 只点了照料助手时即使文字里有寒暄，爱宠也不插话
+        self.assertEqual(trace['turn']['target'], 'assistant', '剧本固定了这一轮的指向')
         self.assertEqual([item['kind'] for item in trace['route']['plan']], ['answer'])
-        # 明确选「两位」时不看路由判断：两位都发言，爱宠在前
+        # 明确选「两位」时不看内容判断：两位都发言，爱宠在前
         both = self.run_turn('想我了吗', target='both')
         self.assertEqual(([message['role'] for message in both['messages']], both['turn']['target']),
                          (['pet', 'assistant'], 'both'))
 
-    def test_named_pet_professional_request_is_split(self):
+    def test_auto_handoff_scenario_adds_the_assistant_message_after_the_pet(self):
+        """W18 核心路径：默认模式下爱宠转交，照料助手那条随后出现，专业答案只在那一条。"""
+        trace = self.run_turn('它今天走了多久')
+        self.assertEqual(trace['scenario'], 'handoff')
+        self.assertEqual([message['role'] for message in trace['messages']], ['pet', 'assistant'])
+        self.assertEqual(complete(trace)[0], ('pet', 'complete', '这个我不懂，让照料助手帮你看看。'))
+        self.assertIn('项圈还没有上传走动数据', complete(trace)[1][2])
+        self.assertNotIn('走动数据', complete(trace)[0][2], '爱宠那条不报数据')
+        pet_run, assistant_run = trace['runs']
+        self.assertEqual(pet_run['conclusion']['reason_code'], 'handoff')
+        self.assertEqual([(item['name'], item['allowed']) for item in pet_run['toolSummary']],
+                         [('handoff_to_assistant', True)])
+        self.assertEqual(assistant_run['toolSummary'], [], '这一轮助手只按剧本回答，没有再调工具')
+        # 转交之后照料助手那条才建：位置在爱宠之后
+        self.assertEqual([message['position'] for message in trace['messages']], [0, 1])
+
+    def test_named_pet_professional_request_answers_with_the_pet_only(self):
+        """D1：只点了爱宠，专业问题也只有爱宠回答——它说不懂并建议去问照料助手。"""
         trace = self.run_turn('我今天有点累')
-        pet_run = next(run for run in trace['runs'] if run['messageId'] == int(trace['messages'][0]['id'][1:]))
-        self.assertEqual((trace['messages'][0]['kind'], pet_run['toolSummary']), ('respond', []))
-        self.assertIn('走动', trace['messages'][1]['text'])
-        self.assertNotIn('走动数据', trace['messages'][0]['text'].split('让照料助手')[0])
+        self.assertEqual([message['role'] for message in trace['messages']], ['pet'])
+        self.assertEqual(trace['turn']['target'], 'pet')
+        pet_run = trace['runs'][0]
+        self.assertEqual((pet_run['toolSummary'], trace['messages'][0]['kind']), ([], 'respond'))
+        self.assertIn('照料助手', trace['messages'][0]['text'])
+        self.assertNotIn('还没有走动数据', trace['messages'][0]['text'], '爱宠那条不报数据')
 
     def test_drop_scenario_disconnects_the_client_and_the_turn_still_finishes(self):
         sock = self.connect()
@@ -331,15 +349,15 @@ class FixtureTests(unittest.TestCase):
                          ['我来陪你。数据让照料助手说。',
                           '查到了：今天暂时没有走动数据，有数据时我会在这一条里告诉你。'])
 
-    def test_router_failure_clarifies_once_without_tools(self):
-        trace = self.run_turn('路由异常')
-        route = trace['route']
-        self.assertEqual((route['source'], route['scope'], [item['role'] for item in route['plan']]),
-                         ('fallback', 'unknown', ['assistant']))
-        self.assertEqual([run['status'] for run in trace['runs']], ['failed', 'complete'])
-        self.assertEqual(trace['runs'][1]['toolSummary'], [])
-        self.assertEqual([message['kind'] for message in trace['messages']], ['clarify'])
-        self.assertEqual(complete(self.run_turn('想我了吗'))[0][:2], ('pet', 'complete'))  # 之后照常重新路由
+    def test_out_of_scope_is_refused_without_tools(self):
+        """照料助手自报范围外：工具不挂载，如实拒答（trace 里 scope=out_of_scope）。"""
+        trace = self.run_turn('帮我写段代码')
+        self.assertEqual(trace['scenario'], 'scope_out')
+        self.assertEqual([message['role'] for message in trace['messages']], ['pet', 'assistant'])
+        self.assertEqual(trace['route']['scope'], 'out_of_scope')
+        self.assertEqual(trace['runs'][-1]['toolSummary'], [])
+        self.assertIn('帮不了', trace['messages'][1]['text'])
+        self.assertEqual(complete(self.run_turn('想我了吗'))[0][:2], ('pet', 'complete'))  # 之后照常重新派发
 
     def test_scenario_override_and_reset(self):
         self.assertEqual(self.client.post('/__test__/scenario', json={'name': 'nope'}).status_code, 400)

@@ -50,10 +50,11 @@ class AgentRun(Base):
 
 
 class AgentRoute(Base):
-    """双 Agent 群聊的路由记录（docs/agent-dual-agent-chat-design.md §3–§4）。
+    """双 Agent 群聊的派发记录（docs/agent-w18-spec.md §3）。
 
-    路由器只分类不发言；发言者、顺序与任务种类由服务端按校验规则计算后随路由一并持久化，
-    重试沿用同一份分发结果（不重新路由）。raw_json 保留路由器原始输出供审计。
+    W18 起不再有前置意图路由：这一行记的是「主人本轮的选择 → 发言计划」，由服务端确定性生成，
+    重试沿用同一份派发结果（不重新派发）。scope/intent 由照料助手在它那次调用里自报后回填
+    （自报前为 unknown）。plan_json 是按发言顺序的计划项，raw_json 保留派发依据供审计。
     """
     __tablename__ = 'agent_routes'
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -65,8 +66,8 @@ class AgentRoute(Base):
     professional = Column(Integer, nullable=False, default=0)
     follows = Column(Integer, nullable=False, default=0)  # 第二位是否承接第一位已发出的消息
     reason = Column(Text, nullable=True)
-    source = Column(String(16), nullable=False)      # model / fallback
-    plan_json = Column(Text, nullable=False, default='[]')  # [{'role','kind','follows'}] 按发言顺序
+    source = Column(String(16), nullable=False)      # target（按主人的选择派发）
+    plan_json = Column(Text, nullable=False, default='[]')  # [{'role','kind','follows','handoff'}] 按发言顺序
     raw_json = Column(Text, nullable=True)
     created_at = Column(UTCDatetime, nullable=False)
 
@@ -84,7 +85,7 @@ class AgentMessage(Base):
     pet_id = Column(Integer, ForeignKey('pets.id'), nullable=False, index=True)
     role = Column(String(16), nullable=False)        # pet / assistant
     position = Column(Integer, nullable=False, default=0)
-    kind = Column(String(16), nullable=False)        # respond / acknowledge / answer / clarify
+    kind = Column(String(16), nullable=False)        # respond / answer / handoff（爱宠转交照料助手）
     follows = Column(Integer, nullable=False, default=0)
     status = Column(String(16), nullable=False)
     text = Column(Text, nullable=False, default='')

@@ -10,15 +10,17 @@ from unittest.mock import patch
 
 from flask import Flask
 
-from group_testkit import FakeSocket, GroupBase, legacy_turn, next_key, other_user_pet, route_json, user_texts
+from group_testkit import FakeSocket, GroupBase, legacy_turn, next_key, other_user_pet, say, user_texts
 from petsense.agent import group, ws
 from petsense.agent.routes import public
 from petsense.db import session_scope, utc_now
 from petsense.db.models.agent import AgentMessage, AgentRoute, AgentTurn
 
 FAILED_NOTE = '暂时没能接上照料助手，你的话已经保留。稍后可以重新发送。'
-PROPOSAL_ROUND = {'calls': [('prepare_profile_update', {'fields': {'birthYear': 2023}, 'explicit': False,
-                                                                   'note': '主人说它三岁'})]}
+# 照料助手的提案轮：首行先声明范围（服务端据此挂工具），再发工具调用
+PROPOSAL_ROUND = say('', intent='write', calls=[
+    ('prepare_profile_update', {'fields': {'birthYear': 2023}, 'explicit': False,
+                                'note': '主人说它三岁'})])
 
 
 def card(kind, number, **fields):
@@ -36,7 +38,7 @@ def card_keys(raw):
 
 class IdempotencyTests(GroupBase):
     def test_resending_the_same_request_never_generates_twice(self):
-        script = self.use(router=route_json(), pet='我在呢。', assistant='今天走了 40 分钟。')
+        script = self.use(pet='我在呢。', assistant=say('今天走了 40 分钟。'))
         key = next_key()
         first = self.post('今天走了多久', key=key, target='both')
         again = self.post('今天走了多久', key=key, target='both')
@@ -47,7 +49,7 @@ class IdempotencyTests(GroupBase):
         settled = self.post('今天走了多久', key=key, target='both')
         self.assertEqual(settled.status_code, 200)  # 回合已结束：幂等重发返回当前状态
         self.assertEqual([message['status'] for message in settled.json['turn']['messages']], ['complete'] * 2)
-        self.assertEqual([len(script.of(kind)) for kind in ('router', 'pet', 'assistant')], [1, 1, 1])
+        self.assertEqual([len(script.of(kind)) for kind in ('pet', 'assistant')], [1, 1])
         self.assertEqual((len(self.group_jobs()), self.count(AgentRoute)), (1, 1))
 
     def test_same_key_for_another_message_is_rejected(self):
@@ -107,9 +109,8 @@ class RollbackTests(GroupBase):
             self.assertEqual(self.count(AgentTurn), 0)  # 被拒绝的请求不留下回合
 
     def test_turn_enqueued_before_rollback_finishes_on_its_persisted_plan(self):
-        self.script.scripts['router'] = [route_json()]
         self.script.scripts['pet'] = ['我在呢。']
-        self.script.scripts['assistant'] = ['今天走了 40 分钟。']
+        self.script.scripts['assistant'] = [say('今天走了 40 分钟。')]
         turn_id = self.accepted('今天走了多久', key='rollback-1', target='both')
         with patch.dict(os.environ, {'PETSENSE_DUAL_AGENT_ENABLED': ''}):
             self.settle()
@@ -121,7 +122,7 @@ class RollbackTests(GroupBase):
             legacy = self.get(protocol=False).json['turns'][-1]
         self.assertEqual([message['status'] for message in self.rows(turn_id)], ['complete'] * 2)
         self.assertEqual(legacy['reply'], '【爱宠】我在呢。\n【照料助手】今天走了 40 分钟。')
-        self.assertEqual([call['kind'] for call in self.script.calls], ['router', 'pet', 'assistant'])
+        self.assertEqual([call['kind'] for call in self.script.calls], ['pet', 'assistant'])
 
     def test_group_protocol_is_enabled_with_no_feature_configuration(self):
         with patch.dict(os.environ):
@@ -164,9 +165,8 @@ class RollbackTests(GroupBase):
 
 
 class QuoteTests(GroupBase):
-    def test_message_quote_reaches_the_router_and_both_speakers(self):
-        script = self.use(router=[route_json(), route_json(order=None)],
-                          pet=['我在呢。'], assistant=['它今天走了 40 分钟。', '昨天走了 35 分钟。'])
+    def test_message_quote_reaches_both_speakers_without_changing_the_plan(self):
+        script = self.use(pet=['我在呢。'], assistant=[say('它今天走了 40 分钟。'), say('昨天走了 35 分钟。')])
         first = self.accepted('它今天走了多久', target='assistant')
         self.settle()
         answer = self.rows(first)[0]
@@ -174,42 +174,32 @@ class QuoteTests(GroupBase):
         self.settle()
         stored = self.turn_row(second)
         self.assertEqual((stored.reply_to, stored.reply_to_message), (first, answer['id']))
-        # 路由器没有给出可用顺序时，被引用的那位先说
-        self.assertEqual([message['role'] for message in self.rows(second)], ['assistant', 'pet'])
-        router_text = ''.join(user_texts(script.of('router')[1]['items']))
-        self.assertIn('被引用消息：【照料助手】它今天走了 40 分钟。', router_text)
+        # 派发只看主人的选择：引用不改谁发言（爱宠先、照料助手后）
+        self.assertEqual([message['role'] for message in self.rows(second)], ['pet', 'assistant'])
         note = '（系统补充）主人这条消息引用了群里照料助手先前发的一条消息：「它今天走了 40 分钟。」'
         for kind, index in (('assistant', 1), ('pet', 0)):
             self.assertIn(note, ''.join(user_texts(script.of(kind)[index]['items'])))
         listing = self.get().json['turns'][-1]
         self.assertEqual((listing['replyTo'], listing['replyToMessage']), (first, answer['id']))
 
-    def test_quoting_the_pet_message_answers_as_if_the_pet_was_named(self):
-        script = self.use(router=[route_json(), route_json(companion=True, professional=False)],
-                          pet=['汪！', '汪汪！'], assistant='它今天走了 40 分钟。')
+    def test_quoting_the_pet_message_reaches_the_pet_without_changing_the_plan(self):
+        script = self.use(pet=['汪！', '汪汪！'], assistant=say('它今天走了 40 分钟。'))
         first = self.accepted('陪我聊聊', target='both')
         self.settle()
         bark = self.rows(first)[0]
         self.accepted('你刚才说什么', replyTo=first, replyToMessage=bark['id'])
         self.settle()
-        router_text = ''.join(user_texts(script.of('router')[1]['items']))
-        self.assertIn('被引用消息：【爱宠】汪！', router_text)
         note = '（系统补充）主人这条消息引用了群里爱宠先前发的一条消息：「汪！」'
         self.assertIn(note, ''.join(user_texts(script.of('pet')[1]['items'])))
 
     def test_turn_level_quote_uses_the_last_message_with_text(self):
-        script = self.use(router=[route_json(), route_json(order=None)], pet=['汪！', '汪汪！'],
-                          assistant=['它今天走了 40 分钟。', '还是 40 分钟。'])
+        self.use(pet=['汪！', '汪汪！'],
+                 assistant=[say('它今天走了 40 分钟。'), say('还是 40 分钟。')])
         first = self.accepted('陪我聊聊', target='both')
         self.settle()
         second = self.accepted('再说一遍', replyTo=first, target='both')
         self.settle()
         self.assertIsNone(self.turn_row(second).reply_to_message)
-        router_text = ''.join(user_texts(script.of('router')[1]['items']))
-        self.assertIn('被引用消息：【照料助手】它今天走了 40 分钟。', router_text)
-        # 近期话题按实际发言人分行：不在一位的名字底下混着两位的话
-        self.assertIn('近期话题（由早到晚）：\n主人：陪我聊聊\n爱宠：汪！\n照料助手：它今天走了 40 分钟。',
-                      router_text)
 
     def test_legacy_turns_are_quotable_as_read_only_messages(self):
         sources = [{'type': 'web', 'url': 'https://example.com/a', 'title': '来源'}]
@@ -224,11 +214,11 @@ class QuoteTests(GroupBase):
         self.assertTrue(all(message['readOnly'] and message['status'] == 'complete' for message in projected))
         self.assertNotIn('messages', self.get(protocol=False).json['turns'][0])
         # 旧回合里的某一条可以被精确引用
-        script = self.use(router=route_json(), assistant='是按今天的走动记录算的。')
+        script = self.use(assistant=say('是按今天的走动记录算的。'))
         quoted = self.accepted('这个数怎么来的', replyTo=old, replyToMessage=f't{old}-1', target='assistant')
         self.settle()
-        router_text = ''.join(user_texts(script.of('router')[0]['items']))
-        self.assertIn('被引用消息：【照料助手】它今天走了 40 分钟。', router_text)
+        assistant_text = ''.join(user_texts(script.of('assistant')[0]['items']))
+        self.assertIn('主人这条消息引用了群里照料助手', assistant_text)
         self.assertEqual(self.turn_row(quoted).reply_to_message, f't{old}-1')
 
     def test_legacy_streaming_and_failed_turns_project_without_role_markers(self):
@@ -249,8 +239,7 @@ class QuoteTests(GroupBase):
 
 class CompatTests(GroupBase):
     def settled_turn(self, text='陪我聊聊', **scripts):
-        script = self.use(**({'router': route_json(), 'pet': '我在呢。', 'assistant': '今天走了 40 分钟。'}
-                             | scripts))
+        script = self.use(**({'pet': '我在呢。', 'assistant': say('今天走了 40 分钟。')} | scripts))
         turn_id = self.accepted(text, target='both')
         self.settle()
         return turn_id, script
@@ -329,10 +318,11 @@ class CompatTests(GroupBase):
     def test_card_decision_follows_the_client_protocol_and_syncs_to_the_assistant_message(self):
         group_sock, legacy_sock = self.connect(True), self.connect(False)
         text = '我整理了一个生日候选，确认后才会保存。'
-        self.use(router=[route_json(intent='write')] * 2, pet=['我在呢。'] * 2,
-                 assistant=[PROPOSAL_ROUND, text,
-                            {'calls': [('prepare_profile_update', {'fields': {'birthYear': 2022}, 'explicit': False,
-                                                                            'note': '主人改口说两岁'})]}, text])
+        self.use(pet=['我在呢。'] * 2,
+                 assistant=[PROPOSAL_ROUND, say(text),
+                            say('', intent='write', calls=[
+                                ('prepare_profile_update', {'fields': {'birthYear': 2022}, 'explicit': False,
+                                                            'note': '主人改口说两岁'})]), say(text)])
 
         def proposal_turn(message):
             turn_id = self.accepted(message, target='both')

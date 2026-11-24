@@ -320,13 +320,16 @@ test('「两位都回」只在开放双 Agent 时可发；等待占位按发言�
   assert.equal(sendableTarget('both', true), 'both');
   assert.equal(sendableTarget('both', false), 'auto');
   assert.equal(sendableTarget('pet', false), 'pet');
-  // 只点名一位且没有引用时谁接话已确定；两位都回、带引用、未指定时要等路由，不预设发言人
+  // W18：派发是确定的——只点名一位就是那位；未指定与两位都回都由爱宠先接
   assert.equal(placeholderRole('pet'), 'pet');
   assert.equal(placeholderRole('assistant'), 'assistant');
-  assert.equal(placeholderRole('both'), null);
-  assert.equal(placeholderRole('auto'), null);
-  assert.equal(placeholderRole('pet', true), null);
-  assert.equal(placeholderRole('assistant', true), null);
+  assert.equal(placeholderRole('both'), 'pet');
+  assert.equal(placeholderRole('auto'), 'pet');
+  // 带引用时先发言的是被引用的那位，不预设发言人
+  assert.equal(placeholderRole('pet', true), 'pet');
+  assert.equal(placeholderRole('assistant', true), 'assistant');
+  assert.equal(placeholderRole('both', true), null);
+  assert.equal(placeholderRole('auto', true), null);
 });
 
 test('引用解析：消息级精确到那一条，回合级取最后一条有正文的话', () => {
