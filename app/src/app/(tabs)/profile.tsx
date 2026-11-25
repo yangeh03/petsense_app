@@ -109,7 +109,15 @@ export default function ProfileScreen() {
         style={[styles.scrollView, { backgroundColor: theme.background }]}
         contentContainerStyle={styles.contentContainer}
       >
-        <ThemedView style={[styles.container, { paddingTop: insets.top + Spacing.four }]}>
+        <ThemedView
+          style={[
+            styles.container,
+            {
+              paddingTop: insets.top + Spacing.four,
+              paddingBottom: insets.bottom + BottomTabInset + Spacing.five,
+            },
+          ]}
+        >
           {/* 用户卡 */}
           <ThemedView type="backgroundElement" style={styles.userCard}>
             <View style={[styles.userAvatar, { backgroundColor: theme.tintBackground }]}>
@@ -373,7 +381,6 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: MaxContentWidth,
     alignSelf: 'center',
-    paddingBottom: BottomTabInset + Spacing.five,
     gap: Spacing.three,
   },
   centerWrap: {

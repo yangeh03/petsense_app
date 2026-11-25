@@ -379,7 +379,10 @@ export default function CommunityScreen() {
       <FlatList
         data={mergedPosts}
         keyExtractor={(item) => String(item.id)}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: insets.bottom + BottomTabInset + Spacing.five },
+        ]}
         ListHeaderComponent={header}
         renderItem={({ item }) => {
           const entry = pendingPosts.find((candidate) => candidate.post.id === item.id);
@@ -499,7 +502,6 @@ const styles = StyleSheet.create({
   screen: { flex: 1 },
   content: {
     paddingHorizontal: Spacing.four,
-    paddingBottom: BottomTabInset + Spacing.five,
     gap: Spacing.four,
     maxWidth: MaxContentWidth,
     width: '100%',
