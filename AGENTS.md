@@ -48,7 +48,7 @@
 
 ## 定位项目状态（2026-11-12 按仓库代码和文档核对）
 
-- 2026-11-26 功能分支实现人工虚拟区域：按当前第一版俯视图提供候选多边形，默认均未确认；设备/认领/地图指纹/Tag 隔离保存，鉴权 `GET/PUT /api/app/uwb/regions` 导入。有效新测量同时输出坐标和 `region/regionStatus/regionsRevision`，跨区防抖，过期明确“上次所在”。候选中的衣柜/门口需现场确认；未部署/未真机验收，详见 `docs/uwb-semantic-regions.md`。卡通底图仍搁置。
+- 2026-11-26 功能分支实现人工虚拟区域：用户已调整并确认第一版地图的 7 个区域，以 `docs/uwb-regions-first-map-confirmed.json` 为准（原 6 区草稿仅保留作历史候选）。第 3、7 区同名“衣柜前”，编号不同，保留原样。设备/认领/地图指纹/Tag 隔离保存，鉴权 `GET/PUT /api/app/uwb/regions` 导入。有效新测量同时输出坐标和 `region/regionStatus/regionsRevision`，跨区防抖，过期明确“上次所在”。7 区几何和内部点命中检查通过；未部署/未真机验收，详见 `docs/uwb-semantic-regions.md`。卡通底图仍搁置。
 
 - 2026-11-26 实现定位外轮廓约束与 Reanimated 圆点平滑移动；合并与发布记录见 PR #31 及其 CI，本轮真机验收尚未完成。约束使用点云地图的 `polygon`，保留原始/约束前坐标和原始质量；连续点与动画均禁止跨越凹口。过期冻结灰点，恢复和地图切换不跨期插值。详见 `docs/uwb-boundary-motion.md`；虚拟区域语义进展见 docs/uwb-semantic-regions.md，卡通底图继续搁置。
 

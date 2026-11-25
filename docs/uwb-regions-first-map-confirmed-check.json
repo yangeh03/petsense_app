@@ -1,0 +1,100 @@
+{
+  "sourceSha256": "bd53b7cfe528b1fd041460f76f42c1ba5ccfa40f748e9ab20c5f3f0452ccb05e",
+  "regions": 7,
+  "allConfirmed": true,
+  "overlaps": [],
+  "samples": [
+    {
+      "number": 1,
+      "label": "沙发前",
+      "sample": [
+        -2.0866190897942256,
+        -0.3111410913797704
+      ],
+      "matched": {
+        "id": "sofa-front",
+        "label": "沙发前"
+      },
+      "correctId": true
+    },
+    {
+      "number": 2,
+      "label": "桌子旁",
+      "sample": [
+        0.508437556510792,
+        0.9853605260518701
+      ],
+      "matched": {
+        "id": "table-side",
+        "label": "桌子旁"
+      },
+      "correctId": true
+    },
+    {
+      "number": 3,
+      "label": "衣柜前",
+      "sample": [
+        1.0153535956374609,
+        1.0594463338521634
+      ],
+      "matched": {
+        "id": "wardrobe-front",
+        "label": "衣柜前"
+      },
+      "correctId": true
+    },
+    {
+      "number": 4,
+      "label": "门口",
+      "sample": [
+        2.20915061309087,
+        -1.1939973078104344
+      ],
+      "matched": {
+        "id": "entrance",
+        "label": "门口"
+      },
+      "correctId": true
+    },
+    {
+      "number": 5,
+      "label": "客厅中央",
+      "sample": [
+        -0.33657165147342616,
+        -0.4346175012918798
+      ],
+      "matched": {
+        "id": "living-center",
+        "label": "客厅中央"
+      },
+      "correctId": true
+    },
+    {
+      "number": 6,
+      "label": "右侧活动区",
+      "sample": [
+        1.6024707658555226,
+        -0.3327495203348485
+      ],
+      "matched": {
+        "id": "right-area",
+        "label": "右侧活动区"
+      },
+      "correctId": true
+    },
+    {
+      "number": 7,
+      "label": "衣柜前",
+      "sample": [
+        -0.8099903866027591,
+        0.08706996819054225
+      ],
+      "matched": {
+        "id": "area_1795631533959",
+        "label": "衣柜前"
+      },
+      "correctId": true
+    }
+  ],
+  "productionApplied": false
+}
