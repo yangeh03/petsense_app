@@ -10,7 +10,7 @@
  * 抽成纯函数：store 与 hook 只做状态搬运，行为可单测覆盖。
  */
 
-import type { AgentReplyMessage, AgentTurn } from '@/services/agent';
+import type { AgentConversation, AgentReplyMessage, AgentTurn } from '@/services/agent';
 
 /**
  * 本地乐观回合：主人刚发出、服务端尚未确认的那一条。
@@ -240,7 +240,11 @@ export function mergeTurn(current: AgentTurn | undefined, incoming: AgentTurn): 
     : { ...incoming, messages };
 }
 
-function unknownTurn(id: number, messages: AgentReplyMessage[]): AgentTurn {
+function unknownTurn(
+  id: number,
+  conversationId: number | null,
+  messages: AgentReplyMessage[],
+): AgentTurn {
   return {
     id,
     requestId: '',
@@ -251,7 +255,7 @@ function unknownTurn(id: number, messages: AgentReplyMessage[]): AgentTurn {
     reply: '',
     status: 'pending',
     createdAt: new Date().toISOString(),
-    topicId: null,
+    conversationId,
     replyTo: null,
     sources: [],
     blocks: null,
@@ -309,12 +313,13 @@ export function applyMessageDeltaToTurns(
   role: AgentReplyMessage['role'],
   text: string,
   version: number,
+  conversationId: number | null = null,
 ): AgentTurn[] {
   const turn = turns.find((item) => item.id === turnId);
   if (!turn) {
     return orderTurns([
       ...turns,
-      unknownTurn(turnId, [partialMessage(messageId, turnId, role, text, version)]),
+      unknownTurn(turnId, conversationId, [partialMessage(messageId, turnId, role, text, version)]),
     ]);
   }
   if (!hasMessages(turn)) return turns;
@@ -344,9 +349,13 @@ export function applyMessageDeltaToTurns(
 }
 
 /** 群聊消息快照（WS message：领取、终态、卡片同步）：按 id 并入所属回合。 */
-export function applyMessageToTurns(turns: AgentTurn[], message: AgentReplyMessage): AgentTurn[] {
+export function applyMessageToTurns(
+  turns: AgentTurn[],
+  message: AgentReplyMessage,
+  conversationId: number | null = null,
+): AgentTurn[] {
   const turn = turns.find((item) => item.id === message.turnId);
-  if (!turn) return orderTurns([...turns, unknownTurn(message.turnId, [message])]);
+  if (!turn) return orderTurns([...turns, unknownTurn(message.turnId, conversationId, [message])]);
   const current = hasMessages(turn) ? turn.messages : [];
   const incoming = {
     ...turn,
@@ -450,7 +459,7 @@ export function applyDeltaToTurns(
   turnId: number,
   text: string,
   speaker: AgentTurn['speaker'],
-  topicId: number | null = null,
+  conversationId: number | null = null,
 ): AgentTurn[] {
   const index = turns.findIndex((item) => item.id === turnId);
   if (index !== -1) {
@@ -477,11 +486,109 @@ export function applyDeltaToTurns(
     reply: text,
     status: 'pending',
     createdAt: new Date().toISOString(),
-    topicId,
+    conversationId,
     replyTo: null,
     sources: [],
     blocks: null,
     images: [],
   };
   return orderTurns([...turns, placeholder]);
+}
+
+// ---------------------------------------------------------------------------
+// 会话列表（W16，docs/agent-w16-spec.md §6.3）
+// ---------------------------------------------------------------------------
+
+function activityAt(conversation: AgentConversation): string {
+  return conversation.lastTurnAt ?? conversation.createdAt;
+}
+
+/**
+ * 会话排序，与服务端 `agent/conversations.py` 的 listing 同一口径：
+ * 有回合的会话按最近活动倒序在前；还没有回合的空会话排在后面（组内按创建时间倒序）。
+ * 空会话必须靠后——它按创建时间算「最近活动」，排在前面会盖住有内容的会话，
+ * 本机没记住上次会话时还会把主人直接落到一个空会话里。
+ */
+export function compareConversations(a: AgentConversation, b: AgentConversation): number {
+  const aEmpty = !a.lastTurnAt;
+  const bEmpty = !b.lastTurnAt;
+  if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
+  const byTime = activityAt(b).localeCompare(activityAt(a));
+  return byTime !== 0 ? byTime : b.id - a.id;
+}
+
+export function orderConversations(list: AgentConversation[]): AgentConversation[] {
+  return [...list].sort(compareConversations);
+}
+
+/**
+ * 会话摘要到达时的合并（接口列表、POST 回执、WS 的 conversation 帧）：按 id 去重，新摘要覆盖旧的；
+ * 带 deletedAt 的从列表移除。返回新列表与被移除的会话 id。
+ */
+export function mergeConversations(
+  list: AgentConversation[],
+  incoming: AgentConversation | AgentConversation[],
+): { list: AgentConversation[]; removed: number[] } {
+  const byId = new Map(list.map((item) => [item.id, item] as const));
+  const removed: number[] = [];
+  for (const item of Array.isArray(incoming) ? incoming : [incoming]) {
+    if (item.deletedAt) {
+      if (byId.delete(item.id)) removed.push(item.id);
+    } else {
+      byId.set(item.id, item);
+    }
+  }
+  return { list: orderConversations([...byId.values()]), removed };
+}
+
+/** 没有会话摘要的帧到了、而客户端列表里没有这个会话：下次拉列表前先视为过期。 */
+export function hasConversation(list: AgentConversation[], conversationId: number | null): boolean {
+  return conversationId !== null && list.some((item) => item.id === conversationId);
+}
+
+/** 预览文字：主人原话优先，没有则取首段回复；压成一行并截断，与服务端口径一致。 */
+export function conversationPreviewText(turn: AgentTurn): string {
+  const text = (turn.text || '').trim() || turn.reply.replace(SPEAKER_MARK, '').trim();
+  return text.split(/\s+/).join(' ').slice(0, 40);
+}
+
+/**
+ * 没有随行摘要的回合帧到达后，本地把列表项补一下：活动时间与预览跟着这条回合走。这条回合是
+ * 新来的、已落定、未读，并且不属于正在看的会话时，未读数加一（下次拉列表以服务端为准）。
+ */
+export function noteTurn(
+  list: AgentConversation[],
+  conversationId: number,
+  turn: AgentTurn,
+  active: boolean,
+  isNew: boolean,
+): AgentConversation[] {
+  const current = list.find((item) => item.id === conversationId);
+  if (!current) return list;
+  const text = conversationPreviewText(turn);
+  const bump = isNew && !active && turn.status !== 'pending' && turn.readAt === null;
+  return orderConversations([
+    ...list.filter((item) => item.id !== conversationId),
+    {
+      ...current,
+      lastTurnAt: turn.createdAt,
+      preview: text ? { text, at: turn.createdAt } : current.preview,
+      unread: current.unread + (bump ? 1 : 0),
+      turnCount: isNew ? current.turnCount + 1 : current.turnCount,
+    },
+  ]);
+}
+
+/**
+ * 落地规则（spec §6.1）：本机记住的上次会话还在列表里就打开它，否则取最近活动的第一个。
+ */
+export function landingConversation(
+  list: AgentConversation[],
+  remembered: number | null,
+): AgentConversation | null {
+  return (
+    (remembered !== null && list.find((item) => item.id === remembered)) ||
+    orderConversations(list)[0] ||
+    null
+  );
 }

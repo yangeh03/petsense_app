@@ -48,11 +48,10 @@ type Props = {
   turn: AgentTurn;
   petId: number | null;
   petName: string | null;
-  onContinueTopic: (turn: AgentTurn) => void;
   onRetry: (turn: AgentTurn) => void;
-  /** W09：主动关怀卡追问入口（预填「为什么提醒我？」并定位到该主题） */
+  /** W09：主动关怀卡追问入口（在当前会话里预填「为什么提醒我？」并引用那张卡） */
   onAskWhy?: (turn: AgentTurn) => void;
-  /** 双 Agent 群聊：引用这一条回复（定位到它所在的话题，发送时带上被引用的消息） */
+  /** 双 Agent 群聊：引用这一条回复（发送时带上被引用的消息，由它的实际发言人接话） */
   onReplyTo?: (turn: AgentTurn, message: AgentReplyMessage) => void;
   /** 主人这条话引用的回复（已发送的消息级/回合级引用）；没有引用或缺参数时为空 */
   quote?: { name: string; text: string } | null;
@@ -746,7 +745,6 @@ export const AgentMessage = memo(function AgentMessage({
   turn,
   petId,
   petName,
-  onContinueTopic,
   onRetry,
   onAskWhy,
   onReplyTo,
@@ -794,17 +792,17 @@ export const AgentMessage = memo(function AgentMessage({
   const waitingRole =
     messages?.length === 0 && pending ? placeholderRole(turn.target, Boolean(turn.replyTo)) : null;
 
-  const turnAction = !pending ? (
-    <Pressable
-      accessibilityRole="button"
-      style={styles.replyAction}
-      onPress={() => (turn.status === 'failed' ? onRetry(turn) : onContinueTopic(turn))}
-    >
-      <ThemedText type="smallBold">
-        {turn.status === 'failed' ? '再说一次' : '继续聊这件事'}
-      </ThemedText>
-    </Pressable>
-  ) : null;
+  // 失败的回合保留「再说一次」；W16 起换话题靠新开一个会话，回合下不再提供回到话题的入口
+  const turnAction =
+    !pending && turn.status === 'failed' ? (
+      <Pressable
+        accessibilityRole="button"
+        style={styles.replyAction}
+        onPress={() => onRetry(turn)}
+      >
+        <ThemedText type="smallBold">再说一次</ThemedText>
+      </Pressable>
+    ) : null;
 
   return (
     <View style={styles.exchange}>
@@ -812,7 +810,7 @@ export const AgentMessage = memo(function AgentMessage({
         <View style={[styles.ownerBubble, { backgroundColor: theme.tintBackground }]}>
           {images.length ? <OwnerImages images={images} onOpen={openViewer} /> : null}
           {quote ? (
-            // 这条话引用的是哪一条回复（消息级引用）；一行带过，点开原消息所在话题看全文
+            // 这条话引用的是哪一条回复（消息级引用）；一行带过
             <ThemedText type="small" numberOfLines={2}>
               {`引用 ${quote.name}：${quote.text}`}
             </ThemedText>

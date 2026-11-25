@@ -664,6 +664,9 @@ _ROLE_LABELS = {'pet': '爱宠', 'assistant': '照料助手'}
 def _role_notes(context):
     """群聊单角色运行里追加到 owner 消息末尾的服务端补充（确定性文本，不是主人原话）。"""
     notes = []
+    if context.get('care_hint') and context.get('role') == 'assistant':
+        # 关怀主题自带的会话（W16）：告诉照料助手本会话对应哪条主动提醒；查依据的规则已在系统提示里
+        notes.append('（系统补充）' + str(context['care_hint']) + '。')
     if context.get('quoted_text'):
         who = _ROLE_LABELS.get(context.get('quoted_speaker'), '成员')
         quoted = str(context['quoted_text']).strip().replace('\n', ' ')[:300]
@@ -757,6 +760,9 @@ def run_dialogue(context, on_progress=None):
             + f"\n本轮指向：{context['target']}。"
     if context.get('settings') and not role:
         system_content += '\n' + agent_settings.prompt_line(context['settings'])
+    if context.get('care_hint') and not role:
+        # 关怀主题自带的会话（W16）：本会话对应哪条主动提醒（确定性文本，由服务端给出）
+        system_content += '\n' + str(context['care_hint']) + '。'
     input_items = [{'role': 'system', 'content': system_content}]
     for index, old in enumerate(history):
         input_items.append({'role': 'user', 'content': _owner_content(

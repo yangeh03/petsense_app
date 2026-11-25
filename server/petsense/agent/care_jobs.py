@@ -21,7 +21,7 @@ from datetime import timedelta
 
 from sqlalchemy import select
 
-from petsense.agent import care, change as change_service, deliver, jobs, loop, registry, runs
+from petsense.agent import care, change as change_service, conversations, deliver, jobs, loop, registry, runs
 from petsense.agent import settings as settings_service
 from petsense.agent.observations import query as observations_query, walk_seconds
 from petsense.db import iso_z, session_scope, utc_now
@@ -545,9 +545,12 @@ def handle_review(job, now):
                                 'observedSeconds': evidence.get('coverageSeconds'),
                                 'soundEventCount': (evidence.get('value')
                                                     if evidence.get('feature') == 'sounds' else None)})
+            # 周期回顾每条汇总各成一个系统会话：一条汇总可能涉及多个发现主题，不与单个主题绑定
+            conversation = conversations.create_care(
+                s, pet.id, 'review', conversations.review_title(payload['kind'], payload['key']), now)
             turn, created = deliver.deliver_background_message(
                 s, pet.id, 'care:review:%s:%d:%s' % (payload['kind'], pet.id, payload['key']),
-                blocks, sources=sources, now=now)
+                blocks, conversation_id=conversation.id, sources=sources, now=now)
             if created:
                 delivered = (pet.user_id, turn)
     if delivered:
@@ -617,25 +620,26 @@ def handle_event(job, now):
     delivered_turn = None
     with session_scope() as s:
         topic = s.get(AgentCareTopic, payload.get('topic'))
-        if topic is not None:
-            topic.run_id = topic.run_id or run_id
+        if topic is None:
+            return  # 主题已不存在：事件没有可归属的会话，不再交付
+        topic.run_id = topic.run_id or run_id
         if deliverable:
+            # 设备/学习类主题自成一个系统会话：首发时建立并回填，之后的升级、恢复消息进同一个会话
+            conversation = conversations.for_topic(s, topic, now)
+            conversations.sync_care_title(conversation, topic)
             blocks = [{'type': 'text', 'speaker': 'assistant', 'text': say},
-                      {'type': 'care', 'care': {'kind': topic.kind if topic else 'device',
-                                                'category': topic.category if topic else '',
-                                                'title': topic.title if topic else '',
-                                                'status': topic.status if topic else 'open',
-                                                'severity': topic.severity if topic else 'warning',
+                      {'type': 'care', 'care': {'kind': topic.kind, 'category': topic.category,
+                                                'title': topic.title, 'status': topic.status,
+                                                'severity': topic.severity,
                                                 'topicId': payload.get('topic'),
                                                 'openedAt': facts['openedAt'],
                                                 'evidence': facts['evidence'][-5:],
                                                 'runId': run_id}}]
             turn, created = deliver.deliver_background_message(
                 s, pet.id, 'care:event:%d:%s' % (payload.get('topic'), payload.get('phase')),
-                blocks, topic_id=payload.get('topic'), sources=[], now=now)
+                blocks, conversation_id=conversation.id, sources=[], now=now)
             if created:
-                if topic is not None:
-                    topic.delivered += 1
+                topic.delivered += 1
                 s.flush()
                 delivered_turn = (pet.user_id, turn)
     if delivered_turn:

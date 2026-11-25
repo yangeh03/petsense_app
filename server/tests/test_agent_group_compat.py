@@ -64,7 +64,7 @@ class IdempotencyTests(GroupBase):
 
     def test_invalid_requests_leave_nothing_behind(self):
         foreign = legacy_turn(other_user_pet(), '别人的问题')
-        own = legacy_turn(self.pet, '自己的问题', reply='【照料助手】自己的回答')
+        own = self.legacy('自己的问题', reply='【照料助手】自己的回答')
         cases = [
             ({'text': '   '}, 400),
             ({'text': '你好', 'requestId': ''}, 400),
@@ -96,7 +96,7 @@ class RollbackTests(GroupBase):
             self.assertNotIn('protocol', response.json)
             self.assertNotIn('messages', response.json['turn'])
             listing = self.get()
-            self.assertEqual(sorted(listing.json), ['turns'])
+            self.assertEqual(sorted(listing.json), ['conversation', 'turns'])
             self.assertNotIn('messages', listing.json['turns'][0])
         self.assertEqual([call['kind'] for call in self.script.calls], ['legacy'])
         self.assertEqual((len(self.group_jobs()), self.count(AgentRoute), self.count(AgentMessage)), (0, 0, 0))
@@ -135,7 +135,7 @@ class RollbackTests(GroupBase):
             self.assertEqual(self.post('你好', target='both').status_code, 400)
             self.assertEqual(self.post('你好').status_code, 200)
             listing = self.get()
-            self.assertEqual(sorted(listing.json), ['turns'])
+            self.assertEqual(sorted(listing.json), ['conversation', 'turns'])
         self.assertEqual(self.count(AgentTurn), 1)
 
     def test_declaring_connection_after_rollback_still_streams_legacy_frames(self):
@@ -203,7 +203,7 @@ class QuoteTests(GroupBase):
 
     def test_legacy_turns_are_quotable_as_read_only_messages(self):
         sources = [{'type': 'web', 'url': 'https://example.com/a', 'title': '来源'}]
-        old = legacy_turn(self.pet, '旧问题', reply='【爱宠】汪！\n【照料助手】它今天走了 40 分钟。',
+        old = self.legacy('旧问题', reply='【爱宠】汪！\n【照料助手】它今天走了 40 分钟。',
                           blocks=[{'type': 'text', 'speaker': 'pet', 'text': '汪！'},
                                   {'type': 'text', 'speaker': 'assistant', 'text': '它今天走了 40 分钟。'}],
                           sources=sources)
@@ -222,11 +222,11 @@ class QuoteTests(GroupBase):
         self.assertEqual(self.turn_row(quoted).reply_to_message, f't{old}-1')
 
     def test_legacy_streaming_and_failed_turns_project_without_role_markers(self):
-        streaming = legacy_turn(self.pet, '旧问题', reply='【照料助手】今天走了', speaker='assistant',
+        streaming = self.legacy('旧问题', reply='【照料助手】今天走了', speaker='assistant',
                                 status='pending')
-        both = legacy_turn(self.pet, '两位都在说', reply='【爱宠】汪！\n【照料助手】它今天走了',
+        both = self.legacy('两位都在说', reply='【爱宠】汪！\n【照料助手】它今天走了',
                            speaker='assistant', status='pending')
-        failed = legacy_turn(self.pet, '坏问题', reply=FAILED_NOTE, status='failed')
+        failed = self.legacy('坏问题', reply=FAILED_NOTE, status='failed')
         by_id = {turn['id']: turn['messages'] for turn in self.get().json['turns']}
         self.assertEqual([(message['role'], message['status'], message['text']) for message in by_id[streaming]],
                          [('assistant', 'running', '今天走了')])
@@ -252,14 +252,14 @@ class CompatTests(GroupBase):
         self.assertEqual((legacy['status'], legacy['reply']), ('pending', ''))
 
     def test_mixed_history_reads_the_same_content_in_both_protocols(self):
-        old = legacy_turn(self.pet, '旧问题', reply='【照料助手】旧回答')
+        old = self.legacy('旧问题', reply='【照料助手】旧回答')
         new, _script = self.settled_turn()
         group_listing = self.get().json
-        self.assertEqual(sorted(group_listing), ['dualAgent', 'protocol', 'turns'])
+        self.assertEqual(sorted(group_listing), ['conversation', 'dualAgent', 'protocol', 'turns'])
         self.assertEqual((group_listing['protocol'], group_listing['dualAgent']), ('group-v1', True))
         group_view = {turn['id']: turn for turn in group_listing['turns']}
         legacy_listing = self.get(protocol=False).json
-        self.assertEqual(sorted(legacy_listing), ['turns'])
+        self.assertEqual(sorted(legacy_listing), ['conversation', 'turns'])
         legacy_view = {turn['id']: turn for turn in legacy_listing['turns']}
         self.assertEqual([message['id'] for message in group_view[old]['messages']], [f't{old}-0'])
         self.assertNotIn('messages', legacy_view[old])
@@ -282,7 +282,7 @@ class CompatTests(GroupBase):
         self.assertFalse([frame for frame in group_sock.frames if frame['type'] == 'delta'])
         self.assertFalse([frame for frame in legacy_sock.frames if frame['type'] == 'message_delta'])
         # 旧入口（后台回信等）推送的旧结构快照：群聊连接按持久化消息补齐，旧连接原样收到
-        old = legacy_turn(self.pet, '旧问题', reply='【照料助手】旧回答')
+        old = self.legacy('旧问题', reply='【照料助手】旧回答')
         with session_scope() as s:
             payload = public(s.get(AgentTurn, old))
         ws.push_turn(self.uid, self.pet, payload)
@@ -304,16 +304,21 @@ class CompatTests(GroupBase):
         self.assertEqual(self.client.get('/api/app/agent/inbox/turn/999999').status_code, 404)
 
     def test_read_endpoint_returns_each_protocol_shape(self):
-        turn_id, _script = self.settled_turn()
-        path = f'/api/app/agent/pets/{self.pet}/read'
-        self.assertIsNone(self.get().json['turns'][-1]['readAt'])  # 读取列表不改变已读状态
-        grouped = self.client.post(path, json={'ids': [turn_id]}, query_string={'protocol': group.PROTOCOL}).json
-        self.assertEqual((grouped['protocol'], len(grouped['turns'][0]['messages'])), ('group-v1', 2))
+        """会话级已读（W16）：按客户端协议返回回合视图；读取列表本身不改变已读状态。"""
+        legacy_turn_id, _script = self.settled_turn('陪我聊聊')
+        grouped_turn_id, _script = self.settled_turn('再陪我聊聊')
+        path = f'/api/app/agent/conversations/{self.client.conversation_id}/read'
+        self.assertTrue(all(turn['readAt'] is None for turn in self.get().json['turns']))  # 读取列表不改变已读状态
+        grouped = self.client.post(path, json={'ids': [grouped_turn_id]},
+                                   query_string={'protocol': group.PROTOCOL}).json
+        self.assertEqual((grouped['markedCount'], len(grouped['turns'][0]['messages'])), (1, 2))
         self.assertIsNotNone(grouped['turns'][0]['readAt'])
-        legacy = self.client.post(path, json={'ids': [turn_id]}).json
-        self.assertEqual(sorted(legacy), ['turns'])
+        legacy = self.client.post(path, json={'ids': [legacy_turn_id]}).json
+        self.assertEqual(sorted(legacy), ['conversation', 'markedCount', 'turns'])
+        self.assertEqual(legacy['markedCount'], 1)
         self.assertNotIn('messages', legacy['turns'][0])
         self.assertEqual(legacy['turns'][0]['target'], 'auto')
+        self.assertEqual(legacy['conversation']['unread'], 0)
 
     def test_card_decision_follows_the_client_protocol_and_syncs_to_the_assistant_message(self):
         group_sock, legacy_sock = self.connect(True), self.connect(False)

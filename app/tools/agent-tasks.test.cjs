@@ -18,9 +18,9 @@ test('delegation book is a registered route reachable from the companion header'
   assert.match(book, /'pause' \| 'resume' \| 'cancel'/);
   assert.match(book, /暂停/);
   assert.match(book, /取消委托/);
-  // 深链回原会话：设置伙伴页主题后返回
-  assert.match(book, /setTopic\(task\.topicId/);
-  assert.match(book, /router\.back\(\)/);
+  // 回原会话：带上会话参数回到伙伴页（W16）；会话被删后不再提供这个入口
+  assert.match(book, /conversationId: String\(task\.conversationId\)/);
+  assert.match(book, /!task\.conversationDeleted/);
 });
 
 test('task proposal cards render plan text with baseline choice and editable resubmission', () => {

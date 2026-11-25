@@ -19,13 +19,13 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
 
-from petsense.agent import jobs
+from petsense.agent import conversations, jobs
 from petsense.agent import change as change_service
 from petsense.agent.baseline import dimension_states
 from petsense.agent.observations import query as observations_query, walk_seconds
 from petsense.db import iso_z, session_scope, utc_now
 from petsense.db.models import Pet, TelemetryMinute
-from petsense.db.models.agent import (AgentTask, AgentTaskDelivery, AgentTaskPlan, AgentTurn,
+from petsense.db.models.agent import (AgentProposal, AgentTask, AgentTaskDelivery, AgentTaskPlan, AgentTurn,
                                        PetBaseline)
 
 # 三类计划（spec §2）；「待确认」为 AgentProposal(pending) 态，不在本表状态集内
@@ -456,13 +456,12 @@ def baseline_ready(session, pet, plan):
 
 # ── 状态机：确认生效与委托簿直接操作 ─────────────────────────────────────────
 
-def _topic_of(session, turn_id):
+def _conversation_of(session, turn_id):
+    """确认该委托的回合所在的会话：提醒与回信都落在这里（W16）。"""
     if not turn_id:
         return None
     turn = session.get(AgentTurn, turn_id)
-    if turn is None:
-        return None
-    return turn.topic_id or turn.id
+    return turn.conversation_id if turn is not None else None
 
 
 def apply_proposal(session, pet, row, now=None, baseline_strategy=None):
@@ -517,7 +516,7 @@ def _create_task(session, pet, row, plan, now, baseline_strategy=None):
                      timezone=plan['timezone'], status='observing',
                      deadline_at=iso_z_parse(plan['deadlineAt']),
                      effective_from=max(iso_z_parse(plan['startAt']), now),
-                     topic_id=_topic_of(session, row.turn_id), proposal_id=row.id,
+                     conversation_id=_conversation_of(session, row.turn_id), proposal_id=row.id,
                      created_at=now, updated_at=now)
     if plan['kind'] == KIND_COMPARISON and plan.get('baselineStrategy') == 'wait_baseline' \
             and not baseline_ready(session, pet, plan):
@@ -800,8 +799,19 @@ def _deliver(session, pet, task, plan, *, kind, text, evidence, run_id, now, rea
                                                'deadlineAt': iso_z(task.deadline_at),
                                                'degraded': kind == 'degraded_letter',
                                                'changeEvidence': change_evidence}}]
+    # 提醒与回信落在确认该委托的会话（W16）。委托没有会话只可能是数据异常（迁移前的都已在迁移里回填）：
+    # 先按确认提案所在的回合补，补不上就按委托标题建一个系统会话——回信必须有地方落，
+    # 不能让检查点作业因此反复失败。
+    conversation_id = task.conversation_id
+    if conversation_id is None and task.proposal_id:
+        proposal = session.get(AgentProposal, task.proposal_id)
+        if proposal is not None:
+            conversation_id = task.conversation_id = _conversation_of(session, proposal.turn_id)
+    if conversation_id is None:
+        conversation_id = task.conversation_id = conversations.create_care(
+            session, pet.id, 'task', plan.get('title') or '委托回信', now).id
     turn, _created = deliver_service.deliver_background_message(
-        session, pet.id, f'task-{delivery.id}', blocks, topic_id=task.topic_id,
+        session, pet.id, f'task-{delivery.id}', blocks, conversation_id=conversation_id,
         sources=sources, now=now)
     delivery.turn_id = turn.id
     return delivery
@@ -877,14 +887,17 @@ def _push_later(pet, delivery):
 
 
 def flush_pending_pushes():
-    """提交后推帧（handle_checkpoint_job 在事务外调用）。App 不在线时静默。"""
+    """提交后推帧（handle_checkpoint_job 在事务外调用）。App 不在线时静默。
+
+    推帧放在事务外：push_delivered 会另开会话取会话摘要，而 session_scope 不可嵌套。
+    """
     from petsense.agent import deliver as deliver_service
     while _PENDING_PUSHES:
         user_id, pet_id, turn_id = _PENDING_PUSHES.pop(0)
         with session_scope() as session:
             turn = session.get(AgentTurn, turn_id)
-            if turn is not None:
-                deliver_service.push_delivered(user_id, pet_id, turn)
+        if turn is not None:
+            deliver_service.push_delivered(user_id, pet_id, turn)
 
 
 # ── 对外读取（工具 / 委托簿 / 快照） ─────────────────────────────────────────
@@ -919,7 +932,8 @@ def public(session, task, include_detail=False):
               'baselineStrategy': plan.get('baselineStrategy'), 'timezone': plan.get('timezone'),
               'startAt': plan.get('startAt'), 'deadlineAt': iso_z(task.deadline_at),
               'effectiveFrom': iso_z(task.effective_from),
-              'currentVersion': task.current_version, 'topicId': task.topic_id,
+              'currentVersion': task.current_version, 'conversationId': task.conversation_id,
+              'conversationDeleted': not conversations.conversation_visible(session, task.conversation_id),
               'pausedIntervals': json.loads(task.paused_intervals or '[]'),
               'reminders': sum(1 for d in deliveries if d.kind == 'reminder'),
               'letters': sum(1 for d in deliveries if d.kind != 'reminder'),

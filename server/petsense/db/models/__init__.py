@@ -22,15 +22,16 @@ __all__ = [
     'Story', 'StoryView', 'DiscoveryLocation', 'DiscoveryQuery', 'SocialNotification', 'SocialOutbox',
     'Reading', 'ActionPrediction', 'Device', 'TelemetryLatest', 'TelemetryMinute', 'TelemetryEvent',
     'CollectionSession', 'CollectionFrame', 'CollectionVideo', 'JournalCrc', 'PetgifDiaryJob',
-    'PetgifIdentity', 'AgentTurn', 'AgentLearningDay', 'CompanionSettings', 'AgentProposal', 'PetMemory',
+    'PetgifIdentity', 'AgentConversation', 'AgentTurn', 'AgentLearningDay', 'CompanionSettings',
+    'AgentProposal', 'PetMemory',
     'AgentAction', 'AgentJob', 'AgentTask', 'AgentTaskPlan', 'AgentTaskDelivery',
     'AgentCareTopic', 'CareDeviceState', 'CarePetState',
     'PushPreference', 'PushInstallation', 'PushDelivery',
     'AgentInboxItem', 'AgentInboxState',
 ]
 
-from petsense.db.models.agent import (AgentAction, AgentCareTopic, AgentInboxItem, AgentInboxState,
-    AgentJob, AgentLearningDay, AgentProposal, AgentTask, AgentTaskDelivery, AgentTaskPlan, AgentTurn,
-    CareDeviceState, CarePetState, CompanionSettings)
+from petsense.db.models.agent import (AgentAction, AgentCareTopic, AgentConversation, AgentInboxItem,
+    AgentInboxState, AgentJob, AgentLearningDay, AgentProposal, AgentTask, AgentTaskDelivery, AgentTaskPlan,
+    AgentTurn, CareDeviceState, CarePetState, CompanionSettings)
 from petsense.db.models.memory import PetMemory
 from petsense.db.models.push import PushDelivery, PushInstallation, PushPreference

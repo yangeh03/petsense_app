@@ -21,7 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from flask import Flask
-from helpers import fresh_db
+from helpers import fresh_db, new_conversation
 from sqlalchemy import select
 
 from petsense import db
@@ -31,6 +31,7 @@ from petsense.db import utc_now
 from petsense.db.models import AuthSession, Pet, User
 from petsense.db.models.agent import (
     AgentCareTopic,
+    AgentConversation,
     AgentInboxItem,
     AgentInboxState,
     AgentTask,
@@ -55,6 +56,7 @@ class W12InboxTests(unittest.TestCase):
         self.client = self.app.test_client()
         self.now = utc_now()
         self._auto_enable = True   # 夹具默认在「启用」之后创建来源（对齐部署语义）
+        self._conversations = {}
         with db.session_scope() as s:
             user = User(username='w12', display_name='w12', password_hash='x', salt='s',
                         avatar_emoji='🙂', bio='', created_at=self.now)
@@ -113,9 +115,18 @@ class W12InboxTests(unittest.TestCase):
             s.flush()
             return row.id
 
+    def _conversation_for(self, pet_id):
+        """这只宠物的会话（W16 起回合必须属于某个会话，否则深链取不回）。"""
+        if pet_id not in self._conversations:
+            self._conversations[pet_id] = new_conversation(pet_id)
+        return self._conversations[pet_id]
+
     def _turn(self, request_id, *, topic_id=None, text='好的', blocks=None, pet_id=None):
+        # 会话要在进入事务之前取：new_conversation 自己开会话，而 session_scope 不可嵌套
+        pet_id, conversation_id = pet_id or self.pet_id, self._conversation_for(pet_id or self.pet_id)
         with db.session_scope() as s:
-            row = AgentTurn(pet_id=pet_id or self.pet_id, request_id=request_id, text='',
+            row = AgentTurn(pet_id=pet_id, conversation_id=conversation_id,
+                            request_id=request_id, text='',
                             target='assistant', topic_id=topic_id, reply_to=None, sources='[]',
                             speaker='assistant', reply=text, status='complete', created_at=self.now,
                             blocks=json.dumps(blocks or [], ensure_ascii=False))
@@ -338,7 +349,7 @@ class W12InboxTests(unittest.TestCase):
         body = self.client.get('/api/app/agent/inbox/turn/%d' % turn_id,
                                headers={HEADER: self.token}).get_json()
         self.assertEqual(body['turn']['id'], turn_id)
-        self.assertEqual(body['turn']['topicId'], topic_id)
+        self.assertEqual(body['turn']['conversationId'], self._conversations[self.pet_id])
         # 跨账号取回一律 404
         self.assertEqual(self.client.get('/api/app/agent/inbox/turn/%d' % turn_id,
                                          headers={HEADER: self.other_token}).status_code, 404)
@@ -618,12 +629,39 @@ class W12InboxTests(unittest.TestCase):
         self.assertEqual(target['anchor'], turn_id)
         self.assertEqual(target['params']['topicId'], str(topic_id))
         self.assertEqual(target['params']['turnId'], str(turn_id))
+        # 深链参数带锚点所在的会话（W16）：客户端先切到它再定位
+        self.assertEqual(target['params']['conversationId'], str(self._conversations[self.pet_id]))
         # 纯读解析不改变未读状态（冷启动先解析、后展示再标已读）
         self.assertIsNone(body['item']['readAt'])
         reply = self.client.get('/api/app/agent/inbox/resolve/%d' % kinds['reply'],
                                 headers={HEADER: self.token}).get_json()['target']
         self.assertEqual(reply['params']['deliveryId'], str(delivery_id))
+        self.assertEqual(reply['params']['conversationId'], str(self._conversations[self.pet_id]))
         self.assertEqual(reply['anchor'], letter_turn)
+
+    def test_deleted_conversation_hides_turn_and_reply(self):
+        """会话被主人删除后：那条回合取不回，关怀条目不再给会话，回信条目标记来源不可用。"""
+        topic_id = self._topic('device', 'battery_low', 'dev-w12')
+        turn_id = self._turn('care:event:%d:open' % topic_id, topic_id=topic_id)
+        letter_turn = self._turn('task-turn')
+        self._letter(turn_id=letter_turn)
+        with db.session_scope() as s:
+            inbox.project_user(s, self.uid)
+            conversation_id = s.get(AgentTurn, turn_id).conversation_id
+            conversation = s.get(AgentConversation, conversation_id)
+            conversation.deleted_at = self.now
+        kinds = {kind: item_id for kind, _key, item_id in self._items()}
+        self.assertEqual(self.client.get('/api/app/agent/inbox/turn/%d' % turn_id,
+                                         headers={HEADER: self.token}).status_code, 404)
+        care = self.client.get('/api/app/agent/inbox/resolve/%d' % kinds['device_fact'],
+                               headers={HEADER: self.token}).get_json()['target']
+        self.assertTrue(care['available'])           # 主题本身还在：按安静主题的方式展示主题卡
+        self.assertNotIn('conversationId', care['params'])
+        self.assertEqual(care['params']['turnId'], str(turn_id))
+        reply = self.client.get('/api/app/agent/inbox/resolve/%d' % kinds['reply'],
+                                headers={HEADER: self.token}).get_json()
+        self.assertFalse(reply['target']['available'])
+        self.assertEqual(reply['target']['reason'], 'conversation_deleted')
 
     def test_failed_target_keeps_unread(self):
         topic_id = self._topic('device', 'battery_low', 'dev-w12')

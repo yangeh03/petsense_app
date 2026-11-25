@@ -13,7 +13,7 @@
 """
 from flask import Blueprint, request
 
-from petsense.agent import inbox
+from petsense.agent import inbox, routes
 from petsense.auth.routes import require_app_user
 from petsense.db import session_scope
 from petsense.db.models import Pet
@@ -138,7 +138,8 @@ def inbox_turn(turn_id):
     """按锚点取回**那一条**来源消息（不依赖会话分页/话题过滤）。
 
     深链命中历史回合（早于已加载的一页）或当前话题过滤掉的回合时，客户端凭稳定
-    回合 id 精确取回并展示；跨账号/不存在一律 404。
+    回合 id 精确取回并展示；跨账号/不存在/所在会话已删除一律 404。
+    回合带 conversationId（W16）：客户端先切到它所在的会话，再定位到这一条。
     """
     user, error = require_app_user()
     if error:
@@ -151,7 +152,7 @@ def inbox_turn(turn_id):
         if group.client_group(user):
             # 群聊协议客户端：与 WS/轮询同形状（带按消息拆分的 messages）
             return {'turn': group.turn_public(s, turn), 'protocol': group.PROTOCOL}
-        payload = inbox.turn_public(turn)
+        payload = routes.public(turn)
         if payload.get('target') == 'both':
             payload['target'] = 'auto'  # 旧客户端不认识「两位都回复」，等同未指定
         return {'turn': payload}

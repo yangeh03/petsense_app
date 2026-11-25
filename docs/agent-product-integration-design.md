@@ -541,7 +541,7 @@ components/agent/*         气泡定制、卡片族、输入区
 
 ### 18.4 页面结构与导航
 
-- 伙伴页内部状态切换维持现有模式：群聊 ↔ 主题聚焦 ↔ 委托簿；W12 增加稳定深链 `/agent?topic=` 定位。
+- 伙伴页一次显示一个会话：会话 ↔ 会话抽屉 ↔ 委托簿；主题聚焦已由多会话取代（W16，[spec](./agent-w16-spec.md)），URL 的 `conversationId` 是当前会话，收件箱深链带会话参数。
 - 今日页「值得知道的一件事」消费同一 zustand store 的事件摘要，与铃铛、伙伴引用同一持久对象（W12）。
 - 图片消息（W07）：expo-image 展示，`react-native-image-viewing` 灯箱（缩放/手势/多图滑动，纯 JS 无原生构建）。
 

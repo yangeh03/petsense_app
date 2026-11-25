@@ -7,7 +7,7 @@ from datetime import timedelta
 from unittest.mock import patch
 
 from flask import Flask
-from helpers import fresh_db
+from helpers import TurnClient, fresh_db
 from test_pets import seed_user_with_pet
 
 from petsense import db
@@ -317,7 +317,6 @@ class RouteIntegrationTests(unittest.TestCase):
         fresh_db(self)
         self.app = Flask(__name__)
         self.app.register_blueprint(bp)
-        self.client = self.app.test_client()
         with db.session_scope() as s:
             user = User(username='w02-user', display_name='w02-user', password_hash='x', salt='s',
                         avatar_emoji='🙂', bio='', created_at=db.utc_now())
@@ -333,6 +332,7 @@ class RouteIntegrationTests(unittest.TestCase):
             s.add(AuthSession(token_hash=hashlib.sha256(token.encode()).hexdigest(),
                               user_id=user.id, expires_at=db.utc_now() + timedelta(days=1)))
             self.auth = {'X-Petsense-Session': token}
+        self.client = TurnClient(self.app.test_client(), self.pet_id)
 
     def test_post_persists_run_snapshot(self):
         seed_latest(self.uid, 'esp32-001', latest_payload(), age_seconds=10)

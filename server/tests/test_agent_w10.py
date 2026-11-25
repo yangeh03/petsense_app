@@ -18,7 +18,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from flask import Flask
-from helpers import fresh_db
+from helpers import TurnClient, fresh_db
 from test_agent import model_turn, allowed_stance
 from test_pets import seed_user_with_pet
 
@@ -870,7 +870,7 @@ class BlockStabilityTests(W10TestCase):
         """完整 HTTP 回合：直写草稿动作块随回复落库（模型打桩）。"""
         app = Flask(__name__)
         app.register_blueprint(agent_bp)
-        client = app.test_client()
+        client = TurnClient(app.test_client(), self.pet_id)
         auth = patch('petsense.agent.routes.require_app_user',
                      return_value=({'id': self.uid}, None))
         auth.start()

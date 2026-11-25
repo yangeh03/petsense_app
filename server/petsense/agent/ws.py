@@ -9,6 +9,9 @@ flask-sock 实例与连接管理模式；token 鉴权同 /ws（query 参数，RN
 turn 快照一律带 messages；未声明的连接继续只收旧的 delta（累计全文，发言人取正在生成的那位）与
 旧结构 turn 帧，同一份群聊回合对两类连接都可读。声明只在该账号确实进入双 Agent 时生效：未开放时
 这条连接照旧收旧形状的帧（新客户端连到未开放的环境仍能看到流式正文）。
+
+多会话（docs/agent-w16-spec.md §5.5）：回合、流式与消息帧都带 conversationId（取自回合行），客户端据此
+把帧送进对应的会话缓存；后台交付、改名、删除之后另推 conversation 帧（会话摘要），列表不必整表重拉。
 """
 import json
 import threading
@@ -59,23 +62,31 @@ def _legacy_turn(turn_public):
     return projected
 
 
-def push_turn(user_id, pet_id, turn_public):
-    """回合快照推给该用户的全部连接；两类连接按各自协议取形状，内容是同一份持久化结果。"""
+def push_turn(user_id, pet_id, turn_public, conversation=None):
+    """回合快照推给该用户的全部连接；两类连接按各自协议取形状，内容是同一份持久化结果。
+
+    conversation 是可选的会话摘要：回合落定、列表需要跟着变（标题、预览、活动时间）时由调用方带上，
+    客户端据此更新列表；拿不到会话摘要的调用方不必带。
+    """
     view = None
+    conversation_id = turn_public.get('conversationId')
     for ws, uid in list(clients.items()):
         if uid != user_id:
             continue
         if protocols.get(ws):
             if view is None:
                 view = _group_view(turn_public)
-            _send(ws, {'type': 'turn', 'petId': pet_id, 'turn': view})
+            _send(ws, {'type': 'turn', 'petId': pet_id, 'conversationId': conversation_id,
+                       'conversation': conversation, 'turn': view})
         else:
-            _send(ws, {'type': 'turn', 'petId': pet_id, 'turn': _legacy_turn(turn_public)})
+            _send(ws, {'type': 'turn', 'petId': pet_id, 'conversationId': conversation_id,
+                       'conversation': conversation, 'turn': _legacy_turn(turn_public)})
 
 
-def push_delta(user_id, pet_id, turn_id, text, speaker):
+def push_delta(user_id, pet_id, turn_id, text, speaker, conversation_id=None):
     """旧的流式增量（累计全文）。声明群聊协议的连接只按消息 ID 收增量，不收这一种。"""
-    frame = {'type': 'delta', 'petId': pet_id, 'turnId': turn_id, 'text': text, 'speaker': speaker}
+    frame = {'type': 'delta', 'petId': pet_id, 'conversationId': conversation_id,
+             'turnId': turn_id, 'text': text, 'speaker': speaker}
     for ws, uid in list(clients.items()):
         if uid == user_id and not protocols.get(ws):
             _send(ws, frame)
@@ -87,22 +98,28 @@ def _push_group(user_id, frame):
             _send(ws, frame)
 
 
-def push_message_delta(user_id, pet_id, turn_id, message_id, role, text, version):
+def push_message_delta(user_id, pet_id, turn_id, message_id, role, text, version, conversation_id=None):
     """群聊消息的流式增量：text 是这条消息的累计正文，version 是它所属的持久化版本。"""
-    _push_group(user_id, {'type': 'message_delta', 'petId': pet_id, 'turnId': turn_id,
-                          'messageId': message_id, 'role': role, 'text': text, 'version': version})
+    _push_group(user_id, {'type': 'message_delta', 'petId': pet_id, 'conversationId': conversation_id,
+                          'turnId': turn_id, 'messageId': message_id, 'role': role, 'text': text,
+                          'version': version})
 
 
-def push_message(user_id, pet_id, message):
+def push_message(user_id, pet_id, message, conversation_id=None):
     """群聊消息快照（领取、终态、卡片同步）：message 是 group.message_public 的结果。"""
-    _push_group(user_id, {'type': 'message', 'petId': pet_id, 'turnId': message.get('turnId'),
-                          'message': message})
+    _push_group(user_id, {'type': 'message', 'petId': pet_id, 'conversationId': conversation_id,
+                          'turnId': message.get('turnId'), 'message': message})
 
 
-def push_message_status(user_id, pet_id, turn_id, message_id, role, status):
+def push_message_status(user_id, pet_id, turn_id, message_id, role, status, conversation_id=None):
     """群聊消息的瞬时状态（如 searching 联网核实中）：状态不是正文，不进消息文本。"""
-    _push_group(user_id, {'type': 'message_status', 'petId': pet_id, 'turnId': turn_id,
-                          'messageId': message_id, 'role': role, 'status': status})
+    _push_group(user_id, {'type': 'message_status', 'petId': pet_id, 'conversationId': conversation_id,
+                          'turnId': turn_id, 'messageId': message_id, 'role': role, 'status': status})
+
+
+def push_conversation(user_id, conversation):
+    """会话摘要帧（W16）：所有连接都收，形状与接口返回的会话摘要相同；deletedAt 非空表示已删除。"""
+    push(user_id, {'type': 'conversation', 'conversation': conversation})
 
 
 def start_ping_loop():

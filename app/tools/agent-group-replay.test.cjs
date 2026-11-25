@@ -49,36 +49,40 @@ const MESSAGE_KEYS = [
 ];
 const pick = (message) => Object.fromEntries(MESSAGE_KEYS.map((key) => [key, message[key]]));
 const store = () => useAgentChatStore.getState();
-const turnOf = (id) => store().turns.find((turn) => turn.id === id);
+// 录制时还没有会话字段（W16）：这些帧都来自同一个会话，回放时补上
+const CONVERSATION = 1;
+const inConversation = (turn) => ({ ...turn, conversationId: CONVERSATION });
+const turnOf = (id) => store().chats[CONVERSATION].turns.find((turn) => turn.id === id);
 
 function applyFrame(frame) {
-  if (frame.type === 'turn') store().applyTurn(frame.turn);
+  if (frame.type === 'turn') store().applyTurn(inConversation(frame.turn));
   else if (frame.type === 'message_delta')
     store().applyMessageDelta(
-      frame.petId,
+      CONVERSATION,
       frame.turnId,
       frame.messageId,
       frame.role,
       frame.text,
       frame.version,
     );
-  else if (frame.type === 'message') store().applyMessage(frame.petId, frame.message);
+  else if (frame.type === 'message') store().applyMessage(CONVERSATION, frame.message);
   else if (frame.type === 'message_status')
-    store().applyMessageStatus(frame.petId, frame.turnId, frame.messageId, frame.status);
-  else if (frame.type === '<refetch>') store().syncTurns(frame.turns);
+    store().applyMessageStatus(CONVERSATION, frame.turnId, frame.messageId, frame.status);
+  else if (frame.type === '<refetch>')
+    store().syncTurns(CONVERSATION, frame.turns.map(inConversation));
   // <closed> / <open> 只影响连接状态，不动回合数据
 }
 
 function applyPost(frame) {
   store().setDualAgent(frame.body.protocol === PROTOCOL);
-  store().applyTurn(frame.body.turn);
+  store().applyTurn(inConversation(frame.body.turn));
 }
 
 /** 逐事件检查每条消息的版本、正文、状态不回退；重试让失败的那条重新排队除外 */
 function watch(retrying = false) {
   const seen = new Map();
   return () => {
-    for (const turn of store().turns) {
+    for (const turn of store().chats[CONVERSATION].turns) {
       if (!turns.hasMessages(turn)) continue;
       for (const message of turn.messages) {
         const previous = seen.get(message.id);
@@ -119,6 +123,8 @@ function assertFinalState(turnId, final, label) {
 
 function replay(entry, { deferPost = false, staleListing = false } = {}) {
   store().resetForUser(1);
+  store().openChat(CONVERSATION); // 帧只进正在看或已加载的会话
+  store().setActive(CONVERSATION);
   store().setPet({ id: petId, name: '小白' });
   const post = entry.frames.find((frame) => frame.type === '<post>');
   const serverTurn = post.body.turn;
@@ -134,7 +140,7 @@ function replay(entry, { deferPost = false, staleListing = false } = {}) {
     reply: '',
     status: 'pending',
     createdAt: new Date().toISOString(),
-    topicId: null,
+    conversationId: CONVERSATION,
     replyTo: null,
     sources: [],
     blocks: null,
@@ -162,7 +168,7 @@ function replay(entry, { deferPost = false, staleListing = false } = {}) {
       true,
       '失败的回合应能只重试失败的那条',
     );
-    store().applyTurn(entry.retry.post);
+    store().applyTurn(inConversation(entry.retry.post));
     retryCheck();
     for (const frame of entry.retry.frames) {
       applyFrame(frame);
@@ -225,13 +231,15 @@ test('录制素材：11 个剧本都收到了终态，旧历史投影成只读�
 
 test('历史：旧回合显示为只读的一条，不提供重试入口，回合级引用取它的正文', () => {
   store().resetForUser(1);
+  store().openChat(CONVERSATION); // 帧只进正在看或已加载的会话
+  store().setActive(CONVERSATION);
   store().setPet({ id: petId, name: '小白' });
-  store().syncTurns(recorded.history.turns);
+  store().syncTurns(CONVERSATION, recorded.history.turns.map(inConversation));
   const legacyId = recorded.history.legacyTurnId;
   const turn = turnOf(legacyId);
   assert.equal(turn.messages[0].text, '我在。这是一条旧协议的回复。'); // 去掉了发言人标记
   assert.equal(turns.canRetryMessages(turn), false);
-  assert.deepEqual(json(turns.quotedReply(store().turns, legacyId, null)), {
+  assert.deepEqual(json(turns.quotedReply(store().chats[CONVERSATION].turns, legacyId, null)), {
     role: 'assistant',
     text: '我在。这是一条旧协议的回复。',
   });
@@ -253,10 +261,13 @@ for (const entry of recorded.cases) {
       );
     // 每条完成的回复都能被消息级引用精确取到
     for (const message of orders[0].messages)
-      assert.deepEqual(json(turns.quotedReply(store().turns, entry.turnId, message.id)), {
-        role: message.role,
-        text: message.text,
-      });
+      assert.deepEqual(
+        json(turns.quotedReply(store().chats[CONVERSATION].turns, entry.turnId, message.id)),
+        {
+          role: message.role,
+          text: message.text,
+        },
+      );
   });
 }
 
@@ -267,6 +278,8 @@ test('断线：重连后按列表拉齐，断开前已流出的正文不丢、�
   const turnId = entry.turnId;
   const snapshot = () => json(turnOf(turnId).messages.map((m) => [m.id, m.text]));
   store().resetForUser(1);
+  store().openChat(CONVERSATION); // 帧只进正在看或已加载的会话
+  store().setActive(CONVERSATION);
   store().setPet({ id: petId, name: '小白' });
   const post = entry.frames.find((frame) => frame.type === '<post>');
   applyPost(post);
@@ -292,6 +305,8 @@ test('失败与重试：失败的发言带说明，重试只重跑它、成功�
   // 只走到失败为止（不点重试），看失败那条在界面数据里的样子
   const turnId = entry.turnId;
   store().resetForUser(1);
+  store().openChat(CONVERSATION); // 帧只进正在看或已加载的会话
+  store().setActive(CONVERSATION);
   store().setPet({ id: petId, name: '小白' });
   const post = entry.frames.find((frame) => frame.type === '<post>');
   applyPost(post);
@@ -319,6 +334,8 @@ test('失败与重试：失败的发言带说明，重试只重跑它、成功�
 test('联网核实：核实中只挂在生成中的那条消息上，出字后清掉', () => {
   const entry = caseOf('search');
   store().resetForUser(1);
+  store().openChat(CONVERSATION); // 帧只进正在看或已加载的会话
+  store().setActive(CONVERSATION);
   store().setPet({ id: petId, name: '小白' });
   const post = entry.frames.find((frame) => frame.type === '<post>');
   applyPost(post);

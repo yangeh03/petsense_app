@@ -7,12 +7,19 @@
  *   流式增量按消息推送（message_delta / message / message_status），turn 快照带逐条回复；
  *   账号未开放时声明不生效，照旧收上面的旧形状帧；
  * - 指数退避自动重连；重连后由调用方 GET turns 拉齐（以服务端已保存结果为准）；
- * - 断线期间调用方降级轮询（agent-w01-spec.md §3.6）。
+ * - 断线期间调用方降级轮询（agent-w01-spec.md §3.6）；
+ * - 多会话（docs/agent-w16-spec.md §5.5）：每种帧都带 conversationId，客户端据此把帧送进对应的会话；
+ *   后台交付与增删改之后另推 {type:'conversation'} 会话摘要。
  */
 
 import { API_BASE_URL } from '@/config';
 import { getToken } from '@/services/api';
-import { AGENT_GROUP_PROTOCOL, type AgentReplyMessage, type AgentTurn } from '@/services/agent';
+import {
+  AGENT_GROUP_PROTOCOL,
+  type AgentConversation,
+  type AgentReplyMessage,
+  type AgentTurn,
+} from '@/services/agent';
 
 const MAX_RETRY_DELAY_MS = 15_000;
 /** 服务端心跳 30s；连续 75s 无任何下行视为半死连接，主动断开触发重连 */
@@ -21,10 +28,23 @@ const WATCHDOG_TICK_MS = 5_000;
 
 export type AgentChannelStatus = 'connecting' | 'open' | 'closed' | 'unauthorized';
 
-export type AgentTurnFrame = { type: 'turn'; petId: number; turn: AgentTurn };
+/** 回合快照；conversation 是随行的会话摘要（回合落定、列表要跟着变时才有，否则为空） */
+export type AgentTurnFrame = {
+  type: 'turn';
+  petId: number;
+  conversationId: number | null;
+  turn: AgentTurn;
+  conversation?: AgentConversation | null;
+};
+/** 会话摘要（后台交付、新建、改名、删除之后）：deletedAt 非空表示这个会话已删除 */
+export type AgentConversationFrame = {
+  type: 'conversation';
+  conversation: AgentConversation;
+};
 export type AgentDeltaFrame = {
   type: 'delta';
   petId: number;
+  conversationId: number | null;
   turnId: number;
   text: string;
   speaker: AgentTurn['speaker'];
@@ -33,6 +53,7 @@ export type AgentDeltaFrame = {
 export type AgentMessageDeltaFrame = {
   type: 'message_delta';
   petId: number;
+  conversationId: number | null;
   turnId: number;
   messageId: string;
   role: AgentReplyMessage['role'];
@@ -43,6 +64,7 @@ export type AgentMessageDeltaFrame = {
 export type AgentMessageFrame = {
   type: 'message';
   petId: number;
+  conversationId: number | null;
   turnId: number;
   message: AgentReplyMessage;
 };
@@ -50,6 +72,7 @@ export type AgentMessageFrame = {
 export type AgentMessageStatusFrame = {
   type: 'message_status';
   petId: number;
+  conversationId: number | null;
   turnId: number;
   messageId: string;
   role: AgentReplyMessage['role'];
@@ -57,6 +80,7 @@ export type AgentMessageStatusFrame = {
 };
 export type AgentFrame =
   | AgentTurnFrame
+  | AgentConversationFrame
   | AgentDeltaFrame
   | AgentMessageDeltaFrame
   | AgentMessageFrame

@@ -20,6 +20,7 @@ import logging
 
 from sqlalchemy import select
 
+from petsense.agent import conversations
 from petsense.agent.inbox_eligibility import (
     DELIVERY_KINDS,
     PRIORITY_CARE,
@@ -303,6 +304,13 @@ def hydrate(session, item):
             return ({'title': '', 'summary': '', 'severity': '', 'sourceStatus': '',
                      'available': False},
                     {'status': SOURCE_OUT_OF_SCOPE, 'reason': 'pet_mismatch',
+                     'delivery': None})
+        if delivery.turn_id and not conversations.turn_visible(
+                session, session.get(AgentTurn, delivery.turn_id)):
+            # 回信所在的会话已被主人删除：正文随之不可访问，只留明确的安全历史（W16）
+            return ({'title': '', 'summary': '', 'severity': '', 'sourceStatus': '',
+                     'available': False},
+                    {'status': SOURCE_UNAVAILABLE, 'reason': 'conversation_deleted',
                      'delivery': None})
         payload = {}
         try:
@@ -650,11 +658,19 @@ def push_candidates(session, user_id, pet_id=None):
 
 # ── 深链解析 ──────────────────────────────────────────────────────────────
 
+def _anchor_conversation(session, turn_id):
+    """锚点回合所在的会话（仍然可见时）。会话已删除或回合没有会话时返回 None。"""
+    turn = session.get(AgentTurn, turn_id)
+    return turn.conversation_id if conversations.turn_visible(session, turn) else None
+
+
 def resolve_target(session, item):
     """按稳定收件箱 ID 解析原目标。返回路由、参数与**可定位锚点**。
 
     锚点（anchor）= 交付回合 id（turnId）；客户端据此在会话里定位到那条来源消息，
-    而不是停在占位路由。
+    而不是停在占位路由。参数里的 conversationId 是锚点所在的会话（W16）：客户端先切到它
+    再定位。锚点所在的会话已删除时不给 conversationId——关怀类沿用安静主题的做法展示主题卡，
+    回信类在 hydrate 里已标记为来源不可用。
     """
     ref = json.loads(item.source_ref or '{}')
     params = {'inboxId': str(item.id)}
@@ -666,6 +682,11 @@ def resolve_target(session, item):
     if item.source_kind in (SOURCE_DEVICE_FACT, SOURCE_CARE, SOURCE_LEARNING):
         topic = session.get(AgentCareTopic, ref.get('topicId'))
         params['topicId'] = str(topic.id)
+        conversation_id = _anchor_conversation(session, item.turn_id) if item.turn_id else None
+        if conversation_id is None and conversations.conversation_visible(session, topic.conversation_id):
+            conversation_id = topic.conversation_id
+        if conversation_id is not None:
+            params['conversationId'] = str(conversation_id)
         if item.turn_id:
             params['turnId'] = str(item.turn_id)
         return {'kind': 'care_topic', 'route': '/agent', 'params': params,
@@ -674,6 +695,9 @@ def resolve_target(session, item):
         delivery = session.get(AgentTaskDelivery, ref.get('deliveryId'))
         params['deliveryId'] = str(delivery.id)
         params['taskId'] = str(delivery.task_id)
+        conversation_id = _anchor_conversation(session, delivery.turn_id) if delivery.turn_id else None
+        if conversation_id is not None:
+            params['conversationId'] = str(conversation_id)
         if delivery.turn_id:
             params['turnId'] = str(delivery.turn_id)
         return {'kind': 'task_reply', 'route': '/agent', 'params': params,
@@ -716,31 +740,16 @@ def public(item, *, source=None, target=None, fields=None):
     return payload
 
 
-def turn_public(turn):
-    """回合公开序列化（与 agent/routes.public 同形状）：深链按锚点取回**那一条**来源消息。
-
-    用于「锚点回合不在当前会话已加载的那一页」的场景：客户端凭稳定回合 id 精确取回，
-    不依赖会话分页。
-    """
-    return {'id': turn.id, 'requestId': turn.request_id, 'text': turn.text,
-            'topicId': turn.topic_id, 'replyTo': turn.reply_to,
-            'sources': json.loads(turn.sources), 'speaker': turn.speaker,
-            'readAt': iso_z(turn.read_at) if turn.read_at else None,
-            'target': turn.target, 'reply': turn.reply, 'status': turn.status,
-            'blocks': json.loads(turn.blocks) if turn.blocks else None,
-            'images': json.loads(turn.images) if turn.images else [],
-            'createdAt': iso_z(turn.created_at)}
-
-
 def find_turn(session, user_id, turn_id):
-    """按回合 id 取回本人名下宠物的一条回合；不可访问时返回 None。"""
+    """按回合 id 取回本人名下宠物的一条回合；不可访问时返回 None。
+
+    所在会话已被主人删除的回合也按不可访问处理（W16）。
+    """
     turn = session.get(AgentTurn, turn_id)
-    if turn is None:
+    pet = session.get(Pet, turn.pet_id) if turn is not None else None
+    if turn is None or pet is None or pet.user_id != user_id:
         return None
-    pet = session.get(Pet, turn.pet_id)
-    if pet is None or pet.user_id != user_id:
-        return None
-    return turn
+    return turn if conversations.turn_visible(session, turn) else None
 
 
 def capability(user_id=None):
