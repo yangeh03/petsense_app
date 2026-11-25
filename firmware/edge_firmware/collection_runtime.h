@@ -5,7 +5,9 @@
 // Sampling owns all sensor drivers; storage owns writes; Arduino loop owns modem AT.
 static constexpr size_t RECORD_MAX = 3072;
 struct CaptureRecord { uint16_t length; char json[RECORD_MAX]; };
-struct CaptureCommand { char type[32]; char session[81]; char marker[81]; };
+struct CaptureCommand { char type[32]; char session[81]; char marker[81]; char request[81]; };
+struct CommandAck { CaptureCommand command; char state[24]; char reason[48]; uint32_t sequence; };
+static CommandAck lastCommandAck = {};
 struct ClockAnchor { int64_t mono; int64_t utc; uint64_t uncertainty; uint32_t version; };
 static QueueHandle_t storageQueue, commandQueue;
 static SemaphoreHandle_t diskMutex, liveMutex;
@@ -30,6 +32,33 @@ static String journalPath;
 static uint32_t journalDurable = 0;
 static uint64_t sdTotalBytes = 0, sdUsedBytes = 0;
 static bool sdSpaceKnown = false, storageDraining = false;
+
+static void acknowledge(const CaptureCommand &command, const char *state, const char *reason) {
+  portENTER_CRITICAL(&stateMux);
+  lastCommandAck.command=command;
+  strlcpy(lastCommandAck.state,state,sizeof(lastCommandAck.state));
+  strlcpy(lastCommandAck.reason,reason,sizeof(lastCommandAck.reason));
+  lastCommandAck.sequence++;
+  portEXIT_CRITICAL(&stateMux);
+  DebugSerial.printf("COLLECTION_ACK request=%s type=%s state=%s reason=%s\n",command.request,command.type,state,reason);
+}
+
+static String commandAckJson() {
+  CommandAck ack;
+  portENTER_CRITICAL(&stateMux);ack=lastCommandAck;portEXIT_CRITICAL(&stateMux);
+  if(!ack.sequence)return "null";
+  cJSON *doc=cJSON_CreateObject();
+  cJSON_AddStringToObject(doc,"device",DEVICE_ID);
+  cJSON_AddStringToObject(doc,"boot_id",bootId);
+  cJSON_AddStringToObject(doc,"request_id",ack.command.request);
+  cJSON_AddStringToObject(doc,"session",ack.command.session);
+  cJSON_AddStringToObject(doc,"command",ack.command.type);
+  cJSON_AddStringToObject(doc,"state",ack.state);
+  cJSON_AddStringToObject(doc,"reason",ack.reason);
+  cJSON_AddNumberToObject(doc,"sequence",ack.sequence);
+  char *text=cJSON_PrintUnformatted(doc);String result=text?text:"null";
+  cJSON_free(text);cJSON_Delete(doc);return result;
+}
 
 // Only the storage worker touches the filesystem; telemetry reads this cache.
 static void refreshStorageSpace() {
@@ -94,7 +123,13 @@ bool collectionHandleCommand() {
     strlcpy(cmd.type,type.c_str(),sizeof(cmd.type));
     strlcpy(cmd.session,jsonText(doc,"session"),sizeof(cmd.session));
     strlcpy(cmd.marker,jsonText(doc,"marker"),sizeof(cmd.marker));
-    if(safeId(cmd.session)) xQueueSend(commandQueue,&cmd,0);
+    strlcpy(cmd.request,jsonText(doc,"request_id"),sizeof(cmd.request));
+    if(!cmd.request[0]) snprintf(cmd.request,sizeof(cmd.request),"legacy-%08lx",(unsigned long)recordCrc((const uint8_t*)body.c_str(),body.length()));
+    if(!safeId(cmd.session)) acknowledge(cmd,"rejected","invalid_session");
+    else {
+      acknowledge(cmd,"received","queued");
+      if(xQueueSend(commandQueue,&cmd,0)!=pdTRUE) acknowledge(cmd,"rejected","command_queue_full");
+    }
   }
   cJSON_Delete(doc); return true;
 }
@@ -151,6 +186,10 @@ static void samplingWorker(void *) {
     payload+=",\"capture_cost_us\":"+decimal64(esp_timer_get_time()-start);
     payload+=",\"marker_id\":\""+String(trigger?marker:"")+"\"}";
     edgeStep(payload,sampleGap);
+    // Preserve raw sensor fields and timestamp the actual inference window.
+    payload.remove(payload.length()-1);
+    payload+=",\"action_prediction_new\":"+String(edgeActionUpdated?"true":"false");
+    payload+=",\"action_prediction\":"+(edgeImuSamples>=edgeImuWindowSamples?edgeLoggedPrediction:String("null"))+"}";
     sampleSequence=sequence++;
     if(xSemaphoreTake(liveMutex,0)==pdTRUE) {latestLive=edgeSummary; xSemaphoreGive(liveMutex);}
     if(active) {
@@ -172,12 +211,14 @@ static void samplingWorker(void *) {
   }
 }
 
-static String auditCard() {
+static String auditCard(const String &selectedPath) {
   String result="{\"card_bytes\":"+decimal64(SD_MMC.cardSize())+",\"files\":[";
   File dir=SD_MMC.open("/collection_v2"); bool comma=false;
   for(File file=dir.openNextFile();file;file=dir.openNextFile()) {
-    if(file.isDirectory() || !String(file.path()).endsWith(".psj")) {file.close();continue;}
+    if(file.isDirectory() || String(file.path())!=selectedPath) {file.close();continue;}
     uint32_t rows=0, first=0, last=0, gaps=0, sum=0, validBytes=0, errors=0;
+    uint32_t predictions=0, missingImu=0, timingErrors=0;
+    int64_t previousMono=0;
     uint32_t size=file.size(); String path=file.path();
     while(file.available()) {
       uint32_t header[3]; char data[RECORD_MAX];
@@ -185,14 +226,25 @@ static String auditCard() {
          file.read((uint8_t *)data,header[1])!=header[1] || recordCrc((uint8_t *)data,header[1])!=header[2]) {errors++;break;}
       data[header[1]]=0; cJSON *doc=cJSON_Parse(data);
       if(!doc) {errors++;break;}
-      uint32_t seq=jsonInteger(doc,"seq"); cJSON_Delete(doc);
+      uint32_t seq=jsonInteger(doc,"seq");
+      int64_t mono=jsonInteger(doc,"mono_us");
+      if(previousMono && (mono-previousMono<50000 || mono-previousMono>150000))timingErrors++;
+      previousMono=mono;
+      cJSON *imu=cJSON_GetObjectItem(doc,"imu");
+      if(!cJSON_IsTrue(cJSON_GetObjectItem(imu,"ok")) || cJSON_GetArraySize(cJSON_GetObjectItem(imu,"accel"))!=3 || cJSON_GetArraySize(cJSON_GetObjectItem(imu,"gyro"))!=3)missingImu++;
+      if(cJSON_IsTrue(cJSON_GetObjectItem(doc,"action_prediction_new"))) {
+        cJSON *prediction=cJSON_GetObjectItem(doc,"action_prediction");
+        if(cJSON_IsString(cJSON_GetObjectItem(prediction,"label")) && jsonInteger(prediction,"seq")==seq)predictions++;
+        else errors++;
+      }
+      cJSON_Delete(doc);
       if(!rows)first=seq;else if(seq!=last+1)gaps++;
       last=seq;rows++;sum+=header[2];validBytes+=12+header[1];
     }
     file.close();
     if(comma)result+=',';comma=true;
     result+="{\"path\":\""+path+"\",\"rows\":"+String(rows)+",\"first\":"+String(first)+",\"last\":"+String(last);
-    result+=",\"gaps\":"+String(gaps)+",\"crc_sum\":"+String(sum)+",\"errors\":"+String(errors)+",\"bytes\":"+String(size)+",\"valid_bytes\":"+String(validBytes)+"}";
+    result+=",\"gaps\":"+String(gaps)+",\"predictions\":"+String(predictions)+",\"missing_imu\":"+String(missingImu)+",\"timing_errors\":"+String(timingErrors)+",\"crc_sum\":"+String(sum)+",\"errors\":"+String(errors)+",\"bytes\":"+String(size)+",\"valid_bytes\":"+String(validBytes)+"}";
     if(result.length()>7000)break;
   }
   dir.close();return result+"]}";
@@ -205,8 +257,8 @@ static void storageWorker(void *) {
   cardReady=SD_MMC.begin("/sdcard",true,false,SDMMC_INIT_FREQ_KHZ,8) && SD_MMC.cardType()!=CARD_NONE;
   if(cardReady) {
     refreshStorageSpace();
-    String report=auditCard();
-    xSemaphoreTake(liveMutex,portMAX_DELAY);auditReport=report;xSemaphoreGive(liveMutex);
+    // Full historical CRC scans must not block the command-processing loop.
+    auditReport="{\"state\":\"not_requested\"}";
   }
   xSemaphoreGive(diskMutex);
   CaptureRecord record; uint32_t lastSpace=millis(), lastStop=0;
@@ -242,7 +294,7 @@ static void storageWorker(void *) {
       } else if(strcmp(command.type,"collection_audit")==0 && !captureActive && uxQueueMessagesWaiting(storageQueue)==0 && cardReady) {
         xSemaphoreTake(diskMutex,portMAX_DELAY);
         if(journal) {journal.flush();journalDurable=journal.size();persistedRows+=unflushed;unflushed=0;}
-        String report=auditCard();
+        String report=auditCard("/collection_v2/"+String(command.session)+"_"+String(bootId)+".psj");
         xSemaphoreGive(diskMutex);
         xSemaphoreTake(liveMutex,portMAX_DELAY);auditReport=report;xSemaphoreGive(liveMutex);
       } else if(strcmp(command.type,"collection_stop")==0) {
@@ -254,6 +306,14 @@ static void storageWorker(void *) {
         if(captureActive && strcmp(command.session,activeSession)==0) strlcpy(markerId,command.marker,sizeof(markerId));
         portEXIT_CRITICAL(&stateMux);
       }
+      if(strcmp(command.type,"collection_start")==0) {
+        const bool matched=captureActive && strcmp(command.session,activeSession)==0;
+        const char *reason=matched?"started":captureActive?"another_session_active":diskFault?"disk_fault":!clockReady?"clock_not_ready":!cardReady?"sd_not_ready":!sdSpaceKnown?"sd_space_unknown":sdTotalBytes-sdUsedBytes<=1024*1024?"sd_full":uxQueueMessagesWaiting(storageQueue)?"storage_busy":"journal_or_lock_failed";
+        acknowledge(command,matched?"applied":"rejected",reason);
+      } else if(strcmp(command.type,"collection_stop")==0) {
+        bool matched=strcmp(command.session,activeSession)==0;
+        acknowledge(command,matched?"applied":"rejected",matched?"stopping":"session_mismatch");
+      } else acknowledge(command,"processed","check_status");
     }
     if(xQueueReceive(storageQueue,&record,pdMS_TO_TICKS(10))==pdTRUE) {
       portENTER_CRITICAL(&stateMux);storageDraining=true;portEXIT_CRITICAL(&stateMux);
@@ -408,11 +468,13 @@ void loop() {
     lastPublish += 1000;
     if(millis()-lastPublish>=1000)lastPublish=millis();
     // Edge demo sends summaries only; existing SD journals remain untouched.
-    String live;
-    if(xSemaphoreTake(liveMutex,pdMS_TO_TICKS(5))==pdTRUE) {live=latestLive;xSemaphoreGive(liveMutex);}
+    String live, audit="null";
+    if(xSemaphoreTake(liveMutex,pdMS_TO_TICKS(5))==pdTRUE) {live=latestLive;audit=auditReport;xSemaphoreGive(liveMutex);}
     if(live.length()) {
+      String ack=commandAckJson();
+      live.remove(live.length()-1);live+=",\"command_ack\":"+ack+"}";
       mqttPublishText("petsense/sensor/edge_v1",live);
-      String status="{\"device\":\""+String(DEVICE_ID)+"\",\"frame\":"+live+"}";
+      String status="{\"device\":\""+String(DEVICE_ID)+"\",\"audit\":"+audit+",\"frame\":"+live+"}";
       mqttPublishText("petsense/sensor/collection_status",status);
     }
   }
