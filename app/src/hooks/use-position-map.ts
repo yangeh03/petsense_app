@@ -6,6 +6,7 @@ import { ApiError, request } from '@/services/api';
 import { MapRefresh } from '@/services/map-refresh';
 import { appendMeasuredTrail, positionMatchesMap } from '@/services/map-viewport';
 import type { UwbMap, UwbPosition } from '@/types/uwb';
+import { parseUwbPosition } from '@/services/telemetry-service';
 
 type Result = {
   scope: string;
@@ -46,7 +47,9 @@ export function usePositionMap(deviceId: string | undefined) {
           if (!response || response.deviceId !== deviceId)
             throw new Error('设备数据不完整或不匹配');
           const positionReceived = Date.now();
-          const position = response.position;
+          const position =
+            response.position === null ? null : parseUwbPosition(response.position, deviceId!);
+          if (position === undefined) throw new Error('位置数据格式无效');
           const map = await maps.refresh(deviceId!, position, controller.signal, Date.now());
           if (cancelled) return;
           const received = Date.now();

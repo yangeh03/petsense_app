@@ -3,6 +3,7 @@ from flask import Blueprint, request
 from petsense.auth.routes import require_app_user
 from petsense.telemetry.realtime import device_ids_for_user
 from .service import service
+from .regions import RegionConflict
 
 bp = Blueprint('uwb', __name__, url_prefix='/api/app/uwb')
 
@@ -33,3 +34,31 @@ def get_uwb():
         return {'message': '地图配置不可用，请检查标定配置'}, 503
     return {'success': True, 'deviceId': device,
             'position' if kind == 'position' else 'map': value}, 200, {'Cache-Control': 'no-store'}
+
+
+@bp.route('/regions', methods=['GET', 'PUT'])
+def regions():
+    user, error = require_app_user()
+    if error:
+        return error
+    device, error = owned_device(user)
+    if error:
+        return error
+    if not device:
+        return {'message': '请先绑定设备'}, 400
+    try:
+        if request.method == 'PUT':
+            request.max_content_length = 150_000
+            data = request.get_json(silent=True)
+            if not isinstance(data, dict):
+                raise ValueError('请上传区域 JSON 对象')
+            result = service.set_regions(device, user['id'], data)
+        else:
+            result = service.region_config(device, user['id'])
+        return {'success': True, 'deviceId': device, 'config': result}, 200, {'Cache-Control': 'no-store'}
+    except RegionConflict as error:
+        return {'message': str(error)}, 409
+    except (ValueError, KeyError, TypeError) as error:
+        return {'message': str(error)}, 400
+    except OSError:
+        return {'message': '区域配置暂时无法保存，请稍后重试'}, 503

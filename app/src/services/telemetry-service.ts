@@ -420,6 +420,31 @@ export function parseUwbPosition(value: unknown, deviceId: string): UwbPosition 
   if (!value || typeof value !== 'object') return undefined;
   const p = value as Record<string, unknown>;
   const point = p.position as Record<string, unknown> | null;
+  if (p.region !== undefined && p.region !== null) {
+    const region = p.region as Record<string, unknown>;
+    if (
+      typeof region !== 'object' ||
+      typeof region.id !== 'string' ||
+      !region.id ||
+      region.id.length > 64 ||
+      typeof region.label !== 'string' ||
+      !region.label.trim() ||
+      region.label.length > 40
+    )
+      return undefined;
+  }
+  if (
+    p.regionStatus !== undefined &&
+    !['known', 'transition', 'unmapped', 'unconfigured', 'uncertain', 'waiting', 'stale'].includes(
+      String(p.regionStatus),
+    )
+  )
+    return undefined;
+  if (
+    p.regionsRevision !== undefined &&
+    (typeof p.regionsRevision !== 'string' || !/^(none|[a-f0-9]{64})$/.test(p.regionsRevision))
+  )
+    return undefined;
   for (const key of ['rawPosition', 'unconstrainedPosition']) {
     const diagnostic = p[key];
     if (diagnostic != null && !numericObject(diagnostic, ['x', 'y'])) return undefined;

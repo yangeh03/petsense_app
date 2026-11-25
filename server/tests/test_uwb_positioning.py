@@ -73,6 +73,37 @@ class UwbPositioningTests(unittest.TestCase):
         self.assertAlmostEqual(p['position']['y'], 1)
         self.assertTrue(p['quality']['insideMap'])
 
+    def test_region_routes_claim_scope_conflicts_duplicates_and_stale(self):
+        app = Flask(__name__)
+        app.register_blueprint(routes.bp)
+        client = app.test_client()
+        headers = {'X-Petsense-Session': make_session_token(self.owner)}
+        other = {'X-Petsense-Session': make_session_token(self.other)}
+        url = '/api/app/uwb/regions?deviceId=collar'
+        with patch.object(routes, 'service', self.service):
+            self.assertEqual(client.get(url).status_code, 401)
+            self.assertEqual(client.put(url, headers=other, json={}).status_code, 403)
+            cfg = client.get(url, headers=headers).json['config']
+            region = {'id': 'sofa', 'label': '沙发前', 'confirmed': True, 'priority': 1,
+                      'polygon': [[.5, .5], [2, .5], [2, 2], [.5, 2]]}
+            payload = {**cfg, 'baseRevision': cfg['revision'], 'confirmed': True, 'regions': [region]}
+            first_map = self.service.map_version('collar')
+            self.assertEqual(client.put(url, headers=headers, json={**payload, 'confirmed': False}).status_code, 400)
+            self.assertEqual(client.put(url, headers=headers, json=payload).status_code, 200)
+            self.assertNotEqual(first_map['revision'], self.service.map_version('collar')['revision'])
+            self.assertEqual(client.put(url, headers=headers, json=payload).status_code, 409)
+            self.assertEqual(client.put(url, headers=headers, json={**payload, 'mapFingerprint': 'wrong'}).status_code, 409)
+            with patch('petsense.uwb.service.time.monotonic', return_value=10):
+                f = self.frame()
+                self.service.enrich(f, 'collar')
+                self.assertEqual(f['uwbPosition']['region'], {'id': 'sofa', 'label': '沙发前'})
+            with patch('petsense.uwb.service.time.monotonic', return_value=11):
+                self.assertEqual(self.service.latest('collar')['regionStatus'], 'known')
+            with patch('petsense.uwb.service.time.monotonic', return_value=13):
+                stale = self.service.latest('collar')
+                self.assertEqual(stale['regionStatus'], 'stale')
+                self.assertEqual(stale['region']['label'], '沙发前')
+
     def test_public_snapshot_exposes_boundary_correction_without_hiding_original_fix(self):
         self.data['polygon'] = [[0, 0], [.5, 0], [.5, .5], [0, .5]]
         self.manifest.write_text(json.dumps(self.data))
