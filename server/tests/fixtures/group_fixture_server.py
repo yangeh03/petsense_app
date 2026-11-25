@@ -193,13 +193,17 @@ SCENARIOS = {
                    '澄清之后再发消息，照常重新路由'],
     },
     'default': {
-        'title': '其它消息：照料助手单独回复（与旧路径的单人回答一致）',
+        'title': '其它消息：只有一位作答（intent 偏闲聊时路由到爱宠，偏专业时到照料助手）',
         'trigger': None,
         'router': {'scope': 'allowed', 'intent': 'social', 'companion': False, 'professional': False,
                    'order': ['assistant'], 'follows': False, 'reason': '未命中剧本'},
+        # 两位都要有台词：路由按 intent 归一化后落到哪一位，就用那一位的台词。
+        # 只写 assistant 时，intent=social 会被归一化到爱宠，取不到台词，模型返回空正文
+        # （ValueError: 模型未返回可用回复），界面上表现为一条失败气泡。
+        'pet': ['我在这儿呢。', '想聊点什么？'],
         'assistant': ['我在。', '有什么想了解的可以直接问我。'],
         'delay': 0.3,
-        'expect': ['只有照料助手一条气泡'],
+        'expect': ['只有一条气泡'],
     },
 }
 

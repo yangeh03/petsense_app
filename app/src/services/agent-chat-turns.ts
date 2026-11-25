@@ -450,8 +450,16 @@ function activityAt(conversation: AgentConversation): string {
   return conversation.lastTurnAt ?? conversation.createdAt;
 }
 
-/** 最近活动倒序（没有回合的会话按创建时间排）；同一时刻 id 大的在前。 */
+/**
+ * 会话排序，与服务端 `agent/conversations.py` 的 listing 同一口径：
+ * 有回合的会话按最近活动倒序在前；还没有回合的空会话排在后面（组内按创建时间倒序）。
+ * 空会话必须靠后——它按创建时间算「最近活动」，排在前面会盖住有内容的会话，
+ * 本机没记住上次会话时还会把主人直接落到一个空会话里。
+ */
 export function compareConversations(a: AgentConversation, b: AgentConversation): number {
+  const aEmpty = !a.lastTurnAt;
+  const bEmpty = !b.lastTurnAt;
+  if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
   const byTime = activityAt(b).localeCompare(activityAt(a));
   return byTime !== 0 ? byTime : b.id - a.id;
 }

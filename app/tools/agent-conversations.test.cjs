@@ -102,6 +102,30 @@ test('落地规则：本机记住的上次会话还在就打开它，否则取�
   assert.equal(turns.landingConversation([], null), null);
 });
 
+test('排序：空会话排在有内容的会话后面（与服务端口径一致）', () => {
+  // 空会话的创建时间更新，按「最近活动」本该排最前，但空会话必须靠后：
+  // 否则新建的空会话会盖住有内容的会话，本机没记住上次会话时还会把主人落到空会话里
+  const empty = summary(9, { createdAt: '2026-11-25T12:00:00.000Z', lastTurnAt: null });
+  const active = summary(1, { lastTurnAt: '2026-11-24T10:00:00.000Z' });
+  const list = turns.mergeConversations([], [active, empty]).list;
+  assert.deepEqual(
+    list.map((item) => item.id),
+    [1, 9],
+  );
+  // 空会话之间仍按创建时间倒序
+  const two = turns.mergeConversations(
+    [],
+    [
+      summary(2, { createdAt: '2026-11-20T00:00:02.000Z' }),
+      summary(3, { createdAt: '2026-11-20T00:00:03.000Z' }),
+    ],
+  ).list;
+  assert.deepEqual(
+    two.map((item) => item.id),
+    [3, 2],
+  );
+});
+
 test('没有随行摘要的回合帧：列表项本地补活动时间与预览，别的会话的新未读回合加一', () => {
   let list = [summary(1), summary(2)];
   const mine = serverTurn(10, { text: '今天走了多久', conversationId: 1 });

@@ -151,6 +151,8 @@ function TaskRow({
         {task.conversationId && !task.conversationDeleted ? (
           <Pressable
             accessibilityRole="link"
+            // 显式给标签：否则箭头图标的名字（Forward）会被拼进来，读成「回到原会话, Forward」
+            accessibilityLabel="回到原会话"
             onPress={() =>
               // 回到确认这个委托的会话（W16）：与收件箱深链同一机制，带上会话参数回到伙伴页
               router.replace({
@@ -163,7 +165,7 @@ function TaskRow({
             <ThemedText type="small" themeColor="tintForeground">
               回到原会话
             </ThemedText>
-            <SymbolView name={CHEVRON_ICON} tintColor={theme.tint} size={11} />
+            <SymbolView name={CHEVRON_ICON} tintColor={theme.tint} size={11} accessible={false} />
           </Pressable>
         ) : null}
       </View>

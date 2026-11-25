@@ -187,11 +187,17 @@ def public(session, row):
 
 
 def listing(session, pet, limit=LIST_PAGE, offset=0):
-    """会话列表（不含已删除），按最近活动倒序；没有回合的会话按创建时间排。返回 (列表, 总数)。"""
+    """会话列表（不含已删除），按最近活动倒序；还没有回合的空会话排在有内容的会话后面。
+
+    空会话（刚建完还没说话）也参与排序，但按创建时间排在最后：否则新建的空会话会盖在
+    有内容的会话上面，本机没有记住上次会话时还会把主人直接落到一个空会话里。
+    返回 (列表, 总数)。
+    """
     condition = (AgentConversation.pet_id == pet.id, AgentConversation.deleted_at.is_(None))
     total = session.execute(select(func.count()).select_from(
         select(AgentConversation.id).where(*condition).subquery())).scalar_one()
     rows = session.execute(select(AgentConversation).where(*condition).order_by(
+        AgentConversation.last_turn_at.is_(None),
         func.coalesce(AgentConversation.last_turn_at, AgentConversation.created_at).desc(),
         AgentConversation.id.desc()).limit(limit).offset(offset)).scalars().all()
     ids = [row.id for row in rows]
@@ -230,7 +236,8 @@ def delete(session, conversation, now=None):
     if tasks or topics:
         parts = (['%d 个进行中的委托' % tasks] if tasks else []) + \
                 (['%d 个未结束的提醒' % topics] if topics else [])
-        raise ConversationError(409, '这个会话里还有' + '和'.join(parts) + '，结束后才能删除',
+        # 数字两侧留空格，与同文件的「标题需为 1 到 %d 个字」等文案口径一致
+        raise ConversationError(409, '这个会话里还有 ' + '和'.join(parts) + '，结束后才能删除',
                                 code='conversation_busy', activeTasks=tasks, openCareTopics=topics)
     conversation.deleted_at = conversation.updated_at = now or utc_now()
 

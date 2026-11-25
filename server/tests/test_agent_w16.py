@@ -148,6 +148,21 @@ class ConversationApiTests(unittest.TestCase):
         page = self.client.get(f'{self.base}?limit=1&offset=1').json
         self.assertEqual([item['id'] for item in page['conversations']], [second])
         self.assertEqual(page['hasMore'], False)
+
+    def test_empty_conversations_sort_after_conversations_with_activity(self):
+        """空会话（刚建完还没说话）排在有内容的会话后面。
+
+        按创建时间倒序的话，后建的空会话会盖在有内容的会话上面；本机没记住上次会话时
+        §6.1 的「取列表第一个」还会把主人直接落到一个空会话里。
+        """
+        with_content = self.client.conversation_id
+        self.say('有内容的一句', key='o1')
+        empty = self.client.post(self.base).json['conversation']['id']
+        listing = self.client.get(self.base).json['conversations']
+        self.assertEqual([item['id'] for item in listing], [with_content, empty])
+        self.assertEqual((listing[0]['turnCount'], listing[1]['turnCount']), (1, 0))
+        # 空会话排在后面，但仍然在列表里、也没有被软删除
+        self.assertIsNone(listing[1]['lastTurnAt'])
         self.assertEqual(self.client.get(f'{self.base}?limit=abc').status_code, 400)
 
     # ── 历史只取当前会话 ──────────────────────────────────────────────────
@@ -248,6 +263,8 @@ class ConversationApiTests(unittest.TestCase):
         self.assertEqual((refused.status_code, refused.json['code'], refused.json['activeTasks']),
                          (409, 'conversation_busy', 1))
         self.assertIn('委托', refused.json['message'])
+        # 数字两侧留空格：与「标题需为 1 到 N 个字」等文案口径一致
+        self.assertEqual(refused.json['message'], '这个会话里还有 1 个进行中的委托，结束后才能删除')
         with db.session_scope() as s:
             s.get(AgentTask, task_id).status = 'completed'
             topic = care.open_topic(s, self.pet, 'device', 'battery_low', 'collar-busy', now=now)
@@ -255,6 +272,7 @@ class ConversationApiTests(unittest.TestCase):
             topic_id = topic.id
         refused = self.client.delete(url)
         self.assertEqual((refused.status_code, refused.json['openCareTopics']), (409, 1))
+        self.assertEqual(refused.json['message'], '这个会话里还有 1 个未结束的提醒，结束后才能删除')
         with db.session_scope() as s:
             s.get(AgentCareTopic, topic_id).status = 'closed'
         self.assertEqual(self.client.delete(url).status_code, 200)
