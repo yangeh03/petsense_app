@@ -52,6 +52,23 @@ test('telemetry position parser rejects another device and malformed coordinates
     telemetryExports.parseUwbPosition({ ...p, remainingMs: Infinity }, 'collar'),
     undefined,
   );
+  assert.equal(
+    telemetryExports.parseUwbPosition(
+      { ...p, boundary: { constrained: true, correctionM: -1 } },
+      'collar',
+    ),
+    undefined,
+  );
+  assert.equal(
+    telemetryExports.parseUwbPosition({ ...p, rawPosition: { x: Infinity, y: 0 } }, 'collar'),
+    undefined,
+  );
+  const bounded = telemetryExports.parseUwbPosition(
+    { ...p, boundary: { constrained: true, correctionM: 0.5 }, rawPosition: { x: 1.5, y: 2 } },
+    'collar',
+  );
+  assert.equal(bounded.boundary.correctionM, 0.5);
+  assert.equal(bounded.rawPosition.x, 1.5);
 });
 const map = {
   mapId: 'room',

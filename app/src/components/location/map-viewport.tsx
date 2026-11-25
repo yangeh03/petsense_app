@@ -3,9 +3,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Image } from 'expo-image';
 import { ActivityIndicator, PanResponder, Pressable, StyleSheet, View } from 'react-native';
-import Svg, { Circle, Polyline, Text as SvgText } from 'react-native-svg';
+import Svg, { Polyline, Text as SvgText } from 'react-native-svg';
 
 import { ThemedText } from '@/components/themed-text';
+import { PositionMarker } from '@/components/location/position-marker';
 import { useTheme } from '@/hooks/use-theme';
 import { type MapImageLoad, updateMapImageLoad } from '@/services/map-image';
 import { backgroundImageRect, clampMapPan, mapBounds } from '@/services/map-viewport';
@@ -196,10 +197,13 @@ export function MapViewport({
               </SvgText>
             ))}
             {point && (
-              <Circle
-                cx={point.x}
-                cy={-point.y}
-                r={stroke * 4}
+              <PositionMarker
+                key={`${map.mapId}:${map.version}:${map.revision ?? ''}:${position.deviceId}`}
+                point={point}
+                polygon={map.polygon}
+                fresh={fresh}
+                remainingMs={position.remainingMs}
+                radius={stroke * 4}
                 fill={
                   fresh && position.status === 'ok' && position.quality.insideMap !== false
                     ? theme.tint
@@ -207,7 +211,6 @@ export function MapViewport({
                 }
                 stroke={theme.background}
                 strokeWidth={stroke}
-                opacity={fresh ? 1 : 0.4}
               />
             )}
           </Svg>
@@ -269,8 +272,8 @@ export function MapViewport({
                 ? '定位已超时，灰色点为最后位置'
                 : position.status === 'low_quality'
                   ? '当前测距质量偏低，请参考实际环境'
-                  : position.quality.insideMap === false
-                    ? '坐标位于标定范围之外，请核对锚点与地图'
+                  : position.boundary?.constrained
+                    ? '定位点已限制在场地边界内，请留意测距漂移'
                     : '正在显示项圈的真实位置'}
         </ThemedText>
       ) : null}

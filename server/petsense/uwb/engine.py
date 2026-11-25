@@ -11,6 +11,7 @@ from typing import Any, Deque, Dict, Optional, Tuple
 
 from .maps import EngineConfig as AppConfig
 from .measurement import MeasurementFrame
+from .boundary import constrain
 
 
 Point = Tuple[float, float]
@@ -56,6 +57,7 @@ class PositionEngine:
     distances: Dict[int, DistanceState] = field(init=False)
     raw_position: Optional[Point] = None
     position: Optional[Point] = None
+    display_position: Optional[Point] = None
     latest: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -156,6 +158,11 @@ class PositionEngine:
             reason = "not_all_anchor_distances_are_fresh"
 
         map_position = self._map_point(self.position) if self.position is not None else None
+        unconstrained_map_position = map_position
+        if map_position is not None:
+            map_position = constrain(map_position, self.config.map_polygon_m, self.display_position)
+            self.display_position = map_position
+        correction = math.dist(map_position, unconstrained_map_position) if map_position is not None else 0.
         raw_map_position = self._map_point(self.raw_position) if self.raw_position is not None else None
         score = None
         if residual_rms is not None:
@@ -174,6 +181,9 @@ class PositionEngine:
             "position_uwb_m": _point_object(self.position),
             "raw_position_uwb_m": _point_object(self.raw_position),
             "position_map_m": _point_object(map_position),
+            "unconstrained_position_map_m": _point_object(unconstrained_map_position),
+            "boundary_constrained": correction > 1e-9,
+            "boundary_correction_m": correction,
             "raw_position_map_m": _point_object(raw_map_position),
             "distances_m": {
                 f"A{index}": {
