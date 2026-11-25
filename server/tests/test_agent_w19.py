@@ -285,5 +285,81 @@ class LoopSearchSourceTests(unittest.TestCase):
         self.assertEqual(execute.call_count, 2, '超限的那次不应真的调用供应商')
 
 
+class StanceLayoutToleranceTests(unittest.TestCase):
+    """W19：模型把 stance JSON 与正文写在同一行时，也要能剥离（不漏给用户）。
+
+    Kimi 常输出 `{"scope":...}【照料助手】正文`，而原实现要求 stance 独占首行；
+    漏剥会让原始 JSON 出现在气泡里，并且范围声明门控失效（stance=None）。
+    """
+
+    SAME_LINE = ('{"scope":"allowed","intent":"social","speaker":"assistant"}'
+                 '【照料助手】你好呀。')
+    OWN_LINE = '{"scope":"allowed","intent":"social","speaker":"assistant"}\n【爱宠】汪！'
+
+    def test_parse_stance_same_line(self):
+        stance, body = loop.parse_stance(self.SAME_LINE)
+        self.assertIsNotNone(stance, '同行写法也要解析出 stance（否则范围门控失效）')
+        self.assertEqual(stance['scope'], 'allowed')
+        self.assertEqual(stance['intent'], 'social')
+        self.assertEqual(body, '【照料助手】你好呀。')
+
+    def test_parse_stance_own_line_unchanged(self):
+        stance, body = loop.parse_stance(self.OWN_LINE)
+        self.assertEqual(stance['scope'], 'allowed')
+        self.assertEqual(body, '【爱宠】汪！')
+
+    def test_non_stance_json_untouched(self):
+        text = '{"answer": 42}'
+        stance, body = loop.parse_stance(text)
+        self.assertIsNone(stance)
+        self.assertEqual(body, text)
+
+    def test_delta_filter_strips_same_line(self):
+        seen = []
+        stream = loop.DeltaFilter(seen.append)
+        stream.feed(self.SAME_LINE)
+        stream.close()
+        self.assertTrue(seen, '正文应被放行')
+        self.assertNotIn('"scope"', seen[-1], '声明不得出现在流式正文里')
+        self.assertEqual(seen[-1], '【照料助手】你好呀。')
+
+    def test_delta_filter_partial_json_waits(self):
+        seen = []
+        stream = loop.DeltaFilter(seen.append)
+        stream.feed('{"scope":"allowed","intent":"so')
+        self.assertEqual(seen, [], 'JSON 未收全时不放行')
+        stream.feed(self.SAME_LINE)
+        stream.close()
+        self.assertNotIn('"scope"', seen[-1])
+
+    def test_role_delta_filter_strips_same_line(self):
+        seen = []
+        stream = loop.RoleDeltaFilter(seen.append, ['爱宠', '照料助手'])
+        stream.feed(self.SAME_LINE)
+        stream.close()
+        self.assertNotIn('"scope"', seen[-1])
+        self.assertEqual(seen[-1], '你好呀。')
+
+    def test_loop_reply_has_no_json(self):
+        class _Case(unittest.TestCase):
+            pass
+        case = _Case()
+        fresh_db(case)
+        uid = seed_user_with_pet()
+        with db.session_scope() as s:
+            pet_id = s.execute(select(Pet)).scalars().one().id
+        context = {'pet_id': pet_id, 'user_id': uid, 'text': '你好', 'target': 'auto',
+                   'history': [], 'snapshot': {'sections': {},
+                                               'meta': {'chars': 10, 'trimmed': [], 'degraded': []}},
+                   'now_iso': iso_z(utc_now())}
+        turn = {'text': self.SAME_LINE, 'function_calls': [], 'web_search_calls': [],
+                'citations': [], 'usage': {}}
+        with patch('petsense.agent.model.respond', return_value=turn):
+            outcome = loop.run_dialogue(dict(context))
+        self.assertNotIn('"scope"', outcome['reply'], '最终回复不得含原始声明 JSON')
+        self.assertEqual(outcome['reply'], '【照料助手】你好呀。')
+        self.assertEqual(outcome['stance']['scope'], 'allowed')
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -91,7 +91,13 @@ Kimi Responses API 文档支持内建 `web_search`（`{"type":"web_search"}`，�
 - **按供应商能力灰度**：`MINIMAX_LOCAL_SEARCH=1` 时才进 schemas，否则模型看不到这个工具（避免调用一个必然失败的工具）；
 - 每运行限次 `SEARCH_TOOL_CALL_LIMIT = 2`（与供应商内建搜索同口径，按次计费）；超限按结构化拒绝返回并入轨迹，不真的调用供应商。
 
-### 3.3 loop 集成（`server/petsense/agent/loop.py`）
+### 3.4 stance 排版容错（W19 追加）
+
+生产切换后实测发现：**Kimi 常把 stance JSON 与正文写在同一行**（`{"scope":...}【照料助手】正文`），而原实现要求声明**独占首行**（`parse_stance` 按首个换行切分、`DeltaFilter`/`RoleDeltaFilter` 缓冲首行）。后果有二：原始 JSON 漏进用户气泡；且 `stance=None` → 范围声明门控失效（本轮按未声明处理，工具照挂）。
+
+修复：新增 `_leading_stance_span()`——用 `json.JSONDecoder().raw_decode` 取「文本开头的第一个完整 JSON 值」，若其中含 `scope` 即判定为声明并给出结束下标；`parse_stance` 在严格口径失败后走该路径，两个流式过滤器同样按该长度剥离。声明后仍有正文时照常放行；**只有声明没有正文时（工具轮）不产生任何可见文本**（保持 W06 原语义）。非声明 JSON（不含 `scope`）原样保留。
+
+### 3.5 loop 集成（`server/petsense/agent/loop.py`）
 
 - 搜索结果的 url/title 进 `citations`，与供应商内建搜索的引用、`read_web_page` 的深读页面合并为同一组**网页来源**（上限 6 条，回合 `sources` 里 `type='web'`）；
 - Chat 形态下供应商内建 `web_search` 不存在，`mount_search` 不再挂载该工具；联网只走本地 `search_web`。
@@ -138,3 +144,30 @@ Kimi Responses API 文档支持内建 `web_search`（`{"type":"web_search"}`，�
 3. **日期依赖快照**：模型从常驻快照取当前时间，未带时间信息时可能给出错误日期（实测空快照时模型编了 2025 年的日期）；生产快照始终带时间，属测试夹具差异；
 4. **搜索轮时延较长**：含 2 次搜索 + 1 次深读的网络问答回合约 50s，高于纯闲聊回合；
 5. `read_web_page` 仍为自建 fetcher（SSRF 防护不变），与供应商搜索接口互补：一个按 URL 深读，一个按关键词检索。
+
+## 7. 生产配置与验收（2026-11-25）
+
+腾讯云生产（drop-in `/etc/systemd/system/petsense.service.d/40-model.conf`）：
+
+```
+LoadCredential=model-api-key:/etc/petsense/model-api-key
+Environment=MINIMAX_API_KEY_FILE=%d/model-api-key
+Environment=MINIMAX_BASE_URL=https://api.moonshot.cn/v1
+Environment=MINIMAX_MODEL=kimi-k2.6
+Environment=MINIMAX_API_MODE=chat
+Environment=MINIMAX_THINKING_DISABLED=1
+Environment=MINIMAX_LOCAL_SEARCH=1
+Environment=MINIMAX_SEARCH_PATH=/tools/search_pro
+```
+
+（不设 `PETSENSE_SEARCH_DISABLED` = 联网搜索开启。发布脚本只更新 `90-petsense-deploy.conf`，本 drop-in 与凭据在后续部署中保留。）
+
+真实伙伴会话终验（生产账号，切换后）：
+
+| 回合 | 耗时 | 结果 |
+| --- | --- | --- |
+| 闲聊 | 2.2s | 正常回复（关推理后首字明显更快） |
+| 观测问答 | 10.9s | 调用 `query_observations`，回合带观测来源卡 |
+| 联网问答 | 8.2s | `search_web` 命中当日天气（引用上海市气象台 11 月 25 日 11 时发布），回合带 3 条网页来源卡 |
+
+首轮终验发现 stance JSON 泄漏（Kimi 同行排版），已按 §3.4 修复并复验。

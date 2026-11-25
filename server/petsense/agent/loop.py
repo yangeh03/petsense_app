@@ -363,8 +363,40 @@ def _looks_like_stance(line):
     return isinstance(value, dict) and 'scope' in value
 
 
+def _stance_of(value):
+    """JSON 字典 → 归一化 stance（越界取值按 unknown/assistant 兜底）。"""
+    return {'scope': value.get('scope') if value.get('scope') in ('allowed', 'out_of_scope') else 'unknown',
+            'intent': value.get('intent') if value.get('intent') in INTENTS else 'unknown',
+            'speaker': value.get('speaker') if value.get('speaker') in SPEAKERS else 'assistant'}
+
+
+def _leading_stance_span(text):
+    """text 开头的 stance JSON → (stance, 结束下标)。
+
+    W19：不同模型对 stance 的排版不一致——Kimi 常把 JSON 与正文写在同一行
+    （MiniMax 独占首行）。这里用 JSON 原始解码取「首个完整 JSON 值」，因此
+    同行写法也能定位到声明结束处；不是 stance（含 scope 的 JSON）返回 (None, 0)。
+    """
+    if not text:
+        return None, 0
+    offset = len(text) - len(text.lstrip())
+    candidate = text[offset:]
+    if not candidate.startswith('{'):
+        return None, 0
+    try:
+        value, end = json.JSONDecoder().raw_decode(candidate)
+    except ValueError:
+        return None, 0
+    if not isinstance(value, dict) or 'scope' not in value:
+        return None, 0
+    return _stance_of(value), offset + end
+
+
 def parse_stance(text):
-    """解析首行 stance。返回 (stance 或 None, 剥离后的正文)。"""
+    """解析首行 stance。返回 (stance 或 None, 剥离后的正文)。
+
+    先按「stance 独占首行」解析（原有口径）；模型把声明与正文写在同一行时
+    退回「开头是含 scope 的 JSON」解析，两种排版都不把声明漏给用户。"""
     if not text:
         return None, text or ''
     lines = text.split('\n', 1)
@@ -374,11 +406,12 @@ def parse_stance(text):
             value = json.loads(first)
         except ValueError:
             return None, text
-        stance = {'scope': value.get('scope') if value.get('scope') in ('allowed', 'out_of_scope') else 'unknown',
-                  'intent': value.get('intent') if value.get('intent') in INTENTS else 'unknown',
-                  'speaker': value.get('speaker') if value.get('speaker') in SPEAKERS else 'assistant'}
+        stance = _stance_of(value)
         body = lines[1].lstrip('\n') if len(lines) > 1 else ''
         return stance, body
+    stance, end = _leading_stance_span(text)
+    if stance is not None:
+        return stance, text[end:].lstrip('\n')
     return None, text
 
 
@@ -403,8 +436,17 @@ class DeltaFilter:
             if newline == -1:
                 first_line = cumulative.lstrip()
                 if not first_line or (first_line.startswith('{') and len(cumulative) <= 512):
-                    return  # 可能是 stance 首行，等换行再判定
-                self.header_done = True  # 不以 { 开头或过长，直接放行
+                    # 可能是 stance：能解码成完整 JSON（含 scope）就立即定长剥离，
+                    # 否则继续等换行（W19：Kimi 常把声明与正文写在同一行）
+                    stance, end = _leading_stance_span(cumulative)
+                    if stance is None:
+                        return
+                    self.header_done = True
+                    self.header_len = end + len(cumulative[end:]) - len(cumulative[end:].lstrip())
+                    if not self.last_cumulative[self.header_len:].strip():
+                        return  # 只有声明、没有正文：工具轮不产生可见文本（W06）
+                else:
+                    self.header_done = True  # 不以 { 开头或过长，直接放行
             else:
                 self.header_done = True
                 if _looks_like_stance(cumulative[:newline].strip()):
@@ -414,6 +456,14 @@ class DeltaFilter:
     def close(self):
         """响应结束时放行普通正文，工具轮只有 stance 时保持无正文。"""
         if not self.header_done:
+            stance, end = _leading_stance_span(self.last_cumulative)
+            if stance is not None:
+                # 声明与正文同行（W19）：按声明长度剥离，只放行正文
+                self.header_done = True
+                self.header_len = end + len(self.last_cumulative[end:]) - len(self.last_cumulative[end:].lstrip())
+                if self.last_cumulative[self.header_len:].strip():
+                    self._forward()
+                return
             self.header_done = True
             if not _looks_like_stance(self.last_cumulative.strip()):
                 self._forward()
@@ -569,10 +619,20 @@ class RoleDeltaFilter:
             # 可能是 legacy 习惯残留的声明行：等换行（或超长）再判定
             newline = text.find('\n')
             if newline == -1 and len(text) <= 512:
+                # W19：声明与正文同行时，用「开头 JSON」判定，避免声明漏给用户
+                stance, end = _leading_stance_span(text)
+                if stance is not None:
+                    self.header_len = end + len(text[end:]) - len(text[end:].lstrip())
+                    self.decided = True
+                    self._strip_marker()
                 return
             first = text[:newline].strip() if newline != -1 else text.strip()
             if _looks_like_stance(first):
                 self.header_len = newline + 1
+            else:
+                stance, end = _leading_stance_span(text)
+                if stance is not None:
+                    self.header_len = end + len(text[end:]) - len(text[end:].lstrip())
             self.decided = True
             self._strip_marker()
             return
