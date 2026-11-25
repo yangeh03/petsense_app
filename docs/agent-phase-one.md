@@ -11,7 +11,7 @@
 
 ## 模型与执行
 
-读取服务端环境 `MINIMAX_API_KEY`，或由 `MINIMAX_API_KEY_FILE` 指定的外部文件；模型默认为 `MiniMax-M3.1-Flash`，Base 默认为国内 `https://api.minimaxi.com/v1`，可分别用 `MINIMAX_MODEL`、`MINIMAX_BASE_URL` 覆盖。凭据不进入 App、源码或文档。
+读取服务端环境 `MINIMAX_API_KEY`，或由 `MINIMAX_API_KEY_FILE` 指定的外部文件；模型默认为 `MiniMax-M3.1-Flash`，Base 默认为国内 `https://api.minimaxi.com/v1`，可分别用 `MINIMAX_MODEL`、`MINIMAX_BASE_URL` 覆盖。凭据不进入 App、源码或文档。**生产现行为 Kimi（Moonshot）**：Base `https://api.moonshot.cn/v1`、模型 `kimi-k3.1-pro`，由 drop-in 覆盖上述两个默认值（切换记录见文末「2026-11-25 模型供应商切换」）。
 
 先由模型判断话题范围和主回应角色；无关请求不进入数据工具，模糊请求澄清。允许的问题最多执行两轮、每轮最多四次只读观测查询；保留 MiniMax 工具调用的推理字段。流式文字每半秒最多保存一次，App 在生成期间轮询读取，完成后读取最终结果；当前不是 App 直连 SSE。
 
@@ -63,3 +63,13 @@
 - 腾讯云 `petsense.service` 通过独立的 `40-minimax.conf` 装入 systemd credential，并将 `MINIMAX_API_KEY_FILE` 指向服务进程的凭据目录。凭据源文件仅 root 可读写。现有发布脚本只更新 `90-petsense-deploy.conf`，因此后续部署保留模型凭据配置。
 - 配置前在腾讯云用已部署的 Python 适配器取得 MiniMax 回复。服务重启后核对新进程成功加载凭据，统计、动作分类器及 Agent 未登录保护检查通过。
 - iPhone 17 Pro 模拟器的 Expo Go 已加载指向腾讯云生产 API 的 bundle。下一次验收需用指定生产账号登录，核对 11 月 18 日（上海时间）的真实观测，再验证问答、查看来源与重新进入后的会话恢复。
+
+## 2026-11-25 模型供应商切换（MiniMax 直连 → Kimi）
+
+起因：新给的 MiniMax key 认证通过但账户余额不足（HTTP 402 `insufficient_balance_error`）；改用 OpenRouter 后发现其对中国大陆出口整体关闭推理通道（所有模型 POST 均 400 `Request path cannot be relayed`，元数据 GET 正常），最终改用 Kimi（Moonshot）国内节点。
+
+- **改动范围仅服务器端配置，服务端代码零改动**：`MINIMAX_BASE_URL`、`MINIMAX_MODEL` 本就是环境可配项。腾讯云 `petsense.service` 的 drop-in 由 `40-minimax.conf` 改为 `40-model.conf`：凭据 `/etc/petsense/minimax-api-key` → `/etc/petsense/model-api-key`（600 root:root，`LoadCredential=model-api-key:...`），并新增 `MINIMAX_BASE_URL=https://api.moonshot.cn/v1`、`MINIMAX_MODEL=kimi-k3.1-pro`、`PETSENSE_SEARCH_DISABLED=1`。旧凭据与旧 drop-in 已备份（`*.bak.<时间戳>`），旧文件已删除。发布脚本只更新 `90-petsense-deploy.conf`，后续部署保留该配置。
+- **兼容性实测（腾讯云出网，2026-11-25）**：Kimi 兼容 OpenAI Responses API，形状与现网适配层一致——流式 `response.output_text.delta` / `response.completed`、`function_call`（含 `call_id`）+ `function_call_output` 全量回显闭环、`input_image` 图片输入均通过（图片模型描述正确）。适配层 `server/petsense/agent/model.py` 无需改动。
+- **能力差异**：① Kimi 内建 `web_search` 工具被接受但不执行（无 `web_search_call`、无 `url_citation`，模型自述无法联网）→ 生产以 `PETSENSE_SEARCH_DISABLED=1` 关闭联网搜索，`read_web_page` 一并关闭，提示词回退「暂未开放」；② `reasoning_effort=low` 仅 `kimi-k3.1-pro` 系列生效（`kimi-k3` 忽略、默认 max 推理），`kimi-k3.1-pro-highspeed` 实测 429，故固定 `kimi-k3.1-pro`；③ 生产延迟高于原 MiniMax（闲聊轮约 18s、含工具轮约 52s）。
+- **端到端验收（腾讯云生产，测试账号 `petsense`）**：登录 200、宠物与会话正常；闲聊轮 `status=complete`、发言角色为照料助手；观测问答轮真实调用 `query_observations` 并作答、回合 `sources` 带 1 条观测来源（无数据时如实说明 0 秒观测），`/api/stats` 与 `/api/action/status` 正常。
+- **回滚方式**：恢复 `40-minimax.conf.bak.*` 与 `/etc/petsense/model-api-key.bak.*` 后 `systemctl daemon-reload && systemctl restart petsense`。
