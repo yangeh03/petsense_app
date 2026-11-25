@@ -1,10 +1,18 @@
-"""MiniMax Responses API 适配层（W01，agent-w01-spec.md §3.1；W06 内建 web_search）。
+"""模型传输适配层（W01 Responses API；W19 增加 Chat Completions 形态）。
 
-只负责传输与解析：凭据加载、/v1/responses 请求、SSE 事件流解析（输出文本增量、
-函数调用、内建 web_search_call、url_citation、usage）。循环编排在 loop.py；
+只负责传输与解析：凭据加载、请求、SSE 事件流解析（输出文本增量、函数调用、
+内建 web_search_call、url_citation、usage）。循环编排在 loop.py；
 本文件不做任何业务判断。
 
-实测约束（2026-11-22 冒烟，tools/minimax_responses_smoke.py / minimax_w06_smoke.py；
+**两种请求形态**（`MINIMAX_API_MODE`：`responses` 默认 / `chat`；未设置时按 base
+含 moonshot 自动走 chat）：
+- `responses`：MiniMax Responses API（`/v1/responses`），原有实现不变。
+- `chat`：OpenAI Chat Completions（`/v1/chat/completions`）。Kimi 的 Responses 端点
+  忽略 `thinking`（推理关不掉），Chat Completions 才支持 `thinking.type=disabled`
+  （K2 系列），因此关思考必须走这个形态。形态差异只在传输层消化：输入仍是
+  Responses 形态的全量回显会话，输出仍是统一返回字典，loop 无感。
+
+Responses 端实测约束（2026-11-22 冒烟，tools/minimax_responses_smoke.py / minimax_w06_smoke.py；
 2026-11-23 E35 归因探针补充）：
 - 会话是无状态全量回显：input 需含 system + user + 模型的 function_call 项 +
   function_call_output（结果放 output 字段；content 字段会被静默忽略）；
@@ -20,6 +28,15 @@
   response.incomplete 与 completed 同样按 final 提取；url_citation 另从
   response.output_text.annotation.added 流事件累计兜底；web_search_call 另按
   流事件 item_id 计数兜底（事件不带 query，query 仅在 final output 中）。
+
+Chat Completions 端实测约束（2026-11-25，Kimi kimi-k2.6 国内节点）：
+- 流式为标准 OpenAI Chat 形态（choices[].delta.content / delta.tool_calls），
+  无 [DONE] 之外的额外事件；思考关闭时 delta.reasoning_content 为空；
+- 工具调用为标准 tool_calls（index/id/type/function.name/function.arguments），
+  工具结果以 role=tool + tool_call_id 回传可闭环；
+- **供应商内建 web_search 在该端不执行**（无 web_search_call、无 url_citation），
+  联网搜索由本地 search_web 工具走供应商独立搜索接口实现（见 agent/search.py）；
+- 图片输入为 content 数组的 image_url 块（data URL）。
 """
 import json
 import os
@@ -31,6 +48,8 @@ REQUEST_TIMEOUT = (10, 60)
 SEARCH_READ_TIMEOUT_S = 110.0
 SEARCH_PROGRESS_HINT = '正在联网核实…'
 CITATION_SNIPPET_LIMIT = 200
+API_MODE_ENV = 'MINIMAX_API_MODE'            # 'responses'（默认）| 'chat'
+THINKING_DISABLED_ENV = 'MINIMAX_THINKING_DISABLED'
 
 
 def load_credentials():
@@ -42,6 +61,21 @@ def load_credentials():
     base = os.environ.get('MINIMAX_BASE_URL', 'https://api.minimaxi.com/v1').rstrip('/')
     model = os.environ.get('MINIMAX_MODEL', 'MiniMax-M3.1-Flash')
     return key, base, model
+
+
+def api_mode(base=None):
+    """请求形态：显式环境变量优先；未设置时按 base 推断（Moonshot 走 chat）。"""
+    mode = os.environ.get(API_MODE_ENV, '').strip().lower()
+    if mode in ('responses', 'chat'):
+        return mode
+    if base is None:
+        base = os.environ.get('MINIMAX_BASE_URL', '')
+    return 'chat' if 'moonshot' in (base or '').lower() else 'responses'
+
+
+def thinking_disabled():
+    """是否在 chat 形态下发送 thinking.type=disabled（仅 K2 系列支持该参数）。"""
+    return os.environ.get(THINKING_DISABLED_ENV, '').strip().lower() in ('1', 'true', 'yes')
 
 
 def _text_of(response):
@@ -110,6 +144,142 @@ def _citations_of(response):
     return citations
 
 
+def _chat_content(content):
+    """Responses 形态的 content → Chat Completions 的 content（字符串或块数组）。"""
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return '' if content is None else str(content)
+    parts = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        kind = block.get('type')
+        if kind in ('input_text', 'text'):
+            parts.append({'type': 'text', 'text': block.get('text') or ''})
+        elif kind in ('input_image', 'image_url'):
+            url = block.get('image_url')
+            if isinstance(url, dict):
+                url = url.get('url')
+            if isinstance(url, str) and url:
+                parts.append({'type': 'image_url', 'image_url': {'url': url}})
+    return parts or ''
+
+
+def _chat_messages(input_items):
+    """Responses 形态的全量回显会话 → Chat Completions messages。
+
+    function_call 项回显为带 tool_calls 的 assistant 消息；
+    function_call_output 项回显为 role=tool 消息（tool_call_id 对齐）。"""
+    messages = []
+    for item in input_items:
+        if not isinstance(item, dict):
+            continue
+        kind = item.get('type')
+        if kind == 'function_call':
+            call_id = item.get('call_id') or item.get('id') or ''
+            messages.append({'role': 'assistant', 'content': None,
+                             'tool_calls': [{'id': call_id, 'type': 'function',
+                                             'function': {'name': item.get('name') or '',
+                                                          'arguments': item.get('arguments') or '{}'}}]})
+        elif kind == 'function_call_output':
+            output = item.get('output')
+            if not isinstance(output, str):
+                output = json.dumps(output, ensure_ascii=False, default=str)
+            messages.append({'role': 'tool', 'tool_call_id': item.get('call_id') or '',
+                             'content': output})
+        else:
+            messages.append({'role': item.get('role') or 'user',
+                             'content': _chat_content(item.get('content'))})
+    return messages
+
+
+def _chat_tools(tools):
+    """工具 schema → Chat Completions 的 function 形态。"""
+    converted = []
+    for tool in tools or []:
+        if not isinstance(tool, dict):
+            continue
+        if tool.get('type') == 'function' and isinstance(tool.get('function'), dict):
+            converted.append(tool)
+            continue
+        converted.append({'type': 'function', 'function': {
+            'name': tool.get('name') or '',
+            'description': tool.get('description') or '',
+            'parameters': tool.get('parameters') or {'type': 'object', 'properties': {}}}})
+    return converted
+
+
+def _respond_chat(key, base, model_name, input_items, tools, on_delta, max_output_tokens):
+    """Chat Completions 形态的一次往返（W19）。
+
+    返回结构与 Responses 形态一致：{'text','function_calls','web_search_calls','citations','usage'}。
+    该形态没有供应商内建搜索：web_search_calls 恒为空，联网搜索由本地工具负责。"""
+    payload = {'model': model_name, 'messages': _chat_messages(input_items),
+               'stream': True, 'max_tokens': max_output_tokens}
+    if thinking_disabled():
+        payload['thinking'] = {'type': 'disabled'}
+    chat_tools = _chat_tools(tools)
+    if chat_tools:
+        payload['tools'] = chat_tools
+    text_parts = []
+    call_entries = {}
+    call_order = []
+    usage = {}
+    with requests.post(base + '/chat/completions', headers={'Authorization': 'Bearer ' + key},
+                       json=payload, timeout=REQUEST_TIMEOUT, stream=True) as response:
+        if response.status_code != 200:
+            raise ValueError(f'模型 HTTP {response.status_code}: {response.text[:300]}')
+        for raw in response.iter_lines():
+            if not raw:
+                continue
+            line = raw.decode('utf-8', 'replace')
+            if not line.startswith('data:'):
+                continue
+            data = line[5:].strip()
+            if data == '[DONE]':
+                break
+            try:
+                item = json.loads(data)
+            except ValueError:
+                continue
+            if not isinstance(item, dict):
+                continue
+            if item.get('error'):
+                raise ValueError(f'模型返回错误：{json.dumps(item["error"], ensure_ascii=False)[:300]}')
+            if isinstance(item.get('usage'), dict):
+                usage = item['usage']
+            for choice in item.get('choices') or []:
+                delta = choice.get('delta') or {}
+                content = delta.get('content')
+                if isinstance(content, str) and content:
+                    text_parts.append(content)
+                    if on_delta:
+                        on_delta(''.join(text_parts))
+                for call in delta.get('tool_calls') or []:
+                    if not isinstance(call, dict):
+                        continue
+                    index = call.get('index')
+                    key_index = index if isinstance(index, int) else len(call_order)
+                    entry = call_entries.get(key_index)
+                    if entry is None:
+                        entry = {'id': '', 'name': '', 'arguments': ''}
+                        call_entries[key_index] = entry
+                        call_order.append(entry)
+                    if call.get('id'):
+                        entry['id'] = call['id']
+                    function = call.get('function') or {}
+                    if function.get('name'):
+                        entry['name'] = function['name']
+                    if function.get('arguments'):
+                        entry['arguments'] += function['arguments']
+    function_calls = [{'name': entry['name'], 'arguments': entry['arguments'],
+                       'call_id': entry['id'] or f'call_{index}'}
+                      for index, entry in enumerate(call_order) if entry['name']]
+    return {'text': ''.join(text_parts), 'function_calls': function_calls,
+            'web_search_calls': [], 'citations': [], 'usage': usage}
+
+
 def respond(input_items, tools=None, on_delta=None, max_output_tokens=1800, web_search=False):
     """一次模型往返。返回 {'text', 'function_calls', 'web_search_calls', 'citations', 'usage'}。
 
@@ -122,6 +292,9 @@ def respond(input_items, tools=None, on_delta=None, max_output_tokens=1800, web_
     与 final 提取按 url/id 合并去重。
     """
     key, base, model = load_credentials()
+    if api_mode(base) == 'chat':
+        # chat 形态没有供应商内建搜索：web_search 参数在此形态被忽略，联网搜索走本地工具
+        return _respond_chat(key, base, model, input_items, tools, on_delta, max_output_tokens)
     payload = {'model': model, 'input': input_items, 'stream': True,
                'reasoning_effort': 'low', 'max_output_tokens': max_output_tokens}
     if tools:

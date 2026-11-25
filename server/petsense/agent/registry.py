@@ -7,6 +7,7 @@
 """
 import json
 import logging
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
@@ -20,6 +21,7 @@ from petsense.agent import memory as pet_memory
 from petsense.agent import observations as observations_module
 from petsense.agent.observations import query as observations_query
 from petsense.agent import proposals as proposal_service
+from petsense.agent import search as search_service
 from petsense.agent import settings as settings_service
 from petsense.common import shanghai_now
 from petsense.db import iso_z, session_scope, utc_now
@@ -42,7 +44,17 @@ ACTION = 'action'        # W10 动作组（日记/草稿）：日记生成走确
 TASK = 'task'            # W08 委托组：read_task 只读 / propose_task_change 只生成候选（P00 §5）
 HANDOFF = 'handoff'      # W18：爱宠转交照料助手（只在本轮允许转交时挂载）
 HANDOFF_TOOL = 'handoff_to_assistant'
+SEARCH_TOOL_NAME = 'search_web'   # W19：本地联网搜索（供应商独立搜索接口）
+LOCAL_SEARCH_ENV = 'MINIMAX_LOCAL_SEARCH'
 TOOL_TIMEOUT_S = 15.0
+
+
+def local_search_enabled():
+    """供应商是否提供可用的独立搜索接口（W19）。
+
+    默认关闭：只有确认搜索接口可用（Kimi 国内节点 /tools/search_pro）时才打开；
+    打开后 search_web 才进 schemas，避免模型调用一个必然失败的工具。"""
+    return os.environ.get(LOCAL_SEARCH_ENV, '').strip().lower() in ('1', 'true', 'yes')
 
 # 双 Agent 群聊的角色门（docs/agent-dual-agent-chat-design.md §2.1/§3.4）：声明与执行都检查。
 # 爱宠只读基础档案与共享记忆；观测、联网、写入与动作归照料助手。权限在代码里，不只在提示词里。
@@ -100,6 +112,7 @@ def schemas_for(form, stance_scope, search_enabled=True, recording_enabled=None,
     return [spec.schema() for spec in _TOOLS.values()
             if form in spec.forms and (search_enabled or spec.group != EXTERNAL_READ)
             and (recording_enabled or spec.group != DEVICE_CONTROL)
+            and (local_search_enabled() or spec.name != SEARCH_TOOL_NAME)
             and _role_ok(spec)]
 
 
@@ -543,6 +556,42 @@ register(ToolSpec(
         'proactivity': {'type': 'integer', 'enum': [0, 1, 2], 'description': '主动程度三档'}},
         'additionalProperties': False},
     group=SETTINGS, forms=(DIALOGUE,), execute=_execute_prepare_role_settings))
+
+
+def _execute_search_web(args, context):
+    """本地联网搜索（W19）：调用供应商独立搜索接口。
+
+    失败语义与 read_web_page 同口径：返回明确原因，运行继续；模型据此换关键词或
+    如实说明查不到，不得编造来源或链接。"""
+    query = args.get('query')
+    if not isinstance(query, str) or not query.strip():
+        return {'error': '请提供搜索关键词（query）。'}
+    limit = args.get('limit')
+    if not isinstance(limit, int) or isinstance(limit, bool):
+        limit = None
+    outcome = search_service.run_search(query.strip(), limit)
+    if outcome.get('error'):
+        return {'error': f"联网搜索失败：{outcome['error']}请如实说明本次没有搜到，"
+                         '不要编造来源或链接。'}
+    results = outcome.get('results') or []
+    if not results:
+        return {'query': outcome.get('query') or query.strip(), 'count': 0, 'results': [],
+                'note': '本次没有检索到结果。换关键词再试一次，或如实说明查不到；不要编造来源。'}
+    return {'query': outcome.get('query') or query.strip(), 'count': len(results),
+            'results': results,
+            'note': '以上是本次真实检索到的结果；引用时用其中的标题与链接，不要编造来源。'}
+
+
+register(ToolSpec(
+    name=SEARCH_TOOL_NAME,
+    description='联网搜索：查时效性事实（政策、天气、新闻、公开信息等）。需要外部知识或'
+                '核对最新信息时调用；养宠常识、本宠记录类问题不要搜索。'
+                '返回标题、链接与正文片段，引用时用其中的链接，不要编造来源。',
+    parameters={'type': 'object', 'properties': {
+        'query': {'type': 'string', 'description': '搜索关键词（中文，尽量具体，带上时间与实体）'},
+        'limit': {'type': 'integer', 'description': '返回条数（1—8，默认 5）'}},
+        'required': ['query'], 'additionalProperties': False},
+    group=EXTERNAL_READ, forms=(DIALOGUE,), execute=_execute_search_web, timeout_s=35.0))
 
 
 def _execute_read_web_page(args, context):

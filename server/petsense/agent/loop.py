@@ -37,6 +37,7 @@ MAX_BLOCKS = 2
 
 SEARCH_DISABLED_ENV = 'PETSENSE_SEARCH_DISABLED'  # D5 灰度开关：生产 drop-in 初始关闭
 SEARCH_CALL_LIMIT = 2      # 每运行 web_search_call 累计上限，达到后不再挂载
+SEARCH_TOOL_CALL_LIMIT = 2  # W19：每运行本地 search_web 调用上限（同样按次计费，兜底限次）
 WEB_PAGE_CALL_LIMIT = 3    # 每运行 read_web_page 执行上限，第 4 次起结构化拒绝
 MAX_WEB_SOURCES = 6        # 回合 sources 中网页来源上限（与观测来源并存）
 
@@ -741,6 +742,7 @@ def run_dialogue(context, on_progress=None):
     citations = {}          # url -> {'title','url','snippet'}，跨轮按 url 去重（每轮都收，§4.6）
     page_sources = {}       # url -> title：read_web_page 成功抓取的页面（真实核对过的来源）
     read_page_count = 0     # read_web_page 已执行次数（loop 侧限次）
+    search_tool_count = 0   # W19：本地 search_web 已执行次数（按次计费，限次兜底）
     search_budget_noted = False
     snap = context.get('snapshot')
     user_id = context.get('user_id')
@@ -925,6 +927,12 @@ def run_dialogue(context, on_progress=None):
                         'result': {'error': f'本次运行的联网查询已达上限（网页深读最多 '
                                             f'{WEB_PAGE_CALL_LIMIT} 次）。请基于已有资料如实回答，'
                                             '不要声称已读取本页。'}}
+            elif name == registry.SEARCH_TOOL_NAME and search_tool_count >= SEARCH_TOOL_CALL_LIMIT:
+                # W19：本地搜索按次计费，同样按运行限次；拒绝时明确告知上限
+                gate = {'allowed': False, 'reason': 'tool_budget_exceeded', 'duration_ms': 0,
+                        'result': {'error': f'本次运行的联网搜索已达上限（最多 '
+                                            f'{SEARCH_TOOL_CALL_LIMIT} 次）。请基于已有资料如实回答，'
+                                            '不要声称已搜索，也不要编造来源。'}}
             else:
                 replay = _replayed_entry(name, arguments, context)
                 if replay is not None:
@@ -952,6 +960,19 @@ def run_dialogue(context, on_progress=None):
                         # 抓取成功即为本运行真实核对过的页面（url 为重定向后的最终地址，
                         # 标题来自页面提取），§4.6 扩展：与 citations 并入同一组网页来源
                         page_sources[result['url']] = result.get('title') or ''
+                if gate['allowed'] and name == registry.SEARCH_TOOL_NAME:
+                    # W19：本地搜索的真实结果进网页来源（与供应商内建搜索的 citations 同一组）
+                    search_tool_count += 1
+                    result = gate['result']
+                    if isinstance(result, dict):
+                        for entry in result.get('results') or []:
+                            if not isinstance(entry, dict):
+                                continue
+                            url = entry.get('url') or ''
+                            if not url or url in citations:
+                                continue
+                            citations[url] = {'url': url, 'title': entry.get('title') or '',
+                                              'snippet': (entry.get('snippet') or '')[:model.CITATION_SNIPPET_LIMIT]}
             result_json = json.dumps(gate['result'], ensure_ascii=False, default=str)
             if len(result_json) > TOOL_RESULT_LIMIT:
                 result_json = result_json[:TOOL_RESULT_LIMIT] + '…(截断)'
