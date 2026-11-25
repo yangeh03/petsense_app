@@ -72,6 +72,12 @@
 - 标签栏坐标随页头状态变化，Expo Go 开发浮标盖住「我的」标签右半：每次导航后重新读 AX 树再点，点标签左侧（x≈318），不要复用上一屏的坐标；坐标换算用「半图像素 × 2/3 = 设备 pt」。`idbx.sh swipe up` 是手指上滑（往旧消息翻），看最新消息用 `swipe down`。iOS「保存密码？」系统弹窗不在 AX 树里，按截图坐标点「以后」关闭。伙伴页会复用滚动位置，目标卡压在输入栏下时点击会被输入栏吃掉，先滑动让它露出来。
 - **云端跑行为评测**：macOS `tar` 会把 `._*` 元数据文件打进包，Linux 上 alembic 把 `._00xx_*.py` 当迁移加载（`source code string cannot contain null bytes`）——打包加 `COPYFILE_DISABLE=1`，解包后 `find -name '._*' -delete`。向云端同步被测文件必须用**绝对路径**并比对 md5 再跑：`cd` 到 `tests/` 后用相对路径 `cp` 会落到错误目录，而测试照常运行、结果看似有效（2026-11-24 因此作废了几轮结果）；`-m unittest agent_behavior.…` 的工作目录必须是 `server/tests`。生产 release 的 venv 不一定含最新依赖，选服务当前使用的那个 release。SSH 短时间频繁连接会被拒（`Permission denied`），间隔 ≥20 秒或用 until 循环重试。评测目录与持久库用完清理。
 - Expo Router 58 的 iOS NativeTabs 为伙伴页提供的底部安全区已经反映标签栏位置。固定输入区使用该值一次，避免叠加 `BottomTabInset`。iPhone 的标签栏在底部，iPad 的标签栏可在顶部，验收时分别检查。
+- **模拟器与 Metro 都是共享资源，多个会话同时验收会串**（2026-11-25 W16 走查踩到）：Expo Go 记住的是上次连的 dev server，`simctl openurl` 可能把包从别人的 Metro 拉下来，症状是 App 里冒出另一个 worktree 的模块路径报错。worktree 的 `node_modules` 是软链到主仓库的，Metro 缓存也因此互通。稳妥做法：**新建一台专属模拟器**（`xcrun simctl create "X-verify" com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro com.apple.CoreSimulator.SimRuntime.iOS-26-5`），从已有设备复制 Expo Go（`~/Library/Developer/CoreSimulator/Devices/<UDID>/data/Containers/Bundle/Application/*/Expo Go.app` → `simctl install`），配**独占的 Metro 端口**，以 Metro 日志里出现 `iOS Bundled` 为准。
+- `idb` 的 `--companion-path` 是**全局参数，必须放在子命令之前**（`idb --companion-path <path> ui tap --udid <UDID> x y`），默认路径 `/usr/local/bin/idb_companion` 不存在时用 `~/.local/share/idb-companion-*/idb_companion`。
+- **中文输入**：`idb ui text` 打不了中文（`No keycode found for 陪`）。用剪贴板：写入 `xcrun simctl pbcopy <UDID>`，再 `idb ui key --udid <UDID> 25 --command`（V 的 HID 键码是 **25**，9 是 f）。选中文本先 `idb ui key --udid <UDID> 4 --command`（A = 4）。
+- 标签栏 AX 树里没有子元素，只能按坐标点：iPhone 17 Pro 上五个标签的中心约在 x = 63 / 131 / 200 / 268 / 337、y ≈ 832（今日/位置/伙伴/社区/我的）。每次导航后重新读树再点。
+- 服务端单测**必须**带 `PETSENSE_MQTT_DISABLED=1`，否则 `petsense/config.py` 会去读 `~/.petsense-mqtt-password`，导入阶段就 FileNotFoundError（看起来像大面积失败，其实没跑起来）。
+- 群聊验收夹具的剧本要**同时写两位角色的台词**：`router.normalize` 会把 `intent=social`、无专业成分的消息派给爱宠，`default` 剧本只写 `assistant` 时取不到台词，模型返回空正文 → 服务端记 `ValueError: 模型未返回可用回复`，界面上是一条失败气泡。
 
 # Expo HAS CHANGED
 
