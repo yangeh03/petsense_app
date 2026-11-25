@@ -348,6 +348,7 @@ export function parseTelemetryMessage(raw: unknown): TelemetryFrame | null {
             'sitting',
             'lying down',
             'walking',
+            'jumping',
             'unknown',
             'warming_up',
           ]),

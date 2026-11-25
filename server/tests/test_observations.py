@@ -58,6 +58,19 @@ class ObservationTests(unittest.TestCase):
         self.assertEqual(result['metrics']['heartRate']['count'], 2)
         self.assertEqual(result['latest']['payload']['battery']['percent'], 0)
 
+    def test_jumping_is_not_stationary_and_uses_action_model_version(self):
+        from petsense.db.models import TelemetryMinute
+        with patch('petsense.agent.learning.record_interval') as record:
+            self.ingest(1, action={'label': 'jumping', 'confidence': .95},
+                        actionModelVersion='imu-five-v1')
+            self.ingest(2, 1)
+        action_calls = [call for call in record.call_args_list if call.args[3] == 'actions']
+        self.assertEqual(action_calls[0].args[4], 'imu-five-v1')
+        with db.session_scope() as s:
+            minute = s.execute(select(TelemetryMinute)).scalars().first()
+            self.assertEqual(json.loads(minute.actions)['jumping'], 1)
+        self.assertEqual(self.get().json['summary']['stationarySeconds'], 0)
+
     def test_gap_reboot_and_replayed_old_boot_never_fill_offline_time(self):
         self.ingest(1)
         self.ingest(2, 1)

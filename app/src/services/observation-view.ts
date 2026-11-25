@@ -7,6 +7,7 @@ export const ACTION_NAMES: Record<string, string> = {
   sitting: '坐着',
   'lying down': '趴着',
   walking: '走动',
+  jumping: '跳跃',
   unknown: '暂未识别',
   warming_up: '识别准备中',
 };
