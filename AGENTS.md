@@ -8,6 +8,7 @@
 - `server/`：Python 3.12 Flask。代码在 `server/petsense/` 包（入口 `wsgi.py`），按域分包：`telemetry/`（MQTT ingest、WS/SSE 分发、音频重组、设备控制）、`actions/`（动作识别）、`collection/`（数据采集 API）、`experiments/`（实验录制）、`auth/`、`pets/`、`devices/`（项圈认领/解绑）、`social/`、`petgif/`、`trends/`、`web/`，另含 `db/`（数据库会话与 ORM 模型）
 - 运行时数据（DB、uploads、cloud_data 等）默认在服务端安装根目录（包上一级），可用 `PETSENSE_ROOT` 覆盖；本地在 `server/` 下运行 `PETSENSE_MQTT_DISABLED=1 python3 wsgi.py`
 - 部署：push main 触发 CI；`app/` 变更运行格式、lint、类型、Web 构建和客户端测试，main 直推通过后发布 EAS Update OTA；`server/`、`tools/offline-map/` 或 `ci.yml` 变更运行服务端和离线地图测试、模型校验，通过后部署腾讯云。手动 Run workflow 可重部署；固件与离线地图另有独立 workflow。具体触发条件以 `.github/workflows/` 为准
+- **部署作业的时间余量很紧**：deploy 作业超时 20 分钟，而远端 `server/deploy/deploy_server.py` 要建 venv、pip 安装、**在云端跑一遍完整服务端测试**（I/O 密集：本机约 2.5 分钟，云端实测 12 分钟以上，且进程多在 D 状态）、再跑离线地图测试与模型校验，最后迁移、重启、健康检查。2026-11-25 W18 与 W16 两次合并的部署分别用了 19 分 16 秒与 16 分，都在上限边缘。**超时不代表代码有问题**：先查远端 `systemd-run` 单元 `petsense-deploy-<sha>-*`、`/home/ubuntu/petsense-releases/` 的最新目录、生产 `petsense.db` 的 `alembic_version`，再决定重跑失败的作业（release 目录与 venv 已建，重跑更快）。改动服务端大范围（尤其新增迁移）时预留这个时间。
 
 ## 客户端要点
 
