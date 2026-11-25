@@ -420,6 +420,21 @@ export function parseUwbPosition(value: unknown, deviceId: string): UwbPosition 
   if (!value || typeof value !== 'object') return undefined;
   const p = value as Record<string, unknown>;
   const point = p.position as Record<string, unknown> | null;
+  for (const key of ['rawPosition', 'unconstrainedPosition']) {
+    const diagnostic = p[key];
+    if (diagnostic != null && !numericObject(diagnostic, ['x', 'y'])) return undefined;
+  }
+  if (p.boundary !== undefined) {
+    const boundary = p.boundary as Record<string, unknown> | null;
+    if (
+      !boundary ||
+      typeof boundary.constrained !== 'boolean' ||
+      typeof boundary.correctionM !== 'number' ||
+      !Number.isFinite(boundary.correctionM) ||
+      boundary.correctionM < 0
+    )
+      return undefined;
+  }
   if (
     p.schemaVersion !== 1 ||
     p.deviceId !== deviceId ||

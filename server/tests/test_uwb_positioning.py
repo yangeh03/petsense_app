@@ -73,6 +73,20 @@ class UwbPositioningTests(unittest.TestCase):
         self.assertAlmostEqual(p['position']['y'], 1)
         self.assertTrue(p['quality']['insideMap'])
 
+    def test_public_snapshot_exposes_boundary_correction_without_hiding_original_fix(self):
+        self.data['polygon'] = [[0, 0], [.5, 0], [.5, .5], [0, .5]]
+        self.manifest.write_text(json.dumps(self.data))
+        f = self.frame()
+        self.service.enrich(f, 'collar')
+        p = f['uwbPosition']
+        self.assertAlmostEqual(p['position']['x'], .5)
+        self.assertAlmostEqual(p['position']['y'], .5)
+        self.assertAlmostEqual(p['unconstrainedPosition']['x'], 1)
+        self.assertAlmostEqual(p['rawPosition']['x'], 1)
+        self.assertTrue(p['boundary']['constrained'])
+        self.assertFalse(p['quality']['insideMap'])
+        self.assertGreater(p['boundary']['correctionM'], .7)
+
     def test_duplicates_do_not_refresh_deadline_and_read_expires_without_new_data(self):
         with patch('petsense.uwb.service.time.monotonic', return_value=10):
             self.service.enrich(self.frame(), 'collar')

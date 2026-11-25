@@ -7,6 +7,9 @@ export type UwbPosition = {
   status: 'waiting' | 'ok' | 'low_quality' | 'stale' | 'error';
   fresh: boolean;
   position: { x: number; y: number } | null;
+  rawPosition?: { x: number; y: number } | null;
+  unconstrainedPosition?: { x: number; y: number } | null;
+  boundary?: { constrained: boolean; correctionM: number };
   quality: { score: number | null; residualM: number | null; insideMap: boolean | null };
   remainingMs: number;
   expiresAt: string | null;
