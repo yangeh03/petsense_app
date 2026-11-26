@@ -19,13 +19,16 @@
 <div class="history"><table><thead><tr><th>北京时间</th><th>动作</th><th>声音</th></tr></thead><tbody id="history"></tbody></table></div>
 <footer id="version">等待端侧模型结果</footer><p class="warning">实验模型 · 胸部佩戴方向尚需实机校验 · 低置信度显示“未确定” · 非医疗诊断</p></main>
 <script src="/edge-collection.js"></script><script>
-const labels={'standing':'站立','sitting':'坐下','lying down':'趴下','walking':'走路','bark':'汪叫 / 短吠','howl':'嚎叫','whine':'呜咽（实验）','other':'其他声音','quiet':'安静','unknown':'未确定','warming_up':'准备中'};
+const labels={'standing':'站立','sitting':'坐下','lying down':'趴下','walking':'走路','jumping':'跳跃','bark':'汪叫 / 短吠','howl':'嚎叫','whine':'呜咽（实验）','other':'其他声音','quiet':'安静','unknown':'未确定','warming_up':'准备中'};
 const el=id=>document.getElementById(id);const text=(id,v)=>el(id).textContent=v;let last=null;
 let busy=false;
 async function poll(){if(busy)return;busy=true;try{const r=await fetch('/api/debug/edge/latest',{cache:'no-store',signal:AbortSignal.timeout(5000)});if(!r.ok)throw Error(r.status);const d=await r.json(),p=d.payload;window.dispatchEvent(new CustomEvent('edge-status',{detail:d}));text('status',d.online?'设备在线':'设备离线');el('dot').className='dot'+(d.online?' online':'');if(!p)return;
 text('time',`更新于 ${d.age_s} 秒前`);for(const k of ['action','sound']){const v=p[k]||{};text(k,d.online?(labels[v.label]||v.label||'--'):'--');const score=Math.max(0,Math.min(100,(v.confidence||0)*100));text(k+'Meta',d.online?`置信度 ${score.toFixed(1)}%`:'等待新数据');el(k+'Fill').style.width=(d.online?score:0)+'%';}
 const h=p.health||{},valid=d.online&&h.valid;for(const [id,key] of [['hr','heartRate'],['spo2','spo2'],['temp','bodyTemp'],['env','envTemp']])text(id,valid&&h[key]>0?h[key]:'--');text('healthNote',!valid?'暂无有效健康数据':!h.heartRate||!h.spo2?'心率或血氧未测得，请检查佩戴。':'健康模块已返回测量值');
-const pct=p.battery?.ok?Math.max(0,Math.min(100,p.battery.percent)):null;text('battery',pct===null?'--%':Math.round(pct)+'%');el('batteryFill').style.width=(pct||0)+'%';text('version',`${p.modelVersion} · ESP32 本地推理 · 动作2秒 / 声音1秒 · 1Hz上报 · 推理耗时 ${p.inference_us||0}µs`);
+const pct=p.battery?.ok?Math.max(0,Math.min(100,p.battery.percent)):null;text('battery',pct===null?'--%':Math.round(pct)+'%');el('batteryFill').style.width=(pct||0)+'%';
+const actionWindowSeconds=Number.isInteger(p.action_window_samples)&&p.action_window_samples>0?p.action_window_samples/10:2;
+const actionModel=typeof p.actionModelVersion==='string'&&p.actionModelVersion?` · 动作模型 ${p.actionModelVersion}`:'';
+text('version',`${p.modelVersion}${actionModel} · ESP32 本地推理 · 动作${actionWindowSeconds}秒 / 声音1秒 · 1Hz上报 · 推理耗时 ${p.inference_us||0}µs`);
 if(d.online&&p.ts_ms!==last){last=p.ts_ms;const tr=document.createElement('tr');for(const value of [new Date().toLocaleTimeString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}),labels[p.action?.label]||'--',labels[p.sound?.label]||'--']){const td=document.createElement('td');td.textContent=value;tr.appendChild(td)}el('history').prepend(tr);while(el('history').children.length>10)el('history').lastChild.remove();}
 }catch(e){window.dispatchEvent(new CustomEvent('edge-status',{detail:{online:false}}));text('status','连接中断，请稍后重试');el('dot').className='dot';for(const k of ['action','sound','hr','spo2','temp','env'])text(k,'--');}finally{busy=false}}setInterval(poll,1000);poll();
 </script></body></html>

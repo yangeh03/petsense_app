@@ -15,7 +15,7 @@ METRICS = ('heartRate', 'spo2', 'bodyTemp', 'envTemp')
 # A minute only paints as walking when the classifier attributed enough of it to walking,
 # so single-frame misreads do not colour the day timeline.
 TIMELINE_WALK_MINIMUM_SECONDS = 10
-ACTIONS = {'standing', 'sitting', 'lying down', 'walking'}
+ACTIONS = {'standing', 'sitting', 'lying down', 'walking', 'jumping'}
 SOUNDS = {'bark', 'howl', 'whine'}
 RETENTION_DAYS = 90
 GAP_SECONDS = 3
@@ -89,7 +89,7 @@ def ingest_observation(session, payload, received_at):
                 minute.actions = json.dumps(actions)
             from petsense.agent.learning import record_interval
             if label in ACTIONS:
-                record_interval(session, owner, device, 'actions', previous.get('modelVersion'), start, seconds)
+                record_interval(session, owner, device, 'actions', previous.get('actionModelVersion') or previous.get('modelVersion'), start, seconds)
             previous_sound = prediction(previous, 'sound') if previous.get('source') == 'esp32_mlp' else None
             if previous_sound and previous_sound.get('label') in SOUNDS | {'quiet', 'other'}:
                 minute.sound_observed_seconds += seconds
@@ -250,7 +250,7 @@ def observations():
                 summary['observedSeconds'] += row.observed_seconds
                 actions = json.loads(row.actions)
                 summary['walkingSeconds'] += actions.get('walking', 0)
-                summary['stationarySeconds'] += sum(actions.get(label, 0) for label in ACTIONS - {'walking'})
+                summary['stationarySeconds'] += sum(actions.get(label, 0) for label in {'standing', 'sitting', 'lying down'})
                 first = iso_z(row.minute)
                 if summary['firstObservedAt'] is None or first < summary['firstObservedAt']:
                     summary['firstObservedAt'] = first
