@@ -8,6 +8,7 @@ import Svg, { Polyline, Text as SvgText } from 'react-native-svg';
 import { ThemedText } from '@/components/themed-text';
 import { PositionMarker } from '@/components/location/position-marker';
 import { RegionReadout } from '@/components/location/region-readout';
+import type { MapPet } from '@/services/map-pet';
 import { useTheme } from '@/hooks/use-theme';
 import { type MapImageLoad, updateMapImageLoad } from '@/services/map-image';
 import { backgroundImageRect, clampMapPan, mapBounds } from '@/services/map-viewport';
@@ -22,6 +23,7 @@ export function MapViewport({
   onRetry,
   onImageReady,
   preview = false,
+  pet,
 }: {
   map: UwbMap;
   position: UwbPosition | null;
@@ -31,6 +33,7 @@ export function MapViewport({
   onRetry: () => void;
   onImageReady?: (ready: boolean) => void;
   preview?: boolean;
+  pet?: MapPet;
 }) {
   const theme = useTheme();
   const [width, setWidth] = useState(0);
@@ -214,24 +217,20 @@ export function MapViewport({
                 A{anchor.id}
               </SvgText>
             ))}
-            {point && (
-              <PositionMarker
-                key={`${map.mapId}:${map.version}:${map.revision ?? ''}:${position.deviceId}`}
-                point={point}
-                polygon={map.polygon}
-                fresh={fresh}
-                remainingMs={position.remainingMs}
-                radius={stroke * 4}
-                fill={
-                  fresh && position.status === 'ok' && position.quality.insideMap !== false
-                    ? theme.tint
-                    : theme.textSecondary
-                }
-                stroke={theme.background}
-                strokeWidth={stroke}
-              />
-            )}
           </Svg>
+          {point && imageReady && width > 0 && (
+            <PositionMarker
+              key={`${map.mapId}:${map.version}:${map.revision ?? ''}:${position.deviceId}`}
+              point={point}
+              polygon={map.polygon}
+              fresh={fresh}
+              remainingMs={position.remainingMs}
+              bounds={bounds}
+              viewport={viewport}
+              zoom={zoom}
+              pet={pet}
+            />
+          )}
         </View>
         {!imageReady && (
           <View
@@ -274,6 +273,11 @@ export function MapViewport({
           ))}
         </View>
       </View>
+      {!preview && pet && (
+        <ThemedText type="smallBold" accessibilityLiveRegion="polite">
+          {pet.name} · {pet.label}
+        </ThemedText>
+      )}
       {!preview && <RegionReadout position={position} map={map} fresh={fresh} />}
       {!!map.regions?.some((r) => r.confirmed) && (
         <Pressable
