@@ -16,6 +16,7 @@ import { useObservations } from '@/hooks/use-observations';
 import { usePositionMap } from '@/hooks/use-position-map';
 import { useTelemetry } from '@/hooks/use-telemetry';
 import { useTheme } from '@/hooks/use-theme';
+import { selectMapPet } from '@/services/map-pet';
 import { gpsView } from '@/services/gps-view';
 import { parseTelemetryMessage } from '@/services/telemetry-service';
 
@@ -57,6 +58,14 @@ export default function TrackingScreen() {
     displayState === 'replaying',
   );
   const matching = latest?.deviceId === dashboard?.pet?.device_id && isFresh ? latest : null;
+  const actionFrame =
+    matching ?? (snapshot?.deviceId === dashboard?.pet?.device_id ? snapshot : null);
+  const actionAge = actionFrame ? now - Date.parse(actionFrame.receivedAt) : Infinity;
+  const mapPet = selectMapPet(
+    dashboard,
+    actionFrame,
+    displayState !== 'replaying' && actionAge >= -5000 && actionAge < 10_000,
+  );
   const hasRanges = matching?.uwb?.valid && matching.uwb.distanceMm.length > 0;
   const location = usePositionMap(dashboard?.pet?.device_id);
   const display = useDisplayPlan(dashboard?.pet?.device_id);
@@ -126,6 +135,7 @@ export default function TrackingScreen() {
                   key={`${location.map.mapId}:${location.map.version}:${location.map.revision ?? ''}`}
                   map={location.map}
                   position={location.position}
+                  pet={mapPet}
                   trail={EMPTY_TRAIL}
                   fresh={location.fresh}
                   onDragging={setDragging}
