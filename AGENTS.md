@@ -48,6 +48,8 @@
 
 ## 定位项目状态（2026-11-12 按仓库代码和文档核对）
 
+- 2026-11-26 接入待标定底图显示：用户切换到第二版蓝色演播室（P1、底部40%），底图为相对尺度，不沿用第一版的基站变换或七区。通过 owner/claim 绑定的 /uwb/plan 返回底图；App 无有效地图时显示，重新发布标定地图后优先显示真实定位地图。切场景先备份并移除该设备旧 metric 绑定；操作见 docs/APP_DISPLAY_PLAN.md，发布状态以 PR/CI 为准。
+
 - 2026-11-26 功能分支实现人工虚拟区域：用户已调整并确认第一版地图的 7 个区域，以 `docs/uwb-regions-first-map-confirmed.json` 为准（原 6 区草稿仅保留作历史候选）。第 3、7 区同名“衣柜前”，编号不同，保留原样。设备/认领/地图指纹/Tag 隔离保存，鉴权 `GET/PUT /api/app/uwb/regions` 导入。有效新测量同时输出坐标和 `region/regionStatus/regionsRevision`，跨区防抖，过期明确“上次所在”。7 区几何和内部点命中检查通过；发布状态以对应 PR/CI 为准，真机验收未完成，详见 `docs/uwb-semantic-regions.md`。Agent 通过现有 `read_current_status` 的 `location.indoor` 或鉴权位置接口消费区域文字，字段及有效性规则见 `docs/UWB_REGION_AGENT_API.md`。卡通底图仍搁置。
 
 - 2026-11-26 实现定位外轮廓约束与 Reanimated 圆点平滑移动；合并与发布记录见 PR #31 及其 CI，本轮真机验收尚未完成。约束使用点云地图的 `polygon`，保留原始/约束前坐标和原始质量；连续点与动画均禁止跨越凹口。过期冻结灰点，恢复和地图切换不跨期插值。详见 `docs/uwb-boundary-motion.md`；虚拟区域语义进展见 docs/uwb-semantic-regions.md，卡通底图继续搁置。
