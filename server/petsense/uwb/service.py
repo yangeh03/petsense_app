@@ -1,5 +1,5 @@
 """Per-owner live positioning; repeated snapshots never refresh measurement age."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 import os
 from pathlib import Path
@@ -12,6 +12,7 @@ from petsense.db import utc_now, iso_z
 from .engine import PositionEngine
 from .maps import Registry
 from .measurement import MeasurementFrame
+from .regions import RegionStore, RegionTracker, RegionConflict, validate_regions
 
 MASK = (1 << 32) - 1
 
@@ -29,6 +30,7 @@ class LiveState:
     timer: int | None = None
     deadline: float = 0
     expires_at: str | None = None
+    region_tracker: RegionTracker = field(default_factory=RegionTracker)
 
 
 class PositionService:
@@ -36,6 +38,30 @@ class PositionService:
         self.registry = registry
         self.states = {}
         self.lock = threading.RLock()
+        self.regions = RegionStore(config.RUNTIME_ROOT / 'uwb_regions')
+
+    def region_config(self, device_id, user_id=None):
+        with self.lock:
+            binding = self._binding(device_id)
+            if not binding or (user_id is not None and binding[2][0] != user_id):
+                raise ValueError('当前设备尚未绑定标定地图')
+            bundle, _, identity = binding
+            return {**self.regions.load(device_id, identity), 'mapId': bundle.data['mapId'],
+                    'mapVersion': bundle.data['version'], 'mapFingerprint': bundle.fingerprint}
+
+    def set_regions(self, device_id, user_id, data):
+        with self.lock:
+            current = self.region_config(device_id, user_id)
+            if any(data.get(k) != current[k] for k in ('mapId', 'mapVersion', 'mapFingerprint')):
+                raise RegionConflict('地图已经变化，请在当前地图上重新确认区域')
+            if data.get('confirmed') is not True:
+                raise ValueError('请先核对区域，再确认保存')
+            binding = self._binding(device_id)
+            if not binding or binding[2][0] != user_id or binding[0].fingerprint != current['mapFingerprint']:
+                raise RegionConflict('设备归属或地图已变化，请重新读取')
+            items = validate_regions(data.get('regions'), binding[0].config.map_polygon_m)
+            self.regions.save(device_id, binding[2], data.get('baseRevision'), items)
+            return self.region_config(device_id, user_id)
 
     def _binding(self, device_id):
         with db.session_scope() as session:
@@ -54,6 +80,10 @@ class PositionService:
         fresh = bool(value.get('fresh')) and now <= state.deadline
         position = value.get('position_map_m')
         quality = value.get('quality') or {}
+        region_config = self.regions.load(device_id, state.identity)
+        semantic = state.region_tracker.output if state.region_tracker.revision == region_config['revision'] else {'region': None, 'regionStatus': 'waiting'}
+        if not fresh:
+            semantic = {**semantic, 'regionStatus': 'stale'}
         return {'schemaVersion': 1, 'deviceId': device_id, 'mapId': bundle.data['mapId'],
                 'mapVersion': bundle.data['version'], 'tagId': state.engine.tag_id,
                 'status': value.get('status', 'waiting') if fresh else ('stale' if position else 'waiting'),
@@ -62,6 +92,7 @@ class PositionService:
                 'unconstrainedPosition': value.get('unconstrained_position_map_m'),
                 'boundary': {'constrained': value.get('boundary_constrained', False),
                              'correctionM': value.get('boundary_correction_m', 0)},
+                **semantic, 'regionsRevision': region_config['revision'],
                 'quality': {'score': quality.get('score'), 'residualM': quality.get('range_residual_rms_m'),
                             'insideMap': quality.get('inside_map')},
                 'remainingMs': max(0, round((state.deadline - now) * 1000)) if fresh else 0,
@@ -79,12 +110,16 @@ class PositionService:
     def map(self, device_id):
         with self.lock:
             binding = self._binding(device_id)
-            return {**binding[0].public(), 'revision': self._map_revision(binding)} if binding else None
+            if not binding:
+                return None
+            regions = self.regions.load(device_id, binding[2])
+            return {**binding[0].public(), 'regions': regions['regions'],
+                    'regionsRevision': regions['revision'], 'revision': self._map_revision(binding, regions['revision'])}
 
     @staticmethod
-    def _map_revision(binding):
+    def _map_revision(binding, region_revision='none'):
         # Include the Tag binding so a change clears the previous Tag's trail.
-        return f'{binding[0].fingerprint}:{binding[1]}'
+        return f'{binding[0].fingerprint}:{binding[1]}' + (f':regions:{region_revision}' if region_revision != 'none' else '')
 
     def map_version(self, device_id):
         with self.lock:
@@ -92,8 +127,9 @@ class PositionService:
             if not binding:
                 return None
             d = binding[0].data
+            regions = self.regions.load(device_id, binding[2])
             return {'mapId': d['mapId'], 'version': d['version'],
-                    'revision': self._map_revision(binding)}
+                    'revision': self._map_revision(binding, regions['revision'])}
 
     def enrich(self, frame, device_id, received_at=None, batch_age_ms=0):
         frame.pop('uwbPosition', None)  # Never trust a device-supplied server position.
@@ -158,12 +194,18 @@ class PositionService:
                 selected[index] = mm / 1000
             if now > state.deadline:
                 state.engine = PositionEngine(bundle.config, tag)  # No smoothing across gaps.
+                state.region_tracker = RegionTracker()
             state.engine.update(MeasurementFrame(selected, tag_id=tag, sequence=sequence,
                                                   device_timer=timer), now_monotonic=now)
             state.key, state.timer = key, timer
             remaining = bundle.config.stale_after_seconds - age / 1000
             state.deadline = now + remaining
             state.expires_at = iso_z((received_at or utc_now()) + timedelta(seconds=remaining))
+            result = state.engine.latest
+            point = result.get('position_map_m')
+            state.region_tracker.update(self.regions.load(device_id, identity),
+                                        (point['x'], point['y']) if point else None, now,
+                                        result.get('status') == 'ok' and result.get('boundary_correction_m', 0) <= .5)
             frame['uwbPosition'] = self._snapshot(device_id, state, bundle, now)
 
 

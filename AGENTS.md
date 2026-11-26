@@ -48,7 +48,9 @@
 
 ## 定位项目状态（2026-11-12 按仓库代码和文档核对）
 
-- 2026-11-26 实现定位外轮廓约束与 Reanimated 圆点平滑移动；合并与发布记录见 PR #31 及其 CI，本轮真机验收尚未完成。约束使用点云地图的 `polygon`，保留原始/约束前坐标和原始质量；连续点与动画均禁止跨越凹口。过期冻结灰点，恢复和地图切换不跨期插值。详见 `docs/uwb-boundary-motion.md`；家具/区域语义待讨论，卡通底图继续搁置。
+- 2026-11-26 功能分支实现人工虚拟区域：用户已调整并确认第一版地图的 7 个区域，以 `docs/uwb-regions-first-map-confirmed.json` 为准（原 6 区草稿仅保留作历史候选）。第 3、7 区同名“衣柜前”，编号不同，保留原样。设备/认领/地图指纹/Tag 隔离保存，鉴权 `GET/PUT /api/app/uwb/regions` 导入。有效新测量同时输出坐标和 `region/regionStatus/regionsRevision`，跨区防抖，过期明确“上次所在”。7 区几何和内部点命中检查通过；发布状态以对应 PR/CI 为准，真机验收未完成，详见 `docs/uwb-semantic-regions.md`。Agent 通过现有 `read_current_status` 的 `location.indoor` 或鉴权位置接口消费区域文字，字段及有效性规则见 `docs/UWB_REGION_AGENT_API.md`。卡通底图仍搁置。
+
+- 2026-11-26 实现定位外轮廓约束与 Reanimated 圆点平滑移动；合并与发布记录见 PR #31 及其 CI，本轮真机验收尚未完成。约束使用点云地图的 `polygon`，保留原始/约束前坐标和原始质量；连续点与动画均禁止跨越凹口。过期冻结灰点，恢复和地图切换不跨期插值。详见 `docs/uwb-boundary-motion.md`；虚拟区域语义进展见 docs/uwb-semantic-regions.md，卡通底图继续搁置。
 
 - 项目还包括 `firmware/` 和 `tools/offline-map/`。UWB 定位代码集中在 `server/petsense/uwb/`；设备测距经 MQTT 入站，服务端按设备归属、Tag 和标定地图解算并通过鉴权接口及 WebSocket 提供位置，App 位置页消费服务端结果。地图版本变化会触发刷新；失联时保留标识明确的最后位置。
 - 触碰标定（2026-11-17 调整）：每基站采集 20 秒、至少 8 个不同有效帧；中间 80% 测距跨度和双向中值差上限均为 80 cm，贴近距离上限 50 cm。保留逐路中值、帧新鲜度/去重和非共线检查；当前 edge 约 1 Hz 上传，通过延长采集增加样本，不改变固件频率。参数通过 setup 响应的 `touchConfig` 提供，App 以服务端倒计时为准，见 `docs/uwb-guided-setup.md`。

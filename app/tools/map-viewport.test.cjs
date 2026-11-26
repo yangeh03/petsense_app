@@ -69,6 +69,30 @@ test('telemetry position parser rejects another device and malformed coordinates
   );
   assert.equal(bounded.boundary.correctionM, 0.5);
   assert.equal(bounded.rawPosition.x, 1.5);
+  assert.equal(
+    telemetryExports.parseUwbPosition({ ...p, region: { id: 'sofa', label: 7 } }, 'collar'),
+    undefined,
+  );
+  assert.equal(
+    telemetryExports.parseUwbPosition({ ...p, regionStatus: 'invented' }, 'collar'),
+    undefined,
+  );
+  assert.equal(
+    telemetryExports.parseUwbPosition({ ...p, regionsRevision: 'wrong' }, 'collar'),
+    undefined,
+  );
+  assert.equal(
+    telemetryExports.parseUwbPosition(
+      {
+        ...p,
+        region: { id: 'sofa', label: '沙发前' },
+        regionStatus: 'known',
+        regionsRevision: 'none',
+      },
+      'collar',
+    ).region.label,
+    '沙发前',
+  );
 });
 const map = {
   mapId: 'room',

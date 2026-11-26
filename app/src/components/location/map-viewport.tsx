@@ -7,6 +7,7 @@ import Svg, { Polyline, Text as SvgText } from 'react-native-svg';
 
 import { ThemedText } from '@/components/themed-text';
 import { PositionMarker } from '@/components/location/position-marker';
+import { RegionReadout } from '@/components/location/region-readout';
 import { useTheme } from '@/hooks/use-theme';
 import { type MapImageLoad, updateMapImageLoad } from '@/services/map-image';
 import { backgroundImageRect, clampMapPan, mapBounds } from '@/services/map-viewport';
@@ -37,6 +38,7 @@ export function MapViewport({
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [imageLoad, setImageLoad] = useState<MapImageLoad | null>(null);
   const [showImageInfo, setShowImageInfo] = useState(false);
+  const [showRegions, setShowRegions] = useState(false);
   const bg = map.background;
   const source = bg.imageDataUri;
   const currentSource = useRef(source);
@@ -183,6 +185,22 @@ export function MapViewport({
                 opacity={fresh ? 0.8 : 0.25}
               />
             )}
+            {showRegions &&
+              map.regions
+                ?.filter((r) => r.confirmed)
+                .map((region) => (
+                  <Polyline
+                    key={region.id}
+                    points={[...region.polygon, region.polygon[0]]
+                      .map(([x, y]) => `${x},${-y}`)
+                      .join(' ')}
+                    fill={theme.tint}
+                    fillOpacity={0.08}
+                    stroke={theme.tint}
+                    strokeWidth={stroke}
+                    strokeDasharray={`${stroke * 3} ${stroke * 2}`}
+                  />
+                ))}
             {map.anchors.map((anchor) => (
               <SvgText
                 key={anchor.id}
@@ -256,6 +274,18 @@ export function MapViewport({
           ))}
         </View>
       </View>
+      {!preview && <RegionReadout position={position} map={map} fresh={fresh} />}
+      {!!map.regions?.some((r) => r.confirmed) && (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded: showRegions }}
+          onPress={() => setShowRegions((v) => !v)}
+        >
+          <ThemedText type="small" themeColor="textSecondary">
+            {showRegions ? '隐藏区域边界' : '查看区域边界'}
+          </ThemedText>
+        </Pressable>
+      )}
       {imageError ? (
         <Pressable accessibilityRole="button" accessibilityLabel="重新加载底图" onPress={onRetry}>
           <ThemedText type="smallBold" themeColor="tintForeground">

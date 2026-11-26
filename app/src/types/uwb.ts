@@ -10,6 +10,10 @@ export type UwbPosition = {
   rawPosition?: { x: number; y: number } | null;
   unconstrainedPosition?: { x: number; y: number } | null;
   boundary?: { constrained: boolean; correctionM: number };
+  region?: { id: string; label: string } | null;
+  regionStatus?:
+    'known' | 'transition' | 'unmapped' | 'unconfigured' | 'uncertain' | 'waiting' | 'stale';
+  regionsRevision?: string;
   quality: { score: number | null; residualM: number | null; insideMap: boolean | null };
   remainingMs: number;
   expiresAt: string | null;
@@ -25,6 +29,14 @@ export type UwbMap = {
   name: string;
   units: 'm';
   polygon: [number, number][];
+  regions?: {
+    id: string;
+    label: string;
+    polygon: [number, number][];
+    priority: number;
+    confirmed: boolean;
+  }[];
+  regionsRevision?: string;
   anchors: { id: number; position: [number, number] }[];
   background: {
     file: string;
